@@ -2949,21 +2949,19 @@ class COMETPTSpectrum2Poles(Calculator):
     def __call__(self):
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
-        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        _wrap = jnp.atleast_1d if _use_jax else float
+        params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
-        # numpy Cosmology.Hz/comoving_transverse_distance/growth_rate require array z, not scalar
-        z_arr = np.atleast_1d(float(self.z))
-        Hz_fid = self._cosmo_fid.Hz(z_arr)
-        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
-        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        Hz_fid = self._cosmo_fid.Hz(self.z)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(self.z)
+        qpar, qper = cosmo_base.compute_ap_params(self.z, Hz_fid, Dm_fid)
         AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
         self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
-        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
+        self.f = xp.squeeze(cosmo_base.growth_rate(self.z))
 
         # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
         # templates (no octopole/P6 contribution), matching the original
@@ -2972,11 +2970,11 @@ class COMETPTSpectrum2Poles(Calculator):
         # Pass dummy zero bias params so PX_ell runs the full diagram decomposition
         # without any bias combination (each diagram is independent of bias coefficients).
         if avir is not None:
-            params['avir'] = _asarr(avir)
-        params |= {k: _asarr(v) for k, v in
+            params['avir'] = _wrap(avir)
+        params |= {k: _wrap(v) for k, v in
                    dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0,
                         NP0=0.0, NP20=0.0, NP22=0.0).items()}
-        q_tr_lo = (_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar)))
+        q_tr_lo = (_wrap(xp.squeeze(qper)), _wrap(xp.squeeze(qpar)))
         px = md.PX_ell(self.k, params, list(self.ells), X_list=list(self._diagrams),
                        de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6])
         # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
@@ -3164,30 +3162,29 @@ class COMETTracerSpectrum2Poles(Calculator):
         cosmology dep, bypassing COMETPTSpectrum2Poles entirely."""
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
-        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        _wrap = jnp.atleast_1d if _use_jax else float
+        params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
-        z_arr = np.atleast_1d(float(self.z))
-        Hz_fid = self._cosmo_fid.Hz(z_arr)
-        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
-        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        Hz_fid = self._cosmo_fid.Hz(self.z)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(self.z)
+        qpar, qper = cosmo_base.compute_ap_params(self.z, Hz_fid, Dm_fid)
         AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
         self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
-        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
+        self.f = xp.squeeze(cosmo_base.growth_rate(self.z))
 
         # rescale_counterterms=False: PTEmu.Pell() applies h²/h⁴ rescaling to
         # c0/c2/c4/cnlo internally, so we must not pre-scale them; NP*/h³ and NP*/nbar
         # are always applied here because PTEmu.Pell()'s stochastic term uses NP0 as-is.
         canonical = self._get_canonical_params(rescale_counterterms=False)
         for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
-            params[name] = _asarr(canonical[name])
+            params[name] = _wrap(canonical[name])
         if avir is not None:
-            params['avir'] = _asarr(avir)
+            params['avir'] = _wrap(avir)
         poles = md.Pell(self.k, params, list(self.ells),
-                        de_model=self._de_model, q_tr_lo=(_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar))),
+                        de_model=self._de_model, q_tr_lo=(_wrap(xp.squeeze(qper)), _wrap(xp.squeeze(qpar))),
                         ell_for_recon=[0, 2, 4, 6])
         # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
@@ -3359,8 +3356,8 @@ class COMETPTSpectrum3Poles(Calculator):
     def __call__(self):
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
-        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        _wrap = jnp.atleast_1d if _use_jax else float
+        params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator (see comet.bell's module
@@ -3369,19 +3366,18 @@ class COMETPTSpectrum3Poles(Calculator):
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
-        z_arr = np.atleast_1d(float(self.z))
-        Hz_fid = self._cosmo_fid.Hz(z_arr)
-        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
-        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        Hz_fid = self._cosmo_fid.Hz(self.z)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(self.z)
+        qpar, qper = cosmo_base.compute_ap_params(self.z, Hz_fid, Dm_fid)
         AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
         self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
-        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
+        self.f = xp.squeeze(cosmo_base.growth_rate(self.z))
 
         if avir is not None:
-            params['avir'] = _asarr(avir)
-        params |= {k: _asarr(v) for k, v in
+            params['avir'] = _wrap(avir)
+        params |= {k: _wrap(v) for k, v in
                    dict(b1=1.0, b2=0.0, g2=0.0, NP0=0.0, NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0, cnloB=0.0).items()}
-        q_tr_lo = (_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar)))
+        q_tr_lo = (_wrap(xp.squeeze(qper)), _wrap(xp.squeeze(qpar)))
         diagrams = list(self._diagrams)
         parts = md.BX_ell_Sugi(self.k, params, ell=list(self.ells), X_list=diagrams,
                                 de_model=self._de_model, q_tr_lo=q_tr_lo,
@@ -3495,32 +3491,31 @@ class COMETTracerSpectrum3Poles(Calculator):
         calculator's own cosmology dep -- see COMETTracerSpectrum2Poles._call_direct()."""
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
-        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        _wrap = jnp.atleast_1d if _use_jax else float
+        params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
-        z_arr = np.atleast_1d(float(self.z))
-        Hz_fid = self._cosmo_fid.Hz(z_arr)
-        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
-        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        Hz_fid = self._cosmo_fid.Hz(self.z)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(self.z)
+        qpar, qper = cosmo_base.compute_ap_params(self.z, Hz_fid, Dm_fid)
         AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
         self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
-        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
+        self.f = xp.squeeze(cosmo_base.growth_rate(self.z))
 
         # rescale_counterterms=True (default): NP0/NB0/MB0 are nbar-normalised but NOT
         # h³-rescaled (no h-rescaling comment on these in _get_canonical_params applies
         # to bispectrum params), ready to pass directly to PTEmu.Bell_Sugi() which
         # uses them as-is (PTEmu.nbar = 1.0 so its internal 1/nbar division is a no-op).
         canonical = self._get_canonical_params()
-        b1, b2, g2, NP0, NB0, MB0 = (_asarr(canonical[name]) for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
+        b1, b2, g2, NP0, NB0, MB0 = (_wrap(canonical[name]) for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
         params |= dict(b1=b1, b2=b2, g2=g2, NP0=NP0, NB0=NB0, MB0=MB0)
         params['z'] = float(self.z)
         if avir is not None:
-            params['avirB'] = _asarr(avir)
+            params['avirB'] = _wrap(avir)
         parts = md.Bell_Sugi(self.k, params, ell=list(self.ells),
-                             de_model=self._de_model, q_tr_lo=(_asarr(self.qper), _asarr(self.qpar)),
+                             de_model=self._de_model, q_tr_lo=(_wrap(self.qper), _wrap(self.qpar)),
                              quad_deg=self.quad_deg, mu12_transform=self.mu12_transform)
         # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
         # xp.squeeze handles both shapes uniformly.

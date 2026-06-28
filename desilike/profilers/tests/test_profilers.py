@@ -145,20 +145,20 @@ class TestProfiler:
         from desilike.conditioning import AffineConditioner
         p_flat = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
         p_resc = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42,
-                                    conditioning=AffineConditioner(rescale=True))
+                                    conditioner=AffineConditioner(rescale=True))
         x = np.array([0.5, -0.3])
-        np.testing.assert_allclose(np.asarray(p_flat.conditioning.forward(
-            p_flat.conditioning.inverse(x))), x)
-        np.testing.assert_allclose(np.asarray(p_flat.conditioning.inverse(
-            p_flat.conditioning.forward(x))), x)
-        np.testing.assert_allclose(np.asarray(p_resc.conditioning.forward(
-            p_resc.conditioning.inverse(x))), x)
-        assert not np.allclose(p_resc.conditioning._scale, 1.)
+        np.testing.assert_allclose(np.asarray(p_flat.conditioner.forward(
+            p_flat.conditioner.inverse(x))), x)
+        np.testing.assert_allclose(np.asarray(p_flat.conditioner.inverse(
+            p_flat.conditioner.forward(x))), x)
+        np.testing.assert_allclose(np.asarray(p_resc.conditioner.forward(
+            p_resc.conditioner.inverse(x))), x)
+        assert not np.allclose(p_resc.conditioner._scale, 1.)
 
     def test_chi2_and_starts(self, likelihood):
         """chi2 is zero at truth; _get_starts produces finite starting points."""
         p = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
-        truth_rescaled = np.asarray(p.conditioning.inverse(np.array([MU_X, MU_Y])))
+        truth_rescaled = np.asarray(p.conditioner.inverse(np.array([MU_X, MU_Y])))
         np.testing.assert_allclose(float(p._chi2_rescaled(truth_rescaled)), 0., atol=1e-12)
         assert p._jit_chi2 is not None and p._jit_chi2 is not p._chi2_rescaled
         s = p._get_starts(5)
@@ -188,7 +188,7 @@ class TestMaximize:
         assert p.profiles.nruns == 4
         from desilike.conditioning import AffineConditioner
         self._check(make_profiler(profiler_name, likelihood,
-                                  conditioning=AffineConditioner(rescale=True)).maximize(niterations=3))
+                                  conditioner=AffineConditioner(rescale=True)).maximize(niterations=3))
 
     def test_maximize_fixed_start(self, likelihood, profiler_name):
         profiles = make_profiler(profiler_name, likelihood).maximize(start=np.array([[0.35, -0.65]]))
@@ -375,7 +375,7 @@ class TestStart:
         assert profiles.start['y'].shape == (profiles.nruns,)
         # Conditioned profiler: starts are still in original parameter space.
         from desilike.conditioning import AffineConditioner
-        p2 = make_profiler(profiler_name, likelihood, conditioning=AffineConditioner(rescale=True))
+        p2 = make_profiler(profiler_name, likelihood, conditioner=AffineConditioner(rescale=True))
         profiles2 = p2.maximize(niterations=3)
         assert all(abs(float(v) - MU_X) < 1.0 for v in profiles2.start['x'])
         assert all(abs(float(v) - MU_Y) < 1.0 for v in profiles2.start['y'])

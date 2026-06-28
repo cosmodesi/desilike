@@ -363,7 +363,7 @@ class BaseSampler(ABC):
 
     @default_mpicomm
     def __init__(self, posterior, rng=None, mpicomm=None, output_dir=None,
-                 conditioning=None, batch_size=None):
+                 conditioner=None, batch_size=None):
         """
         Parameters
         ----------
@@ -376,7 +376,7 @@ class BaseSampler(ABC):
             ``desilike.mpi.COMM_WORLD``.
         output_dir : str, Path, or None
             Save samples to this folder.  Default is ``None``.
-        conditioning : AffineConditioner or None
+        conditioner : AffineConditioner or None
             Conditioning transform applied between original and working space.
             ``None`` (default) uses :class:`AffineConditioner` with no rescaling
             (identity transform).
@@ -398,11 +398,11 @@ class BaseSampler(ABC):
             for p in self.derived_params
         ))
 
-        # ── conditioning transform ─────────────────────────────────────────────
-        if conditioning is None:
-            conditioning = AffineConditioner()
-        self.conditioning = conditioning
-        self.conditioning.init(self.varied_params)
+        # ── conditioner transform ─────────────────────────────────────────────
+        if conditioner is None:
+            conditioner = AffineConditioner()
+        self.conditioner = conditioner
+        self.conditioner.init(self.varied_params)
         self._gauss_mu_orig = None  # sentinel: no Gaussian prior
 
         # ── MPI communicator ─────────────────────────────────────────────────
@@ -452,8 +452,8 @@ class BaseSampler(ABC):
         Dynesty to set the sampling volume).
 
         Must be called *after* :meth:`BaseSampler.__init__` (depends on the conditioner).
-        Stores the Gaussian parameters in original (pre-conditioning) space so that
-        ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``conditioning.forward`` once.
+        Stores the Gaussian parameters in original (pre-conditioner) space so that
+        ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``conditioner.forward`` once.
         """
         from ..samples import Covariance as _Covariance
         if not isinstance(prior, _Covariance):
@@ -543,7 +543,7 @@ class BaseSampler(ABC):
         Returns an ``(ndim, 2)`` array; column 0 is lower bounds, column 1 is upper bounds.
         Delegates to :meth:`AffineConditioner.prior_bounds`.
         """
-        return self.conditioning.prior_bounds()
+        return self.conditioner.prior_bounds()
 
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
@@ -569,12 +569,12 @@ class BaseSampler(ABC):
                 u_chunk = sample[u_col:u_col + size]
                 x_orig = x_orig.at[col:col + size].set(jnp.atleast_1d(param.prior.ppf(u_chunk)))
                 u_col += size
-            return self.conditioning.inverse(x_orig)
+            return self.conditioner.inverse(x_orig)
         parts = []
         for param, size, col in _param_sizes(self.varied_params):
             u_chunk = sample[col:col + size]
             parts.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
-        return self.conditioning.inverse(jnp.concatenate(parts))
+        return self.conditioner.inverse(jnp.concatenate(parts))
 
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
@@ -585,7 +585,7 @@ class BaseSampler(ABC):
         Without a Gaussian prior, evaluates each original prior's logpdf after mapping
         to original space via :meth:`AffineConditioner.forward`.
         """
-        x_orig = self.conditioning.forward(sample)
+        x_orig = self.conditioner.forward(sample)
         if self._gauss_mu_orig is not None:
             # Gaussian group: unconstrained multivariate Gaussian logpdf
             x_gauss = x_orig[self._gauss_flat_cols]
@@ -611,11 +611,11 @@ class BaseSampler(ABC):
 
     def _posterior_logpdf_one(self, sample):
         """Return ``log_posterior`` for a single rescaled-space ``(ndim,)`` sample."""
-        return self.posterior(_flat_to_dict(self.conditioning.forward(sample), self.varied_params), return_derived=False)
+        return self.posterior(_flat_to_dict(self.conditioner.forward(sample), self.varied_params), return_derived=False)
 
     def _posterior_logpdf_with_derived_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
-        sample = _flat_to_dict(self.conditioning.forward(sample), self.varied_params)
+        sample = _flat_to_dict(self.conditioner.forward(sample), self.varied_params)
         if self.nderived:
             log_post, derived_dict = self.posterior(sample, return_derived=True)
             derived_flat = jnp.concatenate([
@@ -678,7 +678,7 @@ class BaseSampler(ABC):
         *samples* is in the sampler's rescaled working space; it is mapped back to
         original parameter values via :meth:`AffineConditioner.forward` before being stored.
         """
-        samples = np.asarray(self.conditioning.forward(samples))
+        samples = np.asarray(self.conditioner.forward(samples))
         data = []
         # ── varied params ─────────────────────────────────────────────────────
         for param, size, col in _param_sizes(self.varied_params):
@@ -727,10 +727,10 @@ class StaticSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, kernel=None, rng=None, mpicomm=None,
-                 output_dir=None, conditioning=None, batch_size=None):
+                 output_dir=None, conditioner=None, batch_size=None):
         self.kernel = kernel
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioning=conditioning, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size)
 
     def get_samples(self, **kwargs):
         """Return an ``(n_samples, ndim)`` array of points in original parameter space."""
@@ -744,7 +744,7 @@ class StaticSampler(BaseSampler):
             if self.samples is None:
                 # get_samples returns original-space points; the cores and
                 # array_to_samples work in the rescaled space, so map once here.
-                grid      = np.asarray(self.conditioning.inverse(self.get_samples(**kwargs)))
+                grid      = np.asarray(self.conditioner.inverse(self.get_samples(**kwargs)))
                 log_prior = np.array(self.pool.map(self.prior_logpdf, grid))
                 results   = self.pool.map(self.posterior_logpdf_with_derived, grid)
                 log_post  = np.array([result[0] for result in results])
@@ -782,7 +782,7 @@ class MCMCSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, rng=None,
-                 mpicomm=None, output_dir=None, conditioning=None,
+                 mpicomm=None, output_dir=None, conditioner=None,
                  batch_size=None):
         """
         Parameters
@@ -800,7 +800,7 @@ class MCMCSampler(BaseSampler):
         rng : numpy.random.Generator, int, or None
         mpicomm : MPI communicator, optional
         output_dir : str, Path, or None
-        conditioning : AffineConditioner or None
+        conditioner : AffineConditioner or None
         batch_size : int or None, optional
         """
         self.kernel = kernel
@@ -828,7 +828,7 @@ class MCMCSampler(BaseSampler):
         self._kernels = [kernel]
 
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioning=conditioning, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size)
 
         self.checks = []
         self._thinning = 1
@@ -914,7 +914,7 @@ class MCMCSampler(BaseSampler):
                         else:
                             batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
 
-                    batch_samples = np.asarray(self.conditioning.inverse(batch_samples))
+                    batch_samples = np.asarray(self.conditioner.inverse(batch_samples))
 
                     results = self.pool.map(
                         self.posterior_logpdf_with_derived,
@@ -976,7 +976,7 @@ class MCMCSampler(BaseSampler):
             np.asarray(samples[param.name])[-1].reshape(walker_shape + (-1,))
             for param in self.derived_params], axis=-1) if self.nderived else np.empty(walker_shape + (0,))
         log_post = np.asarray(samples.logposterior)[-1]
-        return np.asarray(self.conditioning.inverse(position)), np.array(derived), np.array(log_post)
+        return np.asarray(self.conditioner.inverse(position)), np.array(derived), np.array(log_post)
 
     def _get_batched_state(self, local_indices=None):
         """Return stacked state for the given local runs as ``(positions, deriveds, log_posts)``."""
@@ -1246,7 +1246,7 @@ class PopulationSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, rng=None, mpicomm=None,
-                 output_dir=None, conditioning=None, batch_size=None,
+                 output_dir=None, conditioner=None, batch_size=None,
                  prior=None):
         self.kernel = kernel
         self.mpicomm = mpicomm
@@ -1266,7 +1266,7 @@ class PopulationSampler(BaseSampler):
         if batch_size is None:
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioning=conditioning, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size)
         if prior is not None:
             self._set_gaussian_prior(prior)
 
@@ -1379,7 +1379,7 @@ class PopulationSampler(BaseSampler):
 
 
 def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
-            conditioning=None, batch_size=None, prior=None):
+            conditioner=None, batch_size=None, prior=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Selects :class:`MCMCSampler`, :class:`EnsembleSampler`, :class:`PopulationSampler`,
@@ -1404,7 +1404,7 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
     output_dir : str, Path, or None
         Directory where per-run checkpoint files are written.  Created if absent.
         ``None`` disables checkpointing.
-    conditioning : AffineConditioner or None
+    conditioner : AffineConditioner or None
         Affine transform between original and working parameter space.
         ``None`` (default) uses the identity (no rescaling, no centering).
         Pass ``AffineConditioner(rescale=True)`` to whiten each parameter by its
@@ -1429,13 +1429,13 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
     cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
     if cls is PopulationSampler:
         return cls(posterior, kernel=kernel, nparallel=nparallel, rng=rng,
-                   output_dir=output_dir, conditioning=conditioning,
+                   output_dir=output_dir, conditioner=conditioner,
                    batch_size=batch_size, prior=prior)
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
-                   conditioning=conditioning)
+                   conditioner=conditioner)
     return cls(posterior, kernel=kernel, nparallel=nparallel,
-               rng=rng, output_dir=output_dir, conditioning=conditioning,
+               rng=rng, output_dir=output_dir, conditioner=conditioner,
                batch_size=batch_size)
 
 

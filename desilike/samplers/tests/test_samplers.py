@@ -154,7 +154,7 @@ def test_kernel_rescale(likelihood, key):
         pytest.importorskip(OPTIONAL_DEPS[key])
 
     sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42,
-                               conditioning=samplers.AffineConditioner(rescale=True))
+                               conditioner=samplers.AffineConditioner(rescale=True))
     results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     if sampler.mpicomm.rank == 0:
@@ -335,10 +335,10 @@ def test_pocomc_gaussian_prior(rescale, use_prior):
                             [0.5 * 0.08 * 0.35, 0.35**2]])
         covariance = Covariance(cov_arr, params=[a, b])
 
-    conditioning = samplers.AffineConditioner(covariance=covariance, rescale=rescale)
+    conditioner = samplers.AffineConditioner(covariance=covariance, rescale=rescale)
     sampler = samplers.Sampler(
         graph, kernel=samplers.PocoMC(n_effective=100, n_active=50),
-        rng=42, conditioning=conditioning, prior=prior_cov)
+        rng=42, conditioner=conditioner, prior=prior_cov)
     sampler.run(n_total=50, n_evidence=0)
 
 

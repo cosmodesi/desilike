@@ -242,7 +242,7 @@ class Profiler:
         self.mpicomm    = mpicomm
 
         # ── collect varied parameters ─────────────────────────────────────
-        self.varied_params = likelihood.params.select(varied=True, solved=False)
+        self.varied_params = likelihood.params.select(varied=True, derived=False)
         if not self.varied_params:
             raise ValueError('No varied parameters found in the likelihood.')
         if self.mpicomm.rank == 0:

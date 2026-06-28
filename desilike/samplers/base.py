@@ -387,7 +387,7 @@ class BaseSampler(ABC):
             ``N > 0`` — group tasks into chunks of N.
         """
         # ── parameter sets ────────────────────────────────────────────────────
-        self.varied_params = posterior.params.select(varied=True, solved=False)
+        self.varied_params = posterior.params.select(varied=True, derived=False)
         if not self.varied_params:
             raise ValueError('No varied parameters found in the posterior.')
         # Derived = pure derived outputs (logposterior etc.) + analytically solved params.

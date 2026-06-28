@@ -2708,13 +2708,6 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         if cosmo is None:
             cosmo = ACECosmology(fiducial=fiducial)
         self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
-        self.cosmo.add_requirements({
-            'background.efunc':                        [{'z': z}],
-            'background.comoving_transverse_distance': [{'z': z}],
-            'background.growth_factor':                [{'z': z}],
-            'background.growth_rate':                  [{'z': z}],
-            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
-        })
         # ── velocileptors bias ──
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2725,6 +2718,13 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
     def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8, prior_basis='standard',
                       fsat=None, sigv=None, nbar=1e-4,
                       model='velocileptors_rept_mnuw0wacdm', fiducial='DESI', **kwargs):
+        self.cosmo.add_requirements({
+            'background.efunc':                        [{'z': self.z}],
+            'background.comoving_transverse_distance': [{'z': self.z}],
+            'background.growth_factor':                [{'z': self.z}],
+            'background.growth_rate':                  [{'z': self.z}],
+            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
+        })
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -2846,18 +2846,21 @@ def _cosmo_to_comet(cosmo):
 
 
 def _comet_setup_cosmo(cosmo, fiducial):
-    """Create (if needed) and configure the CosmoprimoCosmology dep shared by
-    COMETPTSpectrum2Poles/3Poles, and by COMETTracerSpectrum2Poles/3Poles themselves
-    when pt=False (direct Pell()/Bell_Sugi() evaluation, no separate PT dependency)."""
+    """Create (if needed) the CosmoprimoCosmology dep shared by COMET calculators."""
     if cosmo is None:
         cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
-    # 'params.<name>' is needed for 'A_s'/'m_ncdm_tot' (derived quantities, not raw
-    # free Parameters of CosmoprimoCosmology) to stay jit-safe -- see CosmoprimoCosmology's
-    # docstring / __getitem__. No background/fourier requirements: qpar/qper/sigma8
-    # come entirely from comet's own JAX-native background/growth code, not
-    # cosmoprimo's Boltzmann-code background/fourier sections.
-    cosmo.add_requirements({f'params.{name}': None for name in _CONVERSION_COMET.values()})
     return cosmo
+
+
+def _comet_register_cosmo_requirements(cosmo):
+    """Register params.* requirements on the cosmo dep.  Call from __post_init__.
+
+    'params.<name>' is needed for 'A_s'/'m_ncdm_tot' (derived quantities, not raw free
+    Parameters of CosmoprimoCosmology) to stay jit-safe — see CosmoprimoCosmology's
+    docstring / __getitem__.  No background/fourier requirements: qpar/qper/sigma8 come
+    entirely from comet's own JAX-native background/growth code.
+    """
+    cosmo.add_requirements({f'params.{name}': None for name in _CONVERSION_COMET.values()})
 
 
 def _comet_params_to_cosmology(params, z, de_model, use_mpc=False, backend='jax'):
@@ -2937,6 +2940,7 @@ class COMETPTSpectrum2Poles(Calculator):
             self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
+        _comet_register_cosmo_requirements(self.cosmo)
         self._use_mpc = False
         self._model = model
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
@@ -3123,6 +3127,8 @@ class COMETTracerSpectrum2Poles(Calculator):
             self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
+        if self._direct:
+            _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
@@ -3340,6 +3346,7 @@ class COMETPTSpectrum3Poles(Calculator):
             self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+        _comet_register_cosmo_requirements(self.cosmo)
         self._use_mpc = False
         self._model = model
         if mu12_transform != 'k3':
@@ -3448,6 +3455,8 @@ class COMETTracerSpectrum3Poles(Calculator):
             self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
     def __post_init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+        if self._direct:
+            _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']

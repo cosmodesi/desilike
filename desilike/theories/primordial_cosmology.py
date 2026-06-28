@@ -67,7 +67,7 @@ class PrimordialCosmology(Calculator):
 
     Implements the **requirements API** shared by all cosmology providers:
 
-    * Downstream calculators call :meth:`add_requirements` in their ``__init__``
+    * Downstream calculators call :meth:`add_requirements` in their ``__post_init__``
       to declare which cosmological quantities they need (power spectra, growth rates,
       distances) and on which z/k grids.  Multiple downstreams sharing the same instance
       have their grids merged automatically.
@@ -137,7 +137,7 @@ class PrimordialCosmology(Calculator):
     def add_requirements(self, requirements):
         """Register quantities that a downstream calculator will need from this cosmology.
 
-        Called in the downstream calculator's ``__init__``.  Multiple callers sharing the
+        Called in the downstream calculator's ``__post_init__``.  Multiple callers sharing the
         same cosmology instance are supported: z and k grids are union-merged so only one
         combined evaluation is needed at runtime.
 
@@ -621,7 +621,7 @@ class ACECosmology(PrimordialCosmology):
             outputs = description.get('output')
             return list(inputs), list(outputs)
 
-        input_outputs = {}
+        self._input_outputs = {}
         seen_emulator_dirs = set()
         for section in _SECTIONS:
             emulator_dir = base_emulator_dir / engine[section]
@@ -631,34 +631,11 @@ class ACECosmology(PrimordialCosmology):
             # Iterate on all (leaf) emulators in emulator_dir
             for leaf_dir in sorted(path for path in emulator_dir.iterdir() if path.is_dir()):
                 inputs, outputs = _find_inputs_outputs(leaf_dir)
-                input_outputs[str(leaf_dir)] = (inputs, outputs)
-        emulators = {}
-        for spec_key, spec in self._requirements.items():
-            method_key = spec_key[0]
-            if 'of' in spec['static']:
-                method_key = f'{method_key}.' + '.'.join(spec['static']['of'])
-            added = False
-            for emu_dir, input_output in input_outputs.items():
-                if method_key in input_output[1]:
-                    emulators.setdefault(emu_dir, [])
-                    emulators[emu_dir].append(method_key)
-                    added = True
-            if not added and method_key.split('.')[0] not in ('background', 'params'):
-                raise NotImplementedError(f"could not find {method_key} in emulators' products")
+                self._input_outputs[str(leaf_dir)] = (inputs, outputs)
+        self._loaded_emulators = {}
         self._method_emulator_matching = {}
-        for emu_dir, methods in emulators.items():
-            if methods[0].startswith('fourier.pk'):
-                import jaxmapse
-                emulator = jaxmapse.load_emulator(emu_dir)
-            elif methods[0].startswith('harmonic.'):
-                import jaxcapse
-                emulator = jaxcapse.load_emulator(emu_dir)
-            else:
-                import jaxace
-                emulator = jaxace.load_trained_emulator(emu_dir)
-            emulator.inputs = input_outputs[emu_dir][0]  # monkey-patching
-            for method in methods:
-                self._method_emulator_matching[method] = emulator
+        # Load emulators for requirements already registered before __post_init__ (e.g. derived params).
+        self._load_emulators_for_new_requirements()
         self._conversion = conversion
         if self._conversion == 'cosmoprimo':
             # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
@@ -666,6 +643,43 @@ class ACECosmology(PrimordialCosmology):
             # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
             self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+
+    def add_requirements(self, requirements):
+        super().add_requirements(requirements)
+        if hasattr(self, '_input_outputs'):
+            self._load_emulators_for_new_requirements()
+
+    def _load_emulator(self, emu_dir):
+        inputs, outputs = self._input_outputs[emu_dir]
+        if any(o.startswith('fourier.pk') for o in outputs):
+            import jaxmapse
+            emulator = jaxmapse.load_emulator(emu_dir)
+        elif any(o.startswith('harmonic.') for o in outputs):
+            import jaxcapse
+            emulator = jaxcapse.load_emulator(emu_dir)
+        else:
+            import jaxace
+            emulator = jaxace.load_trained_emulator(emu_dir)
+        emulator.inputs = inputs
+        return emulator
+
+    def _load_emulators_for_new_requirements(self):
+        for spec_key, spec in self._requirements.items():
+            method_key = spec_key[0]
+            if 'of' in spec['static']:
+                method_key = f'{method_key}.' + '.'.join(spec['static']['of'])
+            if method_key in self._method_emulator_matching:
+                continue
+            found = False
+            for emu_dir, (inputs, outputs) in self._input_outputs.items():
+                if method_key in outputs:
+                    if emu_dir not in self._loaded_emulators:
+                        self._loaded_emulators[emu_dir] = self._load_emulator(emu_dir)
+                    self._method_emulator_matching[method_key] = self._loaded_emulators[emu_dir]
+                    found = True
+                    break
+            if not found and method_key.split('.')[0] not in ('background', 'params', 'primordial'):
+                raise NotImplementedError(f"could not find {method_key} in emulators' products")
 
     def __call__(self):
         import jaxace

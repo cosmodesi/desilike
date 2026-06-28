@@ -38,6 +38,8 @@ class PantheonPlusSHOESSNLikelihood(BaseSNLikelihood):
         self.covariance = self.covariance[np.ix_(zmask, zmask)]
         self.flatdata = jnp.asarray(self.light_curve_params['mb'])
         self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
+
+    def __post_init__(self, *args, **kwargs):
         self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zcmb']}]})
 
     def __call__(self):

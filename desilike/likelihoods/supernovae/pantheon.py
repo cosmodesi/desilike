@@ -28,6 +28,8 @@ class PantheonSNLikelihood(BaseSNLikelihood):
         flatdata = self.light_curve_params['mb'] - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + self.light_curve_params['zcmb']))
         self.flatdata = jnp.asarray(flatdata)
         self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
+
+    def __post_init__(self, *args, **kwargs):
         self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zcmb']}]})
 
     def __call__(self):

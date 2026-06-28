@@ -113,20 +113,20 @@ class _BaseCandlLikelihood(Likelihood):
             ellmax_cl = max(self._ellmax_standard, self._ellmax_potential)
             cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=ellmax_cl, non_linear='mead')))
         self.cosmo = cosmo
-        if self._ellmax_standard:
-            self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self._ellmax_standard}]})
-        if self._ellmax_potential:
-            self.cosmo.add_requirements({'harmonic.lens_potential_cl': [{'ellmax': self._ellmax_potential}]})
-
         self._cosmo_params = dict(cosmo_params or {})
         self._cosmo_prior_names = [name for name in self.like.required_prior_parameters if name not in self.like.required_nuisance_parameters]
-        for name in self._cosmo_prior_names:
-            self.cosmo.add_requirements({'params.{}'.format(self._cosmo_params.get(name, name)): None})
-
         vc, self._split_param_names = self.propose_params(split_diag_priors=split_diag_priors)
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+
+    def __post_init__(self, *args, **kwargs):
+        if self._ellmax_standard:
+            self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self._ellmax_standard}]})
+        if self._ellmax_potential:
+            self.cosmo.add_requirements({'harmonic.lens_potential_cl': [{'ellmax': self._ellmax_potential}]})
+        for name in self._cosmo_prior_names:
+            self.cosmo.add_requirements({'params.{}'.format(self._cosmo_params.get(name, name)): None})
 
     def propose_params(self, split_diag_priors=False):
         """Build one free desilike Parameter per ``self.like.required_nuisance_parameters``,

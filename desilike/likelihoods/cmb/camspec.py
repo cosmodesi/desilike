@@ -85,11 +85,13 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=self.ellmax, non_linear='mead')))
         self.cosmo = cosmo
-        self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self.ellmax}]})
         vc = self.propose_params()
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+
+    def __post_init__(self, *args, **kwargs):
+        self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self.ellmax}]})
 
     def _load_data(self, data_dir):
         input_data = np.loadtxt(os.path.join(data_dir, 'like_NPIPE_12.6_unified_spectra.txt'))

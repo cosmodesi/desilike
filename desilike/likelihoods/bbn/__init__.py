@@ -32,9 +32,11 @@ class BaseBBNLikelihood(GaussianLikelihood):
             cosmo = CosmoprimoCosmology(fiducial='DESI')
         self.cosmo = cosmo
         self._quantities = list(quantities)
-        self.cosmo.add_requirements({f'params.{quantity}': None for quantity in self._quantities})
         self.flatdata = jnp.asarray(mean)
         self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+    def __post_init__(self, *args, **kwargs):
+        self.cosmo.add_requirements({f'params.{quantity}': None for quantity in self._quantities})
 
     def __call__(self):
         self.flattheory = jnp.array([self.cosmo[quantity] for quantity in self._quantities])

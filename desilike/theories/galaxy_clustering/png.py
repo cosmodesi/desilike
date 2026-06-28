@@ -176,12 +176,6 @@ class PNGTracerSpectrum2Poles(Calculator):
         # Extend to 1e-4 at the low end so the 'transfer' normalization point is in-grid.
         kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
         self.template.update(k=kin_fine)
-        z_req = float(z)
-        self.template.cosmo.add_requirements({
-            'primordial.pk': [{'k': kin_fine}],
-            'background.growth_factor': [{'z': z_req}, {'z': 10.}],
-            'params.Omega_m': None,
-        })
 
     def __post_init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
                       tracers=None, nbar=1e-4, params=None, template=None):
@@ -194,6 +188,11 @@ class PNGTracerSpectrum2Poles(Calculator):
         self._z = float(z)
         self._nbar = float(nbar)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self.template.cosmo.add_requirements({
+            'primordial.pk': [{'k': self.template.k}],
+            'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
+            'params.Omega_m': None,
+        })
         self.template.cosmo()
 
     def __call__(self):
@@ -319,12 +318,6 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
         kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
         self.template.update(k=kin_fine)
-        z_req = float(z)
-        self.template.cosmo.add_requirements({
-            'primordial.pk': [{'k': kin_fine}],
-            'background.growth_factor': [{'z': z_req}, {'z': 10.}],
-            'params.Omega_m': None,
-        })
 
     def __post_init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
         if k is None:
@@ -335,6 +328,11 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         self._method = str(method)
         self._z = float(z)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self.template.cosmo.add_requirements({
+            'primordial.pk': [{'k': self.template.k}],
+            'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
+            'params.Omega_m': None,
+        })
         self.template.cosmo()
 
     def __call__(self):

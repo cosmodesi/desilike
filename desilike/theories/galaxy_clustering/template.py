@@ -656,33 +656,9 @@ class DirectSpectrum2Template(Spectrum2Template):
         return CosmoprimoCosmology.propose_params(engine=engine, fiducial=fiducial)
 
     def __init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
-        # Nodes: the CosmoprimoCosmology dep goes in __init__.
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
-        # Register required cosmo outputs; CosmoprimoCosmology computes them on merged
-        # grids and exposes them as JAX leaves — this calc is pure JAX regardless of engine.
-        k_req = np.logspace(-3., 1., 400) if k is None else np.asarray(k, dtype='f8')
-        # Prepend k0 = 1e-3 so get_result(...)[0] gives pk at k0 for f0 = sqrt(ptt/pk)|_{k→0}.
-        self._k_with_k0 = np.concatenate([[1e-3], k_req])
-        z_req = float(z)
-        reqs = {
-            'fourier.pk': [
-                {'of': 'delta_cb', 'z': z_req, 'k': self._k_with_k0},
-                {'of': 'theta_cb', 'z': z_req, 'k': self._k_with_k0},
-            ],
-            'fourier.sigma8_z': [
-                {'of': 'delta_cb', 'z': z_req},
-                {'of': 'theta_cb', 'z': z_req},
-            ],
-            'background.efunc':                          [{'z': z_req}],
-            'background.comoving_transverse_distance':   [{'z': z_req}],
-        }
-        if with_now:
-            reqs['fourier.pk_now'] = [
-                {'of': 'delta_cb', 'engine': str(with_now), 'z': z_req, 'k': k_req},
-            ]
-        cosmo.add_requirements(reqs)
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).
@@ -693,6 +669,25 @@ class DirectSpectrum2Template(Spectrum2Template):
         self.z = float(z)
         self._with_now = with_now
         self._only_now = bool(only_now)
+        # Prepend k0 = 1e-3 so get_result(...)[0] gives pk at k0 for f0 = sqrt(ptt/pk)|_{k→0}.
+        self._k_with_k0 = np.concatenate([[1e-3], self.k])
+        reqs = {
+            'fourier.pk': [
+                {'of': 'delta_cb', 'z': self.z, 'k': self._k_with_k0},
+                {'of': 'theta_cb', 'z': self.z, 'k': self._k_with_k0},
+            ],
+            'fourier.sigma8_z': [
+                {'of': 'delta_cb', 'z': self.z},
+                {'of': 'theta_cb', 'z': self.z},
+            ],
+            'background.efunc':                        [{'z': self.z}],
+            'background.comoving_transverse_distance': [{'z': self.z}],
+        }
+        if with_now:
+            reqs['fourier.pk_now'] = [
+                {'of': 'delta_cb', 'engine': str(with_now), 'z': self.z, 'k': self.k},
+            ]
+        self.cosmo.add_requirements(reqs)
 
         self._fiducial = _get_fiducial(fiducial)
         self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
@@ -1064,14 +1059,17 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
                  with_now='peakaverage', only_now=False, cosmo=None):
         super().__init__(k=k, z=z, fiducial=fiducial, engine=engine,
                          with_now=with_now, only_now=only_now, cosmo=cosmo)
-        # Fine k grid for wiggle interpolation at shifted positions (k / qbao).
-        k_fine = np.logspace(-3., 1., 2000)
-        self._k_fine = k_fine
-        self.cosmo.add_requirements({
-            'fourier.pk': [{'of': 'delta_cb', 'z': float(z), 'k': k_fine}],
-            'fourier.pk_now': [{'of': 'delta_cb', 'engine': str(with_now), 'z': float(z), 'k': k_fine}],
-        })
         assign_params(self, type(self).propose_params(), None)
+
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb',
+                      with_now='peakaverage', only_now=False, cosmo=None):
+        super().__post_init__(k=k, z=z, fiducial=fiducial, engine=engine,
+                              with_now=with_now, only_now=only_now, cosmo=cosmo)
+        self._k_fine = np.logspace(-3., 1., 2000)
+        self.cosmo.add_requirements({
+            'fourier.pk':     [{'of': 'delta_cb', 'z': self.z, 'k': self._k_fine}],
+            'fourier.pk_now': [{'of': 'delta_cb', 'engine': str(with_now), 'z': self.z, 'k': self._k_fine}],
+        })
 
     def __call__(self):
         super().__call__()  # sets pk_dd, pknow_dd, f, sigma8, qpar, qper, etc.
@@ -1131,14 +1129,14 @@ class BAOExtractor(Calculator):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(fiducial=fiducial)
         self.cosmo = cosmo
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        from cosmoprimo import constants
         self.cosmo.add_requirements({
             'background.efunc':                        [{'z': float(z)}],
             'background.comoving_transverse_distance': [{'z': float(z)}],
             'thermodynamics.rs_drag':                  None,
         })
-
-    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
-        from cosmoprimo import constants
         self.z = float(z)
         self._eta = float(eta)
         self._fiducial = _get_fiducial(fiducial)
@@ -1208,10 +1206,10 @@ class BAOPhaseShiftExtractor(BAOExtractor):
 
     def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
-        self.cosmo.add_requirements({'params.N_eff': None})
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        self.cosmo.add_requirements({'params.N_eff': None})
         self._N_eff_fid = float(self._fiducial.N_eff)
 
     def __call__(self):
@@ -1285,15 +1283,15 @@ class TurnOverExtractor(Calculator):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(fiducial=fiducial)
         self.cosmo = cosmo
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        from cosmoprimo import constants
         self._k_fine = np.logspace(-3., 0., 2000)
         self.cosmo.add_requirements({
             'fourier.pk':                              [{'of': 'delta_cb', 'z': float(z), 'k': self._k_fine}],
             'background.efunc':                        [{'z': float(z)}],
             'background.comoving_transverse_distance': [{'z': float(z)}],
         })
-
-    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
-        from cosmoprimo import constants
         self.z = float(z)
         self._eta = float(eta)
         self._fiducial = _get_fiducial(fiducial)

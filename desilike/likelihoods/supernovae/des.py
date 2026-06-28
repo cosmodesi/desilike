@@ -28,6 +28,8 @@ class _BaseDESY5SNLikelihood(BaseSNLikelihood):
         super().__init__(*args, **kwargs)
         flatdata = self.light_curve_params['MU'] - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + self.light_curve_params['zHD']))
         self.flatdata = jnp.asarray(flatdata)
+
+    def __post_init__(self, *args, **kwargs):
         self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zHD']}]})
 
     def __call__(self):

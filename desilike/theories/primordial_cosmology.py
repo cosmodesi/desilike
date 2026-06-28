@@ -394,7 +394,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
 
     Parameters
     ----------
-    engine : str, default='camb'
+    engine : str, default='class'
         Boltzmann solver.  JAX-native: ``'eisenstein_hu'``.
         External: ``'camb'``, ``'class'``, etc.
     params : VariableCollection, optional
@@ -478,7 +478,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd_eps=0.05, latex=r'\Omega_k'))
         return params
 
-    def __post_init__(self, *args, engine='camb', params=None, fiducial='DESI', **kwargs):
+    def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', **kwargs):
         self._engine = str(engine)
         self._is_external = self._engine not in _JAX_ENGINES
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent

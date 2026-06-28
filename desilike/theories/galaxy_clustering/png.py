@@ -188,11 +188,11 @@ class PNGTracerSpectrum2Poles(Calculator):
         self._z = float(z)
         self._nbar = float(nbar)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self.template.cosmo.add_requirements({
-            'primordial.pk': [{'k': self.template.k}],
-            'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
-            'params.Omega_m': None,
-        })
+        reqs = {'primordial.pk': [{'k': self.template.k}]}
+        if self._method == 'transfer':
+            reqs.update({'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
+                         'params.Omega_m': None})
+        self.template.cosmo.add_requirements(reqs)
         self.template.cosmo()
 
     def __call__(self):
@@ -202,8 +202,8 @@ class PNGTracerSpectrum2Poles(Calculator):
         jac, kap, muap = self.template.ap_k_mu(k, mu)
         pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
 
-        pk_prim_fine = self.template.cosmo.get('primordial.pk', k=self.template.k)
         h = self.template.cosmo['h']
+        pk_prim_fine = self.template.cosmo.get('primordial.pk', k=self.template.k)
         if self._method == 'transfer':
             Omega_m = self.template.cosmo.get('params.Omega_m')
             growth_factor_z = self.template.cosmo.get('background.growth_factor', z=self._z)

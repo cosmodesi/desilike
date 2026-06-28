@@ -350,7 +350,7 @@ class FixedSpectrum2Template(Spectrum2Template):
         """No free parameters at all."""
         return VariableCollection()
 
-    def __init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now='peakaverage', only_now=False):
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now='peakaverage', only_now=False):
         self._fiducial = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         _get_fiducial(fiducial, calculator=self._fiducial)  # runs _fiducial at fiducial params (sets _cosmo)
 
@@ -358,7 +358,7 @@ class FixedSpectrum2Template(Spectrum2Template):
     def cosmo(self):
         return self._fiducial
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now='peakaverage', only_now=False):
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now='peakaverage', only_now=False):
         from cosmoprimo import PowerSpectrumBAOFilter
 
         self._only_now = bool(only_now)
@@ -639,7 +639,7 @@ class DirectSpectrum2Template(Spectrum2Template):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
     @classmethod
-    def propose_params(cls, engine='camb', fiducial=None):
+    def propose_params(cls, engine='class', fiducial=None):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for the cosmological parameters.
 
         Delegates to :meth:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology.propose_params`.
@@ -655,12 +655,12 @@ class DirectSpectrum2Template(Spectrum2Template):
         """
         return CosmoprimoCosmology.propose_params(engine=engine, fiducial=fiducial)
 
-    def __init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).
         from cosmoprimo import PowerSpectrumBAOFilter, constants
         if k is None:
@@ -1044,7 +1044,7 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
     @classmethod
-    def propose_params(cls, engine='camb', fiducial=None):
+    def propose_params(cls, engine='class', fiducial=None):
         """Return ``qbao`` and ``sigmabao`` parameters (cosmo params live in the dep)."""
         return VariableCollection([
             Parameter('qbao', value=1., prior=dict(limits=[0.5, 1.5]),
@@ -1055,13 +1055,13 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
                       fd_eps=1., latex=r'\Sigma_\mathrm{BAO}'),
         ])
 
-    def __init__(self, k=None, z=1., fiducial='DESI', engine='camb',
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='class',
                  with_now='peakaverage', only_now=False, cosmo=None):
         super().__init__(k=k, z=z, fiducial=fiducial, engine=engine,
                          with_now=with_now, only_now=only_now, cosmo=cosmo)
         assign_params(self, type(self).propose_params(), None)
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb',
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class',
                       with_now='peakaverage', only_now=False, cosmo=None):
         super().__post_init__(k=k, z=z, fiducial=fiducial, engine=engine,
                               with_now=with_now, only_now=only_now, cosmo=cosmo)

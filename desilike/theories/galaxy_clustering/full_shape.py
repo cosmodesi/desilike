@@ -2212,7 +2212,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('c1', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
                 Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_2'"),
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-                Parameter('sn0b', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
+                Parameter('snb0', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
                 Parameter('X_FoG', value=0., fixed=True, latex=r"X'_\mathrm{FoG}"),
             ]
         else:
@@ -2223,7 +2223,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('c1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
                 Parameter('c2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}"),
-                Parameter('sn0b', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}"),
+                Parameter('snb0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}"),
                 Parameter('X_FoG', value=0., fixed=True, latex=r'X_\mathrm{FoG}'),
             ]
         return propose_params_multitracer(auto_params, tracers)  # no cross (bispectra not implemented)

@@ -52,7 +52,7 @@ emu.define_fiducial_cosmology(params_fid=DESI_PARAMS, de_model='lambda')
 theory_comet = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                           prior_basis=PRIOR_BASIS, nbar=NBAR)
 pipe_comet = compile(theory_comet)
-pk_comet = np.asarray(pipe_comet({'b1p': B1P}))
+pk_comet = np.asarray(pipe_comet({'b1': B1P}))
 
 # Diagnostic: internal COMET AP/growth params and b1_canonical after the call
 qpar = float(theory_comet.qpar)
@@ -77,7 +77,7 @@ print(f'  cosmo params: h={cp["h"]:.6f}  wc={cp["wc"]:.6f}  wb={cp["wb"]:.6f}  A
 theory_comet_np = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                              prior_basis=PRIOR_BASIS, nbar=NBAR, backend='numpy')
 pipe_comet_np = compile(theory_comet_np)
-pk_comet_np = np.asarray(pipe_comet_np({'b1p': B1P}))
+pk_comet_np = np.asarray(pipe_comet_np({'b1': B1P}))
 print(f'  P0(k=0.1) desilike-jax  = {np.interp(0.1, k, pk_comet[0]):.4f}')
 print(f'  P0(k=0.1) desilike-numpy= {np.interp(0.1, k, pk_comet_np[0]):.4f}')
 

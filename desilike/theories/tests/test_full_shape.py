@@ -255,8 +255,8 @@ class TestLPTVelocileptors:
 
     def test_tracer_spectrum(self):
         """LPTVelocileptorsTracerSpectrum2Poles: shape, parameter sensitivity and
-        ells=(0, 2) edge case in both physical and standard bases (b1p / b1 are the
-        respective user-facing parameter names; the attribute is ``self.b1`` in both)."""
+        ells=(0, 2) edge case in both physical and standard bases (b1 is the
+        user-facing parameter name in both; physical basis uses narrower priors)."""
         from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
 
@@ -265,7 +265,7 @@ class TestLPTVelocileptors:
         base = run()
         _check(base, 'LPTVelocileptorsTracer (physical)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'LPTVelocileptorsTracer (physical)', b1p=2.0)
+        _check_sensitivity(run, base, 'LPTVelocileptorsTracer (physical)', b1=2.0)
 
         theory_std = LPTVelocileptorsTracerSpectrum2Poles(k=k, prior_basis='standard')
         run_std = _compile(theory_std)
@@ -310,12 +310,12 @@ class TestLPTVelocileptors:
         pipe_exact = compile(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = LPTVelocileptorsTracerSpectrum2Poles(
             k=k, ells=ells, pt=LPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
-        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
         pipe_exact = compile(LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
-        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
 
 # ── REPT velocileptors ────────────────────────────────────────────────────────
@@ -345,7 +345,7 @@ class TestREPTVelocileptors:
         base = run()
         _check(base, 'REPTVelocileptorsTracer (physical)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'REPTVelocileptorsTracer (physical)', b1p=2.0)
+        _check_sensitivity(run, base, 'REPTVelocileptorsTracer (physical)', b1=2.0)
 
         theory_std = REPTVelocileptorsTracerSpectrum2Poles(k=k, prior_basis='standard')
         run_std = _compile(theory_std)
@@ -355,7 +355,7 @@ class TestREPTVelocileptors:
 
     def test_fixed_template_recompute_caching(self):
         """REPTVelocileptorsTracerSpectrum2Poles + FixedSpectrum2Template, eager: varying
-        only the bias parameter b1p must not re-run the external REPT PT calculator
+        only the bias parameter b1 must not re-run the external REPT PT calculator
         (its own params and deps -- FixedSpectrum2Template has none free -- are
         unchanged), only the cheap JAX bias-combination step in the Tracer.
 
@@ -377,19 +377,19 @@ class TestREPTVelocileptors:
         _check(base, 'REPTVelocileptorsTracer (FixedSpectrum2Template, eager, first call)')
         first_call_time = _time(lambda: pipe(defaults))  # repeat default call: nothing changed at all
 
-        # First time a *different* b1p is seen, the (cheap) bias-combination JAX ops get
+        # First time a *different* b1 is seen, the (cheap) bias-combination JAX ops get
         # dispatched for that code path; REPT itself must still be skipped. Treat this as
-        # a second warm-up call, then check several more b1p values are all fast.
-        _time(lambda: pipe({**defaults, 'b1p': 2.0}))
+        # a second warm-up call, then check several more b1 values are all fast.
+        _time(lambda: pipe({**defaults, 'b1': 2.0}))
 
         times, results = [], []
-        for b1p in [1.6, 2.4, 3.2]:
-            results.append(np.asarray(pipe({**defaults, 'b1p': b1p})))
-            times.append(_time(lambda b1p=b1p: pipe({**defaults, 'b1p': b1p})))
+        for b1 in [1.6, 2.4, 3.2]:
+            results.append(np.asarray(pipe({**defaults, 'b1': b1})))
+            times.append(_time(lambda b1=b1: pipe({**defaults, 'b1': b1})))
 
-        assert not np.allclose(base, results[0]), 'result invariant to b1p'
+        assert not np.allclose(base, results[0]), 'result invariant to b1'
         assert max(times) < 0.3 * first_call_time, (
-            f'varying only b1p took {times} (max {max(times):.3f}s), not much faster than '
+            f'varying only b1 took {times} (max {max(times):.3f}s), not much faster than '
             f'a repeated default-params call at {first_call_time:.3f}s -- expected the '
             f'external REPT PT calculator (unchanged params/deps) to be skipped, not re-run'
         )
@@ -416,12 +416,12 @@ class TestREPTVelocileptors:
         pipe_exact = compile(REPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = REPTVelocileptorsTracerSpectrum2Poles(
             k=k, ells=ells, pt=REPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
-        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
         pipe_exact = compile(REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
-        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
 
 # ── PyBird ────────────────────────────────────────────────────────────────────
@@ -509,28 +509,28 @@ class TestFOLPS:
         from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
 
-        # Default physical_aap basis (p-suffix parameters).
+        # Default physical_aap basis.
         theory = FOLPSTracerSpectrum2Poles(k=k)
         run = _compile(theory)
         base = run()
         _check(base, 'FOLPSTracerSpectrum2Poles (physical_aap)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'FOLPSTracerSpectrum2Poles (physical_aap)', b1p=2.0)
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum2Poles (physical_aap)', b1=2.0)
 
-        # Standard basis (no-suffix parameters).
+        # Standard basis (different priors, same parameter names).
         theory_std = FOLPSTracerSpectrum2Poles(k=k, prior_basis='standard')
         run_std = _compile(theory_std)
         base_std = run_std()
         _check(base_std, 'FOLPSTracerSpectrum2Poles (standard)')
         _check_sensitivity(run_std, base_std, 'FOLPSTracerSpectrum2Poles (standard)', b1=2.0)
 
-        # Remaining physical variants (all use p-suffix parameters).
+        # Remaining physical variants.
         for prior_basis in ['physical', 'tcm_chudaykin_aap']:
             theory_pb = FOLPSTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
             run_pb = _compile(theory_pb)
             base_pb = run_pb()
             _check(base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})')
-            _check_sensitivity(run_pb, base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})', b1p=2.0)
+            _check_sensitivity(run_pb, base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})', b1=2.0)
 
         # fsat / sigv passed directly (e.g. the output of get_physical_stochastic_settings).
         from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
@@ -564,7 +564,7 @@ class TestFOLPS:
         base = run()
         _check(base, 'FOLPSTracerSpectrum3Poles (physical_aap)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'FOLPSTracerSpectrum3Poles (physical_aap)', b1p=2.0)
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum3Poles (physical_aap)', b1=2.0)
 
         # Standard basis (b1 defaults to 2.0; use 3.0 for sensitivity check).
         theory_std = FOLPSTracerSpectrum3Poles(k=k, prior_basis='standard')
@@ -594,12 +594,12 @@ class TestFOLPS:
 
         pipe_exact = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = FOLPSTracerSpectrum2Poles(k=k, ells=ells, pt=FOLPSPTSpectrum2Poles(k=k, ells=ells))
-        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
         pipe_exact = compile(FOLPSTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = FOLPSTracerCorrelation2Poles(s=s, ells=ells)
-        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1p')
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
 
 # ── JAXEffort ────────────────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ class TestJAXEffort:
         _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', logA=2.5)
 
     def test_tracer_spectrum_physical(self):
-        """JAXEffortTracerSpectrum2Poles physical basis: shape, finite output, b1p sensitivity."""
+        """JAXEffortTracerSpectrum2Poles physical basis: shape, finite output, b1 sensitivity."""
         from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
         k = np.linspace(0.01, 0.2, 20)
         theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2, 4), prior_basis='physical')
@@ -631,7 +631,7 @@ class TestJAXEffort:
         base = run()
         _check(base, 'JAXEffortTracerSpectrum2Poles (physical)')
         assert base.shape == (3, len(k))
-        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (physical)', b1p=3.0)
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (physical)', b1=3.0)
 
     def test_tracer_presets(self):
         """JAXEffortTracerSpectrum2Poles: LRG/ELG/QSO fsat/sigv settings run without error."""
@@ -731,7 +731,7 @@ class TestCOMET:
             ('AssBauGre+Comet', 'b1'),
             ('AmiGleKok+Comet', 'b1t'),
             ('DESI+Comet',      'b1'),
-            ('physical',        'b1p'),
+            ('physical',        'b1'),
         ]:
             theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
             run_bb = _compile(theory_bb)
@@ -770,7 +770,7 @@ class TestCOMET:
             ('AssBauGre+Comet', 'b1', dict(b1=2.0)),
             ('AmiGleKok+Comet', 'b1t', dict(b1t=2.0)),
             ('DESI+Comet',      'b1', dict(b1=2.0)),
-            ('physical_aap',        'b1p', dict(b1p=2.0)),
+            ('physical_aap',        'b1', dict(b1=2.0)),
             ('EggScoSmi+ClassPT', None, {}),
             ('EggScoSmi+PBJ', None, {}),
             ('EggScoSmi+DESIct', None, {}),

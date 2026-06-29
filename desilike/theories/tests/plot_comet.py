@@ -44,12 +44,12 @@ pk_kaiser = np.asarray(pipe_kaiser({'b1': B1P}))
 theory_comet = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                           prior_basis=PRIOR_BASIS, nbar=NBAR)
 pipe_comet = compile(theory_comet)
-pk_comet = np.asarray(pipe_comet({'b1p': B1P}))
+pk_comet = np.asarray(pipe_comet({'b1': B1P}))
 
 theory_folps = FOLPSTracerSpectrum2Poles(k=k, ells=ells, prior_basis=PRIOR_BASIS,
                                          template=template, nbar=NBAR)
 pipe_folps = compile(theory_folps)
-pk_folps = np.asarray(pipe_folps({'b1p': B1P}))
+pk_folps = np.asarray(pipe_folps({'b1': B1P}))
 
 models = [('Kaiser', pk_kaiser, 'C2', '-'),
           ('FOLPS',  pk_folps,  'C0', '-'),
@@ -80,7 +80,7 @@ for col, ell in enumerate(ells):
     ax_bot.set_xlabel(r'$k$ [$h$ Mpc$^{-1}$]')
     ax_bot.set_ylim(0.5, 1.5)
 
-fig.suptitle(rf'Kaiser / FOLPS / COMET — $z={Z}$, prior_basis={PRIOR_BASIS!r}, $b_{{1p}}={B1P}$, nuisance=0',
+fig.suptitle(rf'Kaiser / FOLPS / COMET — $z={Z}$, prior_basis={PRIOR_BASIS!r}, $b_1={B1P}$, nuisance=0',
              y=1.01, fontsize=11)
 fig.tight_layout()
 
@@ -91,7 +91,7 @@ print(f'Saved {outpath}')
 # --- Bispectrum comparison: diagonal k1=k2 pairs ---
 # COMETTracerSpectrum3Poles does not yet support physical_aap (the propose_params
 # select uses non-'p' basenames), so COMET runs in its native EggScoSmi+Comet basis.
-# At the DESI fiducial (AsD = A_AP = 1) b1 (EggScoSmi) == b1p (physical_aap).
+# At the DESI fiducial (AsD = A_AP = 1) b1 (EggScoSmi) == b1 (physical_aap).
 k_bi = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
 bi_ells = ((0, 0, 0), (2, 0, 2))
 bi_ell_labels = {(0, 0, 0): r'$B_{000}$', (2, 0, 2): r'$B_{202}$'}
@@ -99,12 +99,12 @@ bi_ell_labels = {(0, 0, 0): r'$B_{000}$', (2, 0, 2): r'$B_{202}$'}
 theory_folps_bi = FOLPSTracerSpectrum3Poles(k=k_bi, ells=bi_ells, prior_basis=PRIOR_BASIS,
                                              template=template, nbar=NBAR)
 pipe_folps_bi = compile(theory_folps_bi)
-bk_folps = np.asarray(pipe_folps_bi({'b1p': B1P}))
+bk_folps = np.asarray(pipe_folps_bi({'b1': B1P}))
 
 theory_comet_bi = COMETTracerSpectrum3Poles(cosmo=cosmo, z=Z, k=k_bi, ells=bi_ells,
                                              prior_basis=PRIOR_BASIS, nbar=NBAR)
 pipe_comet_bi = compile(theory_comet_bi)
-bk_comet = np.asarray(pipe_comet_bi({'b1p': B1P}))
+bk_comet = np.asarray(pipe_comet_bi({'b1': B1P}))
 
 bi_models = [('FOLPS', bk_folps, 'C0', '-'),
              ('COMET', bk_comet, 'C1', '--')]

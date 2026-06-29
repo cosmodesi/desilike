@@ -98,9 +98,7 @@ def assign_params(inst, vc, tracers, mapping=None):
         Used to resolve (X, Y) ordering for deterministic cross parameters.
     mapping : callable or None, default=None
         Optional ``basename -> attribute_name`` transform applied before ``setattr``.
-        Use this to give parameters a different attribute name than their basename —
-        e.g. ``lambda name: name[:-1]`` strips a trailing ``p`` so that physical-basis
-        params (``b1p``, ``b2p``, …) are stored as ``self.b1``, ``self.b2``, etc.
+        Use this to give parameters a different attribute name than their basename.
     """
     from collections import defaultdict
     by_basename = defaultdict(list)

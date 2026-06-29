@@ -39,17 +39,17 @@ def _velocileptors_default_params(prior_basis):
     """Return the 11 default auto_params for LPT/REPT Velocileptors tracer classes."""
     if prior_basis == 'physical':
         return [
-            Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'"),
-            Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
-            Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-            Parameter('b3p', value=0., fixed=True, latex=r"b_3'"),
-            Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
-            Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
-            Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
-            Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'"),
-            Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-            Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
-            Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'"),
+            Parameter('b1', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'"),
+            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+            Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
+            Parameter('b3', value=0., fixed=True, latex=r"b_3'"),
+            Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
+            Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
+            Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
+            Parameter('alpha6', value=0., fixed=True, latex=r"\alpha_6'"),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
+            Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
+            Parameter('sn4', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'"),
         ]
     return [
         Parameter('b1', value=1., prior=dict(limits=[-1., 10.]), ref=dict(limits=[0.4, 0.6]), latex='b_1'),
@@ -849,8 +849,8 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
     prior_basis : str, default='physical'
-        ``'physical'``: parameters ``b1p, b2p, bsp, b3p, alpha0p, ..., sn0p, sn2p, sn4p``.
-        Otherwise: ``b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4``.
+        ``'physical'``: sigma8-normalised Lagrangian bias; parameters ``b1, b2, bs, b3, alpha0, ..., sn0, sn2, sn4`` with physical priors.
+        Otherwise: same parameter names, standard velocileptors priors.
     fsat : float, default=None
         Satellite fraction for the physical stochastic terms.  Defaults to
         ``get_physical_stochastic_settings()['fsat']``.  Pass the output of
@@ -883,8 +883,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
-        physical = prior_basis == 'physical'
-        assign_params(self, vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1096,8 +1095,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
-        physical = prior_basis == 'physical'
-        assign_params(self, vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1873,8 +1871,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
         - ``'standard'``: standard Eulerian bias as in the FOLPS paper (arXiv:2404.07269);
           parameters ``b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, X_FoG``.
-        - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, **no** AP rescaling;
-          parameters carry a ``p`` suffix (``b1p, b2p, ...``).
+        - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, **no** AP rescaling.
         - ``'physical_aap'`` (default): physical basis with AP rescaling (2pt3pt prior document).
         - ``'tcm_chudaykin_aap'``: physical basis with AP rescaling and the class-PT counterterm
           basis (Chudaykin et al.); uses ``bias_scheme='classpt'``.
@@ -1912,19 +1909,19 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
-                Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
-                Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=20.),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+                Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=20.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-                Parameter('b3p', value=0., prior=dict(dist='norm', loc=0., scale=1.),
+                Parameter('b3', value=0., prior=dict(dist='norm', loc=0., scale=1.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_3'"),
-                Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
-                Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
-                Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
-                Parameter('ctp', value=0., fixed=True, latex=r"c_t'"),
-                Parameter('X_FoGp', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r"X_\mathrm{FoG}''"),
-                Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-                Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
+                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
+                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
+                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
+                Parameter('ct', value=0., fixed=True, latex=r"c_t'"),
+                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r"X_\mathrm{FoG}'"),
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
+                Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
             ]
         else:
             auto_params = [
@@ -1949,8 +1946,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
-        physical = prior_basis != 'standard'
-        assign_params(self, vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -2168,8 +2164,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         Bias / counterterm / stochastic parameterization:
 
         - ``'standard'``: Eulerian FOLPS bias; parameters ``b1, b2, bs, c1, c2, sn0, snb0, X_FoG``.
-        - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, no AP rescaling;
-          parameters carry a ``p`` suffix.
+        - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, no AP rescaling.
         - ``'physical_aap'`` (default): physical basis with AP rescaling (2pt3pt prior document).
         - ``'tcm_chudaykin_aap'``: physical basis with AP rescaling and class-PT counterterm basis.
     fsat : float, default=None
@@ -2210,15 +2205,15 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
-                Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
-                Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=20.),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+                Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=20.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-                Parameter('c1p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
-                Parameter('c2p', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_2'"),
-                Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-                Parameter('snb0p', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
-                Parameter('X_FoGp', value=0., fixed=True, latex=r"X'_\mathrm{FoG}"),
+                Parameter('c1', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
+                Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_2'"),
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
+                Parameter('sn0b', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
+                Parameter('X_FoG', value=0., fixed=True, latex=r"X'_\mathrm{FoG}"),
             ]
         else:
             auto_params = [
@@ -2239,8 +2234,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
-        physical = prior_basis != 'standard'
-        assign_params(self, vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
@@ -2650,7 +2644,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         JAXEffort trained-emulator key.
     prior_basis : str, default='standard'
         ``'physical'``: sigma8-normalized Lagrangian bias (same as :class:`REPTVelocileptorsTracerSpectrum2Poles`);
-        params carry a ``p`` suffix and are stored as ``b1``, ``b2``, etc. via :func:`assign_params` mapping.
+        parameters ``b1, b2, bs, ...`` with physical priors.
         ``'standard'``: standard velocileptors REPT basis.
     fsat, sigv, nbar : floats
         Physical-basis stochastic settings; forwarded to :func:`_velocileptors_physical_to_standard`.
@@ -2713,8 +2707,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
-        physical = prior_basis == 'physical'
-        assign_params(self, vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc, tracers)
 
     def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8, prior_basis='standard',
                       fsat=None, sigv=None, nbar=1e-4,
@@ -3062,10 +3055,10 @@ class COMETTracerSpectrum2Poles(Calculator):
         elif bias_basis == 'DESI':
             if 'physical' in prior_basis:
                 params += [
-                    Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
-                    Parameter('b2dp', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
-                    Parameter('bk2p', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
-                    Parameter('btdp', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
+                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                    Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
+                    Parameter('bk2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
+                    Parameter('btd', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
                 ]
             else:
                 params += [
@@ -3143,8 +3136,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             vc = vc + VariableCollection(params)
         # avir is owned by the PT (or, when pt=False below, by this calculator itself).
         avir_vc = vc.select(basename='avir')
-        physical = 'physical' in prior_basis
-        assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc - avir_vc, tracers)
         self._prior_basis = prior_basis
         self._direct = (pt is False)
         self._backend = backend
@@ -3444,14 +3436,12 @@ class COMETTracerSpectrum3Poles(Calculator):
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty'):
         relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0', 'avir']
-        if 'physical' in prior_basis:
-            relevant = ['b1p', 'b2p', 'g2', 'bG2', 'b1tp', 'b2tp', 'b4tp', 'b2dp', 'bk2p', 'NP0p', 'avir']
         params = COMETTracerSpectrum2Poles.propose_params(tracers=tracers, prior_basis=prior_basis, model=model).select(basename=relevant)
         extra = []
         if 'physical' in prior_basis:
             extra += [
-                Parameter('NB0p', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
-                Parameter('MB0p', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
+                Parameter('NB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
+                Parameter('MB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
             ]
         else:
             extra += [
@@ -3467,8 +3457,7 @@ class COMETTracerSpectrum3Poles(Calculator):
             vc = vc + VariableCollection(params)
         # avir and cnloB are owned by the PT (or, when pt=False below, by this calculator itself).
         avir_vc = vc.select(basename='avir')
-        physical = 'physical' in prior_basis
-        assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        assign_params(self, vc - avir_vc, tracers)
         self._prior_basis = prior_basis
         self._direct = (pt is False)
         self._backend = backend

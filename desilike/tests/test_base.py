@@ -1034,6 +1034,128 @@ def test_custom_jvp_linear_theory():
     assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
+def test_two_stage_marginalization():
+    """Two-stage analytic marginalization: stage_i (PT, no alpha deps) runs once; stage_ii (Tracer) linearized.
+
+    Validates:
+    1. logpdf_marg == logpdf_full evaluated at the analytically derived argmin alpha.
+    2. derived (optimal alpha) from eager call == derived from JIT call.
+    3. Gradient of logpdf_full w.r.t. alpha at optimal alpha is ~0 (true argmin).
+    4. Perturbing alpha away from optimal decreases logpdf_full.
+    """
+
+    class PTTable(Calculator):
+        """Simulates a PT emulator: computes a 2-component table from non-alpha params."""
+        def __init__(self, cosmo, A, ns):
+            self.cosmo = cosmo
+            self.A = A
+            self.ns = ns
+
+        def __call__(self):
+            self.table = jnp.stack([
+                self.A * K ** self.ns * self.cosmo.growth_factor ** 2,
+                self.A * K ** (self.ns + 0.5) * self.cosmo.growth_factor ** 2,
+            ])
+            return self.table
+
+        def tree_flatten(self):
+            return [self.table], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.table = children[0]
+            return obj
+
+    class PTTracer(GaussianLikelihood):
+        """Simulates a Tracer: theory = alpha_0 * pt.table[0] + alpha_1 * pt.table[1]."""
+        def __init__(self, pt, alpha_0, alpha_1, data, covariance):
+            self.pt = pt
+            self.alpha_0 = alpha_0
+            self.alpha_1 = alpha_1
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.alpha_0 * self.pt.table[0] + self.alpha_1 * self.pt.table[1]
+            return super().__call__()
+
+    sigma_d = 0.1
+    omega_m_val, z_val = 0.3, 0.5
+    A_val, ns_val = 1.0, 0.96
+    alpha_0_val, alpha_1_val = 0.0, 0.0
+
+    omega_m = Parameter('omega_m', value=omega_m_val)
+    z       = Parameter('z',       value=z_val)
+    A       = Parameter('A',       value=A_val)
+    ns      = Parameter('ns',      value=ns_val)
+    alpha_0 = Parameter('alpha_0', value=alpha_0_val, derived='best')
+    alpha_1 = Parameter('alpha_1', value=alpha_1_val, derived='best')
+
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    pt    = PTTable(cosmo=cosmo, A=A, ns=ns)
+    lik   = PTTracer(pt=pt, alpha_0=alpha_0, alpha_1=alpha_1,
+                     data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
+
+    pipe_marg = compile(Posterior(lik))
+    # Full pipeline with alpha_0, alpha_1 as free params for reference logpdf_full.
+    omega_m2 = Parameter('omega_m', value=omega_m_val)
+    z2       = Parameter('z',       value=z_val)
+    A2       = Parameter('A',       value=A_val)
+    ns2      = Parameter('ns',      value=ns_val)
+    alpha_02 = Parameter('alpha_0', value=alpha_0_val)
+    alpha_12 = Parameter('alpha_1', value=alpha_1_val)
+    cosmo2   = Cosmology(omega_m=omega_m2, z=z2)
+    pt2      = PTTable(cosmo=cosmo2, A=A2, ns=ns2)
+    lik2     = PTTracer(pt=pt2, alpha_0=alpha_02, alpha_1=alpha_12,
+                        data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
+    pipe_full = compile(Posterior(lik2))
+
+    # Perturb cosmo/bias params to get a non-trivial optimal alpha.
+    params_marg = {'omega_m': omega_m_val + 0.05, 'z': z_val, 'A': A_val + 0.1, 'ns': ns_val}
+
+    # ----- 1. Eager: value correctness -----
+    logpdf_marg = float(pipe_marg(params_marg))
+    derived_eager = {p.name: float(p.value) for p in pipe_marg.params.select(derived='best')}
+    alpha_names = list(derived_eager.keys())
+
+    params_full_at_opt = {**params_marg, **derived_eager}
+    logpdf_full_at_opt = float(pipe_full(params_full_at_opt))
+
+    assert abs(logpdf_marg - logpdf_full_at_opt) < 1e-10, (
+        f'marg logpdf {logpdf_marg:.12f} != full@argmin {logpdf_full_at_opt:.12f}, diff={logpdf_marg - logpdf_full_at_opt:.3e}'
+    )
+
+    # ----- 2. JIT: derived values match eager -----
+    jit_fn = jax.jit(lambda p: pipe_marg(p, return_derived=True))
+    logpdf_jit, dd_jit = jit_fn(params_marg)
+    jax.block_until_ready(logpdf_jit)
+    derived_jit = {name: float(dd_jit[name]) for name in alpha_names}
+
+    assert abs(float(logpdf_jit) - logpdf_marg) < 1e-10, (
+        f'JIT logpdf {float(logpdf_jit):.12f} != eager {logpdf_marg:.12f}'
+    )
+    for name in alpha_names:
+        assert abs(derived_eager[name] - derived_jit[name]) < 1e-10, (
+            f'JIT derived[{name}] {derived_jit[name]:.10f} != eager {derived_eager[name]:.10f}'
+        )
+
+    # ----- 3. Gradient at argmin is ~0 -----
+    grad_full = jax.grad(pipe_full)(params_full_at_opt)
+    for name in alpha_names:
+        assert abs(float(grad_full[name])) < 1e-8, (
+            f'grad wrt {name} = {float(grad_full[name]):.3e} at claimed argmin; expected ~0'
+        )
+
+    # ----- 4. Perturbation test: both sides decrease logpdf_full -----
+    eps = 1e-3
+    for name in alpha_names:
+        p_up   = {**params_full_at_opt, name: params_full_at_opt[name] + eps}
+        p_down = {**params_full_at_opt, name: params_full_at_opt[name] - eps}
+        assert float(pipe_full(p_up))   < logpdf_full_at_opt + 1e-10, f'{name}+eps improves logpdf_full'
+        assert float(pipe_full(p_down)) < logpdf_full_at_opt + 1e-10, f'{name}-eps improves logpdf_full'
+
+
 def test_sum_likelihood():
     """SumLikelihood: logpdf is the sum of components; Posterior marginalizes only components that depend on solved params."""
 

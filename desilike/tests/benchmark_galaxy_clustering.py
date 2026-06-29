@@ -31,6 +31,7 @@ Run directly::
     python -m desilike.tests.benchmark
 """
 
+import functools
 import time
 
 import numpy as np
@@ -73,7 +74,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 
     window = np.eye(n)
     rng = np.random.default_rng(42)
-    data = rng.normal(scale=1e-3, size=n)
+    data = compile(theory)()
     covariance = np.diag(np.full(n, 1e-6))
 
     observable = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells,
@@ -260,14 +261,68 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     from scipy.linalg import block_diag
     likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
     if marginalize:
-        for param in get_params(likelihood).select(basename='a*'):
-            param.update(derived='best')
-        for param in get_params(likelihood).select(basename='N*'):
+        for param in get_params(likelihood).select(basename=['a0', 'a2', 'a4', 'NP0', 'NP20', 'NP22']):
             param.update(derived='best')
     return Posterior(likelihood)
 
 
 # ── timing harness ───────────────────────────────────────────────────────────
+
+_COSMO_BASENAMES = frozenset({'omega_b', 'omega_cdm', 'h', 'n_s', 'logA', 'w0_fld', 'wa_fld', 'm_ncdm'})
+
+
+def _bench_grad_subsets(pipe, params, number=5, warmup=3):
+    """Compare jit(grad) timing for bias-only vs cosmo-only vs all-params differentiation.
+
+    Closing over one group as concrete Python floats makes JAX constant-fold that
+    sub-graph: grad w.r.t. bias only never differentiates through the Boltzmann/PT
+    emulator; grad w.r.t. cosmo only never differentiates through the bias combination.
+    The difference reveals which part of the pipeline dominates the gradient cost.
+    """
+    cosmo_names = sorted(name for name in params if name.split('.')[-1] in _COSMO_BASENAMES)
+    bias_names = sorted(name for name in params if name not in cosmo_names)
+
+    cosmo_vals = {name: params[name] for name in cosmo_names}
+    bias_vals = {name: params[name] for name in bias_names}
+
+    print(f'  cosmo params ({len(cosmo_names)}): {", ".join(cosmo_names)}')
+    print(f'  bias  params ({len(bias_names)}): {", ".join(bias_names)}')
+    print()
+
+    def _time_grad(label, grad_fn, base_dict, vary_name):
+        try:
+            for bench_idx in range(warmup):
+                g = grad_fn({**base_dict, vary_name: base_dict[vary_name] + 1e-4 * bench_idx})
+            leaves = jax.tree_util.tree_leaves(g)
+            finite = all(np.isfinite(float(v)) for v in leaves)
+            start = time.perf_counter()
+            for bench_idx in range(number):
+                jax.block_until_ready(grad_fn({**base_dict, vary_name: base_dict[vary_name] + 1e-4 * bench_idx}))
+            dt = (time.perf_counter() - start) / number * 1e3
+            suffix = '' if finite else '  [NaN gradients]'
+            print(f'  {label:<32s} {dt:9.4f} ms/call   ({number} calls){suffix}')
+        except (MemoryError, Exception) as exc:
+            short = str(exc).split('\n')[0][:60]
+            print(f'  {label:<32s} {"FAILED":>9s}          [{type(exc).__name__}: {short}]')
+            dt = float('nan')
+
+    vary_bias = bias_names[0]
+    vary_cosmo = cosmo_names[0]
+
+    def pipe_bias_only(bias_dict):
+        return pipe({**cosmo_vals, **bias_dict})
+
+    def pipe_cosmo_only(cosmo_dict):
+        return pipe({**bias_vals, **cosmo_dict})
+
+    grad_bias = jax.jit(jax.grad(pipe_bias_only))
+    grad_cosmo = jax.jit(jax.grad(pipe_cosmo_only))
+    grad_full = jax.jit(jax.grad(pipe))
+
+    _time_grad('jit grad (bias only)', grad_bias, bias_vals, vary_bias)
+    _time_grad('jit grad (cosmo only)', grad_cosmo, cosmo_vals, vary_cosmo)
+    _time_grad('jit grad (all params)', grad_full, params, vary_bias)
+
 
 def _bench(label, fn, number=5, warmup=3):
     """Time *fn(i)* over *number* calls; return ms/call.
@@ -276,7 +331,7 @@ def _bench(label, fn, number=5, warmup=3):
     compiled graph's identical-params result cache.
     """
     for bench_idx in range(warmup):
-        assert np.isfinite(fn(bench_idx)).all()
+        jax.block_until_ready(fn(bench_idx))
     start = time.perf_counter()
     for bench_idx in range(number):
         jax.block_until_ready(fn(bench_idx))
@@ -364,7 +419,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
-        #run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
+        run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
 
     if 'folps_vs_emu' in test:
@@ -438,6 +493,160 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
             vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
 
+    if 'comet_grad_split' in test:
+        print(f'\n{"─" * 60}')
+        print(f'COMET grad split (bias-only vs cosmo-only vs full): ells={ELLS_COMET}, '
+              f'k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points), '
+              f'data size={len(ELLS_COMET) * len(K_COMET)}')
+        print(f'{"─" * 60}')
+        for label, build_kw in [
+            ('shared PT (PX_ell)', dict(direct=False)),
+            ('direct (Pell, pt=False)', dict(direct=True)),
+        ]:
+            print(f'\n=== {label} ===')
+            pipe = compile(build_posterior_comet(**build_kw))
+            params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
+            print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
+            print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
+            _bench_grad_subsets(pipe, params_dict)
+
+    if 'comet_grad_marg' in test:
+        print(f'\n{"─" * 60}')
+        print(f'COMET grad: effect of analytic marginalization of a0/a2/a4/NP0/NP20/NP22')
+        print(f'ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points), '
+              f'data size={len(ELLS_COMET) * len(K_COMET)}')
+        print(f'{"─" * 60}')
+        for label, build_kw in [
+            ('shared PT, no marg (16 params)', dict(direct=False, marginalize=False)),
+            ('shared PT, marg a0/a2/a4/NP0/NP20/NP22 (10 params)', dict(direct=False, marginalize=True)),
+        ]:
+            print(f'\n=== {label} ===')
+            pipe = compile(build_posterior_comet(**build_kw))
+            params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
+            print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
+            print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
+            vary_name = next(iter(params_dict))
+            jit_pipe = jax.jit(pipe)
+            _bench('jit call', lambda bench_idx: jit_pipe({**params_dict, vary_name: params_dict[vary_name] + 1e-4 * bench_idx}))
+
+    if 'comet_marg_breakdown' in test:
+        print(f'\n{"─" * 60}')
+        print(f'COMET marg breakdown: primal vs JVP vs extra likelihood pass')
+        print(f'ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points)')
+        print(f'{"─" * 60}')
+        posterior = compile(build_posterior_comet(direct=False, marginalize=True))
+        # Extract the group_fn from the first (and only) group
+        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids in posterior.root._groups:
+            n_g = len(group_alpha_names)
+            group_params = {p.name: jnp.asarray(float(p.value)) for p in group_theory_pipe.params}
+            alpha_vec = jnp.stack([group_params[name] for name in group_alpha_names])
+
+            def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
+                p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
+                return _pipe(p)
+
+            # JIT: primal only (jax.linearize but only use theories_concat, not jvp_fn)
+            @jax.jit
+            def jit_primal(alpha_vec):
+                theories, _ = jax.linearize(group_fn, alpha_vec)
+                return theories
+
+            # JIT: primal + JVP for 1, 2, 4, 6 tangent directions (linearize approach)
+            def make_jit_jvp(n_tangents, _n_g=n_g, _group_fn=group_fn):
+                @jax.jit
+                def fn(alpha_vec):
+                    theories, jvp_fn = jax.linearize(_group_fn, alpha_vec)
+                    B_rows = jax.vmap(jvp_fn)(jnp.eye(_n_g)[:n_tangents])
+                    return theories, B_rows
+                return fn
+
+            jit_jvp_fns = {n: make_jit_jvp(n) for n in (1, 2, 4, n_g)}
+
+            # JIT: value_and_jacfwd approach — vmap over jax.jvp directly,
+            # with out_axes=(None, 1) hinting that the primal is batch-invariant.
+            def make_jit_jacfwd(n_tangents, _n_g=n_g, _group_fn=group_fn):
+                @jax.jit
+                def fn(alpha_vec):
+                    pushfwd = functools.partial(jax.jvp, _group_fn, (alpha_vec,))
+                    basis = jnp.eye(_n_g, dtype=alpha_vec.dtype)[:n_tangents]
+                    theories, jac = jax.vmap(pushfwd, out_axes=(None, 1))((basis,))
+                    return theories, jac.T
+                return fn
+
+            jit_jacfwd_fns = {n: make_jit_jacfwd(n) for n in (1, 2, 4, n_g)}
+
+            # JIT: direct group_fn call (plain primal, no linearize overhead)
+            @jax.jit
+            def jit_group_fn(alpha_vec):
+                return group_fn(alpha_vec)
+
+            # Warmup all
+            for bench_idx in range(3):
+                av = alpha_vec + 1e-4 * bench_idx
+                jax.block_until_ready(jit_primal(av))
+                jax.block_until_ready(jit_group_fn(av))
+                for fn in jit_jvp_fns.values():
+                    jax.block_until_ready(fn(av))
+                for fn in jit_jacfwd_fns.values():
+                    jax.block_until_ready(fn(av))
+
+            number = 5
+
+            def _time(fn):
+                start = time.perf_counter()
+                for bench_idx in range(number):
+                    jax.block_until_ready(fn(alpha_vec + 1e-4 * bench_idx))
+                return (time.perf_counter() - start) / number * 1e3
+
+            dt_group = _time(jit_group_fn)
+            dt_primal = _time(jit_primal)
+
+            print(f'  group: {group_alpha_names}')
+            print(f'  jit(group_fn direct):             {dt_group:9.4f} ms  (plain forward, no linearize)')
+            print(f'  jit(linearize primal only):       {dt_primal:9.4f} ms')
+            print(f'  --- linearize + vmap(jvp_fn) ---')
+            for n_tangents, fn in sorted(jit_jvp_fns.items()):
+                dt = _time(fn)
+                print(f'  jit(linearize + vmap n={n_tangents}):    {dt:9.4f} ms   (+{dt - dt_primal:6.2f} ms JVP)')
+            print(f'  --- vmap(jax.jvp) jacfwd ---')
+            for n_tangents, fn in sorted(jit_jacfwd_fns.items()):
+                dt = _time(fn)
+                print(f'  jit(jacfwd n={n_tangents}):             {dt:9.4f} ms   (+{dt - dt_primal:6.2f} ms JVP)')
+
+            # Two-stage: run Stage i (cosmo+PT) once outside linearize; JVP only through Stage ii (Tracer+obs).
+            if stage_i_pipe is not None and stage_i_ids:
+                stage_i_params = {p.name: group_params[p.name] for p in stage_i_pipe.params}
+
+                def make_jit_two_stage(n_tangents, _n_g=n_g, _pipe=group_theory_pipe, _params=group_params,
+                                       _names=group_alpha_names, _s1_ids=stage_i_ids,
+                                       _s1_pipe=stage_i_pipe, _s1_params=stage_i_params):
+                    @jax.jit
+                    def fn(alpha_vec):
+                        s1_flat = _s1_pipe(_s1_params)
+
+                        def thin_fn(av, _s1_flat=s1_flat):
+                            p = {**_params, **{name: av[alpha_idx] for alpha_idx, name in enumerate(_names)}}
+                            return_val, _, _ = _pipe._run_graph_fn(p, stage_i_ids=_s1_ids, stage_i_flat=_s1_flat)
+                            return return_val
+
+                        theories, jvp_fn = jax.linearize(thin_fn, alpha_vec)
+                        B_rows = jax.vmap(jvp_fn)(jnp.eye(_n_g)[:n_tangents])
+                        return theories, B_rows
+                    return fn
+
+                jit_two_stage_fns = {n: make_jit_two_stage(n) for n in (1, 2, 4, n_g)}
+
+                for bench_idx in range(3):
+                    av = alpha_vec + 1e-4 * bench_idx
+                    for fn in jit_two_stage_fns.values():
+                        jax.block_until_ready(fn(av))
+
+                print(f'  --- two-stage: stage_i (cosmo+PT) once, linearize(stage_ii only) ---')
+                for n_tangents, fn in sorted(jit_two_stage_fns.items()):
+                    dt = _time(fn)
+                    print(f'  jit(two-stage n={n_tangents}):           {dt:9.4f} ms')
+            break  # only first group
+
     if 'comet_3poles' in test:
         print(f'\n{"─" * 60}')
         print(f'COMET 2pt+3pt: ells2={ELLS_COMET}, ells3={ELLS3_COMET}, '
@@ -458,4 +667,4 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('comet',))
+    main(test=('bao',))

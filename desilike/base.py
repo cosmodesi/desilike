@@ -454,7 +454,45 @@ class Posterior(Calculator):
                 best_local = np.array([j for j, g in enumerate(global_idx) if g in best_global], dtype=int)
                 prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx])
                 group_alpha_names = [alpha_names[g] for g in global_idx]
-                self._groups.append((group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec))
+
+                # Two-stage partition: Stage i = nodes whose transitive param deps have
+                # zero overlap with group_alpha_names (e.g. cosmo + PT emulator).
+                # Stage ii = nodes that depend on alpha params or on Stage i outputs.
+                # Only Stage ii is traced through jax.linearize, avoiding GP re-runs in JVP.
+                alpha_names_set = set(group_alpha_names)
+                node_var_deps_pipe = group_theory_pipe._node_var_deps
+                node_calc_deps_pipe = group_theory_pipe._node_calc_deps
+                alpha_dep_ids = set()
+                for pipe_node in group_theory_pipe.nodes:
+                    direct_alpha = {p.name for p in node_var_deps_pipe[id(pipe_node)]} & alpha_names_set
+                    transitive_alpha = {id(dep) for dep in node_calc_deps_pipe[id(pipe_node)]} & alpha_dep_ids
+                    if direct_alpha or transitive_alpha:
+                        alpha_dep_ids.add(id(pipe_node))
+                stage_i_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
+                                        if id(pipe_node) not in alpha_dep_ids)
+                stage_i_nodes_ordered = [pipe_node for pipe_node in group_theory_pipe.nodes
+                                         if id(pipe_node) in stage_i_ids]
+
+                # Build Stage i pipeline: rooted at the last Stage i node (deepest dependent),
+                # output = flat tuple of all Stage i nodes' tree_flatten leaves.
+                # output() is called before _run_graph's save/restore, so leaves are live JAX
+                # tracers from the forward pass — captured correctly as return values.
+                if stage_i_nodes_ordered:
+                    stage_i_root = stage_i_nodes_ordered[-1]
+
+                    def make_stage_i_output(ordered_nodes):
+                        return lambda: tuple(
+                            leaf
+                            for stage_i_node in ordered_nodes
+                            for leaf in jax.tree_util.tree_leaves(stage_i_node.tree_flatten()[0])
+                        )
+
+                    stage_i_pipe = compile(stage_i_root, output=make_stage_i_output(stage_i_nodes_ordered))
+                else:
+                    stage_i_pipe = None
+
+                self._groups.append((group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local,
+                                     prior_prec, stage_i_pipe, stage_i_ids))
 
             prior.update(self._likelihood.params.select(solved=False))
         else:
@@ -501,24 +539,43 @@ class Posterior(Calculator):
             logL = logL - 0.5 * r @ (precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec in self._groups:
+        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids in self._groups:
             n_g = len(group_alpha_names)
 
             # All params needed by the combined group pipe (includes both alpha and non-alpha params).
             group_params = {p.name: jnp.asarray(params[p.name]) for p in group_theory_pipe.params}
             alpha_vec = jnp.stack([group_params[name] for name in group_alpha_names])
 
-            # Issue 1 fix: one call to group_theory_pipe evaluates all group components,
-            # with shared upstream Calculators computed only once.
-            def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
-                p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
-                return _pipe(p)
+            if stage_i_pipe is not None and stage_i_ids:
+                # Two-stage JVP optimisation:
+                # Stage i — run non-alpha nodes (e.g. cosmo + PT emulator) once, capture their
+                # tree_flatten outputs as a flat tuple of live JAX values.  XLA computes this
+                # block once; it never appears inside the JVP binary.
+                stage_i_params = {p.name: group_params[p.name] for p in stage_i_pipe.params}
+                stage_i_flat = stage_i_pipe(stage_i_params)
 
-            # Issue 2 fix: jax.linearize computes the primal in one full forward pass, then
-            # each jvp_fn(e_i) call runs only the alpha-dependent (linear) layer — not the
-            # full pre-alpha subgraph (cosmo/template/PT).  Total cost: 1 full pass + n_g
-            # cheap tangent passes, versus n_g full passes with jacfwd.
-            theories_concat, jvp_fn = jax.linearize(group_fn, alpha_vec)
+                # Stage ii — thin function that skips Stage i nodes (outputs injected from
+                # stage_i_flat) and runs only alpha-dependent nodes (Tracer + downstream).
+                # Called directly via _run_graph_fn, bypassing @custom_jvp, so JAX's native
+                # forward-mode AD traces through Stage ii only.  stage_i_flat is a closed-over
+                # constant: XLA reuses it without rematerialisation.
+                def thin_group_fn(alpha_vec,
+                                   _pipe=group_theory_pipe, _params=group_params,
+                                   _names=group_alpha_names, _s1_ids=stage_i_ids,
+                                   _s1_flat=stage_i_flat):
+                    p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
+                    return_val, _, _ = _pipe._run_graph_fn(p, stage_i_ids=_s1_ids, stage_i_flat=_s1_flat)
+                    return return_val
+
+                theories_concat, jvp_fn = jax.linearize(thin_group_fn, alpha_vec)
+            else:
+                # Fallback: no Stage i nodes identified, linearize the full pipeline.
+                def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
+                    p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
+                    return _pipe(p)
+
+                theories_concat, jvp_fn = jax.linearize(group_fn, alpha_vec)
+
             # jvp_fn(e_i) = i-th column of the Jacobian; vmap → shape (n_g, total_n_data).
             B_rows = jax.vmap(jvp_fn)(jnp.eye(n_g))
 
@@ -898,12 +955,19 @@ def _build_graph_call_fn(pipeline):
     fd_names = [p.name for p in fd_params]
     jax_names = [p.name for p in jax_params]
 
-    def _run_graph(params, ext_flat=None):
+    def _run_graph(params, ext_flat=None, stage_i_ids=frozenset(), stage_i_flat=None):
         """
         Execute the graph.
         ext_flat=None  : full run — External nodes execute via pure_callback.
         ext_flat=tuple : JAX sub-graph run — External outputs taken from ext_flat,
                          External nodes are not called. Used in the JAX-params JVP.
+        stage_i_ids, stage_i_flat :
+            Two-stage optimisation for analytic marginalisation.  When stage_i_flat is a
+            flat tuple of pre-computed JAX leaves (one block per Stage-i node, in node
+            topological order then tree_flatten order) and stage_i_ids is the corresponding
+            frozenset of node id()s, those nodes are skipped — their outputs are injected
+            from stage_i_flat via tree_unflatten rather than recomputed.  Their params are
+            still set so that downstream nodes can read them via .value.
         Returns (return_val, derived_dict, ext_outputs_flat).
         """
         is_tracing = any(isinstance(params[p.name], jax.core.Tracer) for p in all_params)
@@ -915,12 +979,28 @@ def _build_graph_call_fn(pipeline):
         ext_collected = []
         result = None
         ext_flat_offset = 0
+        stage_i_offset = 0
 
         for i, node in enumerate(nodes):
             nvd = node_var_deps[id(node)]
             ncd = node_calc_deps[id(node)]
 
-            if node._is_external:
+            if stage_i_flat is not None and id(node) in stage_i_ids:
+                # Stage i injection: set params so downstream nodes can read them via .value,
+                # unpack pre-computed tree_flatten outputs into node.__dict__, skip node().
+                free_nvd = [param for param in nvd if getattr(param, '_call_fn', None) is None]
+                for param in free_nvd:
+                    param.value = params[param.name]
+                for param in nvd:
+                    param()
+                n_ch = tree_own_treedef[i].num_leaves
+                flat_children = list(stage_i_flat[stage_i_offset:stage_i_offset + n_ch])
+                stage_i_offset += n_ch
+                children = jax.tree_util.tree_unflatten(tree_own_treedef[i], flat_children)
+                proxy = node.__class__.tree_unflatten(tree_own_aux[i], children)
+                node.__dict__.update(proxy.__dict__)
+                node_states[id(node)]['was_called'] = True
+            elif node._is_external:
                 n_ch = ext_n_children[id(node)]
                 if ext_flat is not None:
                     # JAX sub-graph mode: unpack frozen External outputs.
@@ -1018,6 +1098,10 @@ def _build_graph_call_fn(pipeline):
                 node_states[id(node)]['last_params'] = None
 
         return return_val, derived_dict, ext_flat_out
+
+    # Expose _run_graph directly so callers (e.g. Posterior._marg_loglik) can bypass
+    # the @custom_jvp wrapper and let JAX trace through the Stage-ii sub-graph natively.
+    pipeline._run_graph_fn = _run_graph
 
     @jax.custom_jvp
     def call_fn(fd_params_tuple, jax_params_tuple):

@@ -632,8 +632,9 @@ class Posterior(Calculator):
             if self._solved_params:
                 loglik, solved_values = self._marg_loglik(params)
                 params = {**params, **solved_values}
-                for var in self.solved_params:
-                    var.value = solved_values[var.name]
+                if not is_tracing:
+                    for var in self.solved_params:
+                        var.value = solved_values[var.name]
                 # Extra standard pass to re-capture derived params: the inner
                 # _run_graph restores p._value after each call; requesting
                 # return_derived=True gives back the traced values so the outer

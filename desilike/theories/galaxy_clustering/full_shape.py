@@ -3078,8 +3078,7 @@ class COMETTracerSpectrum2Poles(Calculator):
                 Parameter('NP20', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 0}'),
                 Parameter('NP22', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 2}'),
             ]
-            if 'VDG' not in model:
-                params += [Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
+            params += [Parameter('cnlo', value=0.0, fixed='VDG' in model, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
         elif counterterm_basis == 'ClassPT':
             params += [
                 Parameter('c0s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_0^{\ast}'),
@@ -3089,8 +3088,7 @@ class COMETTracerSpectrum2Poles(Calculator):
                 Parameter('NP20s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^{P,\ast}_{2, 0}'),
                 Parameter('NP22s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^{P,\ast}_{2, 2}'),
             ]
-            if 'VDG' not in model:
-                params += [Parameter('cnlos', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}^{\ast}')]
+            params += [Parameter('cnlos', value=0.0, fixed='VDG' in model, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}^{\ast}')]
         elif counterterm_basis == 'PBJ':
             params += [
                 Parameter('c0t', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\tilde{c}_{0}'),
@@ -3100,8 +3098,7 @@ class COMETTracerSpectrum2Poles(Calculator):
                 Parameter('eps0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'\epsilon_{0}'),
                 Parameter('eps2', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'\epsilon_{2}'),
             ]
-            if 'VDG' not in model:
-                params += [Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
+            params += [Parameter('cnlo', value=0.0, fixed='VDG' in model, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
         elif counterterm_basis == 'DESIct':
             # no nnlo counterterm
             if 'physical' in prior_basis:
@@ -3223,7 +3220,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
         return self.poles
 
-    def _get_canonical_params(self, rescale_counterterms=True):
+    def _get_canonical_params(self, rescale_counterterms=True, only=None):
         pt = self.pt if self.pt is not None else self  # pt=False: read qpar/qper/f/etc. off self
         f = pt.f
         if 'physical' in self._prior_basis:
@@ -3235,9 +3232,17 @@ class COMETTracerSpectrum2Poles(Calculator):
         if 'physical' in self._prior_basis:
             A = pt.AsD
 
+        _only = None if only is None else frozenset(only)
+
         def g(name):
             param = getattr(self, name, None)
-            return 0.0 if param is None else param.value
+            if param is None:
+                if _only is not None and name not in _only:
+                    return 0.0
+                raise AttributeError(
+                    f'{type(self).__name__}._get_canonical_params: parameter {name!r} not found; '
+                    f'pass only= with the names of params expected to be present')
+            return param.value
 
         if bias_basis == 'EggScoSmi':
             b1, b2, g2, g21 = g('b1'), g('b2'), g('g2'), g('g21')
@@ -3433,6 +3438,12 @@ class COMETPTSpectrum3Poles(Calculator):
 
 class COMETTracerSpectrum3Poles(Calculator):
 
+    # Parameters the 3Poles instance actually carries (the `relevant` subset selected by
+    # propose_params).  Passed as only= to the 2Poles _get_canonical_params call so that
+    # g() silently returns 0 for all other 2Poles-specific params (counterterms, g21, etc.)
+    # that are intentionally absent from the 3Poles instance.
+    _CANONICAL_PARAMS_2P_ONLY = frozenset({'b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0'})
+
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty'):
         relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0', 'avir']
@@ -3557,14 +3568,23 @@ class COMETTracerSpectrum3Poles(Calculator):
         self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)
         return self.poles
 
-    def _get_canonical_params(self, rescale_counterterms=True):
+    def _get_canonical_params(self, rescale_counterterms=True, only=None):
         pt = self.pt if self.pt is not None else self  # pt=False: read qper/qpar/cnloB off self
-        params = COMETTracerSpectrum2Poles._get_canonical_params(self, rescale_counterterms=rescale_counterterms)  # type: ignore
+        params = COMETTracerSpectrum2Poles._get_canonical_params(  # type: ignore
+            self, rescale_counterterms=rescale_counterterms, only=self._CANONICAL_PARAMS_2P_ONLY)
         cnloB = pt.cnloB.value
+
+        _only = None if only is None else frozenset(only)
 
         def g(name):
             param = getattr(self, name, None)
-            return 0.0 if param is None else param.value
+            if param is None:
+                if _only is not None and name not in _only:
+                    return 0.0
+                raise AttributeError(
+                    f'{type(self).__name__}._get_canonical_params: parameter {name!r} not found; '
+                    f'pass only= with the names of params expected to be present')
+            return param.value
 
         NP0 = g('NP0')  # no h**3 normalization needed here (unlike 2Poles _get_canonical_params)
         NB0 = g('NB0')

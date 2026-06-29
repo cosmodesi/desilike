@@ -83,22 +83,22 @@ def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
         assert reldiff < reldiff_tol, f'[{shift_param}+5%] max reldiff={reldiff:.3f} > {reldiff_tol}'
 
 
-def _check_sensitivity(run, baseline, name, rtol=1e-6, atol=1e-8, **override):
-    """Assert evaluating *run* with *override* moves away from *baseline*.
+def _check_sensitivity(run, baseline, name, rtol=1e-6, atol=1e-8, **params_overrides):
+    """Assert each param in *params_overrides* individually moves the output away from *baseline*.
 
-    Also re-evaluates under ``jax.jit`` (via ``run(_jit=True, **override)``) and checks
-    it agrees with the eager result, catching tracer-incompatible code paths. *rtol*/*atol*
-    default to a tight bit-for-bit-ish bound; loosen for genuinely-compiled (non
-    pure_callback) pipelines chaining many GP/spline ops, where jit's XLA fusion can
-    legitimately reorder floating-point operations relative to eager dispatch (e.g.
-    COMET's GP-emulator-based theories, ~1e-6 ULP-level noise observed).
+    Each param is tested independently: the pipeline is called with only that param shifted,
+    so a single failing param is reported cleanly. Also re-evaluates under ``jax.jit`` for each
+    and checks agreement with eager, catching tracer-incompatible code paths. *rtol*/*atol*
+    default to a tight bit-for-bit-ish bound; loosen for genuinely-compiled (non pure_callback)
+    pipelines chaining many GP/spline ops, where jit's XLA fusion can legitimately reorder
+    floating-point operations relative to eager dispatch (e.g. COMET, ~1e-6 ULP-level noise).
     """
-    (param_name, value), = override.items()
-    result = run(**override)
-    assert not np.allclose(baseline, result), f"{name}: result invariant to {param_name}"
-    jit_result = run(_jit=True, **override)
-    np.testing.assert_allclose(jit_result, result, rtol=rtol, atol=atol,
-                               err_msg=f"{name}: jit result differs from eager for {param_name}")
+    for param_name, value in params_overrides.items():
+        result = run(**{param_name: value})
+        assert not np.allclose(baseline, result), f"{name}: result invariant to {param_name}"
+        jit_result = run(_jit=True, **{param_name: value})
+        np.testing.assert_allclose(jit_result, result, rtol=rtol, atol=atol,
+                                   err_msg=f"{name}: jit result differs from eager for {param_name}")
 
 
 # ── Kaiser ────────────────────────────────────────────────────────────────────
@@ -721,23 +721,25 @@ class TestCOMET:
         # (poles ~5 from terms of order ~400), giving up to ~1e-3 relative error in poles.
         comet_tol = dict(rtol=2e-3, atol=1e-6)
         _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
-        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        # All free bias params: b1 (linear), b2/g2/g21 (higher-order). cnlo is fixed=True for VDG_infty.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, g21=0.3, **comet_tol)
         # avir (VDG_infty FoG damping): regression test for PX_ell() silently ignoring it
         # (unlike Pell(), PX_ell() doesn't refresh RSD params from its `params` dict).
         _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', avir=10.0, **comet_tol)
 
-        # Other bias bases (each with Comet counterterms); b1t for AmiGleKok.
-        for prior_basis, sensitivity_param in [
-            ('AssBauGre+Comet', 'b1'),
-            ('AmiGleKok+Comet', 'b1t'),
-            ('DESI+Comet',      'b1'),
-            ('physical',        'b1'),
+        # Other bias bases (each with Comet counterterms); bias_overrides lists all free bias params.
+        # bGam3 (AssBauGre), b3t (AmiGleKok), btd (DESI non-physical) are fixed=True → omitted.
+        for prior_basis, bias_overrides in [
+            ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5)),
+            ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3)),
+            ('DESI+Comet',      dict(b1=2.0, b2d=0.5, bk2=0.3)),
+            ('physical',        dict(b1=2.0, b2d=0.5, bk2=0.3, btd=0.2)),
         ]:
             theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
             run_bb = _compile(theory_bb)
             base_bb = run_bb()
             _check(base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})')
-            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **{sensitivity_param: 2.0}, **comet_tol)  # same comet_tol as above
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **bias_overrides, **comet_tol)
 
         # Other counterterm bases (each with EggScoSmi bias).
         for ct_basis in ['ClassPT', 'PBJ', 'DESIct']:
@@ -797,7 +799,10 @@ class TestCOMET:
         # See test_tracer_spectrum's comment on comet_tol (same XLA-fusion amplification applies).
         comet_tol = dict(rtol=2e-3, atol=1e-6)
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
-        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        # All free bias params for EggScoSmi: b1, b2, g2. cnlo is fixed=True for VDG_infty.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, **comet_tol)
+        # Bispectrum-specific stochastic params.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', NB0=0.1, MB0=0.1, **comet_tol)
         # avir (VDG_infty FoG damping): regression for BX_ell_Sugi() silently ignoring it.
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', avir=5.0, **comet_tol)
 

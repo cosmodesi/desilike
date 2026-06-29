@@ -723,28 +723,48 @@ class TestCOMET:
         _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
         # All free bias params: b1 (linear), b2/g2/g21 (higher-order). cnlo is fixed=True for VDG_infty.
         _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, g21=0.3, **comet_tol)
-        # avir (VDG_infty FoG damping): regression test for PX_ell() silently ignoring it
-        # (unlike Pell(), PX_ell() doesn't refresh RSD params from its `params` dict).
+        # Comet counterterms (c0/c2/c4; cnlo is fixed=True for VDG_infty).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', c0=1.0, c2=1.0, c4=1.0, **comet_tol)
+        # Stochastic shot-noise params.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', NP0=0.1, NP20=0.1, NP22=0.1, **comet_tol)
+        # avir (VDG_infty FoG damping): regression test ensuring avir is correctly passed to
+        # PX_ell() (which, unlike Pell(), doesn't internally refresh RSD params from its params dict).
         _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', avir=10.0, **comet_tol)
 
-        # Other bias bases (each with Comet counterterms); bias_overrides lists all free bias params.
+        # Other bias bases (each with Comet counterterms); bias_overrides covers all free bias params,
+        # ct_overrides covers all free counterterm + stochastic params.
         # bGam3 (AssBauGre), b3t (AmiGleKok), btd (DESI non-physical) are fixed=True → omitted.
-        for prior_basis, bias_overrides in [
-            ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5)),
-            ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3)),
-            ('DESI+Comet',      dict(b1=2.0, b2d=0.5, bk2=0.3)),
-            ('physical',        dict(b1=2.0, b2d=0.5, bk2=0.3, btd=0.2)),
+        # cnlo is fixed=True for VDG_infty → omitted. physical uses DESIct (a0/a2/a4) not Comet (c0/c2/c4).
+        comet_ct = dict(c0=1.0, c2=1.0, c4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
+        desict_ct = dict(a0=1.0, a2=1.0, a4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
+        for prior_basis, bias_overrides, ct_overrides in [
+            ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5), comet_ct),
+            ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3), comet_ct),
+            ('DESI+Comet',      dict(b1=2.0, b2d=0.5, bk2=0.3), comet_ct),
+            ('physical',        dict(b1=2.0, b2d=0.5, bk2=0.3, btd=0.2), desict_ct),
         ]:
             theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
             run_bb = _compile(theory_bb)
             base_bb = run_bb()
             _check(base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})')
             _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **bias_overrides, **comet_tol)
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **ct_overrides, **comet_tol)
 
-        # Other counterterm bases (each with EggScoSmi bias).
-        for ct_basis in ['ClassPT', 'PBJ', 'DESIct']:
+        # Other counterterm bases (each with EggScoSmi bias): check all free ct + stochastic params.
+        # cnlo/cnlos are fixed=True for VDG_infty → omitted.
+        # DESIct non-physical NP20/NP22 omitted: they are not divided by nbar in _get_canonical_params
+        # (unlike Comet/ClassPT/PBJ), so NP20=0.1 only produces a ~1e-5 absolute change — below
+        # np.allclose's threshold for poles of order 1e4. NP0=0.1 passes because it is h^-3 normalized.
+        for ct_basis, ct_overrides in [
+            ('ClassPT', dict(b1=2.0, c0s=1.0, c2s=1.0, c4s=1.0, NP0=0.1, NP20s=0.1, NP22s=0.1)),
+            ('PBJ',     dict(b1=2.0, c0t=1.0, c2t=1.0, c4t=1.0, NP0=0.1, eps0=0.1, eps2=0.1)),
+            ('DESIct',  dict(b1=2.0, a0=1.0, a2=1.0, a4=1.0, NP0=0.1)),
+        ]:
             theory_ct = COMETTracerSpectrum2Poles(k=k, prior_basis=f'EggScoSmi+{ct_basis}')
-            _check(_compile(theory_ct)(), f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})')
+            run_ct = _compile(theory_ct)
+            base_ct = run_ct()
+            _check(base_ct, f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})')
+            _check_sensitivity(run_ct, base_ct, f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})', **ct_overrides, **comet_tol)
 
         # ells subset.
         assert _compile(COMETTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
@@ -801,8 +821,8 @@ class TestCOMET:
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
         # All free bias params for EggScoSmi: b1, b2, g2. cnlo is fixed=True for VDG_infty.
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, **comet_tol)
-        # Bispectrum-specific stochastic params.
-        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', NB0=0.1, MB0=0.1, **comet_tol)
+        # Bispectrum stochastic params (NP0/NB0/MB0 all enter the coeff vector).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', NP0=0.1, NB0=0.1, MB0=0.1, **comet_tol)
         # avir (VDG_infty FoG damping): regression for BX_ell_Sugi() silently ignoring it.
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', avir=5.0, **comet_tol)
 

@@ -453,4 +453,4 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('folps_vs_emu',))
+    main(test=('comet',))

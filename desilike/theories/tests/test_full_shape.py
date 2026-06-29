@@ -770,7 +770,7 @@ class TestCOMET:
             ('AssBauGre+Comet', 'b1', dict(b1=2.0)),
             ('AmiGleKok+Comet', 'b1t', dict(b1t=2.0)),
             ('DESI+Comet',      'b1', dict(b1=2.0)),
-            ('physical',        'b1p', dict(b1p=2.0)),
+            ('physical_aap',        'b1p', dict(b1p=2.0)),
             ('EggScoSmi+ClassPT', None, {}),
             ('EggScoSmi+PBJ', None, {}),
             ('EggScoSmi+DESIct', None, {}),
@@ -798,6 +798,8 @@ class TestCOMET:
         comet_tol = dict(rtol=2e-3, atol=1e-6)
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
         _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        # avir (VDG_infty FoG damping): regression for BX_ell_Sugi() silently ignoring it.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', avir=5.0, **comet_tol)
 
     def test_tracer_bispectrum_direct(self):
         """COMETTracerSpectrum3Poles(pt=False): comet's Bell_Sugi() (monolithic,

@@ -3106,9 +3106,9 @@ class COMETTracerSpectrum2Poles(Calculator):
                     Parameter('a0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_0'),
                     Parameter('a2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_2'),
                     Parameter('a4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_4'),
-                    Parameter('NP0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=2.), latex=R'N^P_0'),
-                    Parameter('NP20', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 0}'),
-                    Parameter('NP22', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 2}'),
+                    Parameter('NP0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=2.), latex=R'N^P_0'),
+                    Parameter('NP20', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 0}'),
+                    Parameter('NP22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 2}'),
                 ]
             else:
                 params += [
@@ -3451,8 +3451,8 @@ class COMETTracerSpectrum3Poles(Calculator):
         extra = []
         if 'physical' in prior_basis:
             extra += [
-                Parameter('NB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
-                Parameter('MB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
+                Parameter('NB0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
+                Parameter('MB0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
             ]
         else:
             extra += [

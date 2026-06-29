@@ -185,8 +185,8 @@ K3_COMET = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
 ELLS3_COMET = ((0, 0, 0), (2, 0, 2))
 
 
-def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='EggScoSmi+Comet',
-                          direct=False, include_3poles=False, k3=K3_COMET, ells3=ELLS3_COMET):
+def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='physical_aap',
+                          direct=False, include_3poles=False, k3=K3_COMET, ells3=ELLS3_COMET, marginalize=False):
     """COMET full-shape pipeline.
 
     With ``direct=True``, both COMETTracerSpectrum2Poles and (if requested)
@@ -259,6 +259,11 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='Eg
 
     from scipy.linalg import block_diag
     likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
+    if marginalize:
+        for param in get_params(likelihood).select(basename='a*'):
+            param.update(derived='best')
+        for param in get_params(likelihood).select(basename='N*'):
+            param.update(derived='best')
     return Posterior(likelihood)
 
 
@@ -271,7 +276,7 @@ def _bench(label, fn, number=5, warmup=3):
     compiled graph's identical-params result cache.
     """
     for bench_idx in range(warmup):
-        jax.block_until_ready(fn(bench_idx))
+        assert np.isfinite(fn(bench_idx)).all()
     start = time.perf_counter()
     for bench_idx in range(number):
         jax.block_until_ready(fn(bench_idx))
@@ -427,8 +432,8 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         # convergence much slower; cap iterations here purely for benchmark wall-clock
         # purposes, same reasoning as comet_3poles below.
         profile_kwargs = dict()
-        run('shared PT (PX_ell)', lambda: build_posterior_comet(direct=False),
-            vary_param='n_s', warmup=2, number=5, run=('jit', 'grad', 'profile')[2:], profile_kwargs=profile_kwargs)
+        run('shared PT (PX_ell)', lambda: build_posterior_comet(direct=False, marginalize=True),
+            vary_param='n_s', warmup=2, number=5, run=('jit', 'grad', 'profile')[:1], profile_kwargs=profile_kwargs)
         return
         run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
             vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)

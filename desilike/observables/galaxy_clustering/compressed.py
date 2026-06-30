@@ -142,6 +142,10 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Parameter names to compare; required when *data* is not an lsstypes object.
     name : str, default='bao'
         Observable name.
+    extractor : BAOExtractor, optional
+        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
+        to ``extractor.update()``.  If absent, a new :class:`BAOExtractor` is
+        constructed from *kwargs*.
     z : float, default=1.
         Effective redshift forwarded to :class:`BAOExtractor`.
     eta : float, default=1./3.
@@ -152,8 +156,12 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Cosmology provider forwarded to :class:`BAOExtractor`.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='bao', **kwargs):
-        super().__init__(extractor=BAOExtractor(**kwargs),
+    def __init__(self, data=None, covariance=None, parameters=None, name='bao', extractor=None, **kwargs):
+        if extractor is None:
+            extractor = BAOExtractor(**kwargs)
+        elif kwargs:
+            extractor.update(**kwargs)
+        super().__init__(extractor=extractor,
                          data=data, covariance=covariance, parameters=parameters, name=name)
 
 
@@ -177,6 +185,10 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='baoshift'
         Observable name.
+    extractor : BAOPhaseShiftExtractor, optional
+        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
+        to ``extractor.update()``.  If absent, a new :class:`BAOPhaseShiftExtractor`
+        is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -187,8 +199,12 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
         Cosmology provider.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', **kwargs):
-        super().__init__(extractor=BAOPhaseShiftExtractor(**kwargs),
+    def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', extractor=None, **kwargs):
+        if extractor is None:
+            extractor = BAOPhaseShiftExtractor(**kwargs)
+        elif kwargs:
+            extractor.update(**kwargs)
+        super().__init__(extractor=extractor,
                          data=data, covariance=covariance, parameters=parameters, name=name)
 
 
@@ -213,6 +229,10 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='turnover'
         Observable name.
+    extractor : TurnOverExtractor, optional
+        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
+        to ``extractor.update()``.  If absent, a new :class:`TurnOverExtractor`
+        is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -223,6 +243,10 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Cosmology provider.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='turnover', **kwargs):
-        super().__init__(extractor=TurnOverExtractor(**kwargs),
+    def __init__(self, data=None, covariance=None, parameters=None, name='turnover', extractor=None, **kwargs):
+        if extractor is None:
+            extractor = TurnOverExtractor(**kwargs)
+        elif kwargs:
+            extractor.update(**kwargs)
+        super().__init__(extractor=extractor,
                          data=data, covariance=covariance, parameters=parameters, name=name)

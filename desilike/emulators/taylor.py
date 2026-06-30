@@ -123,7 +123,7 @@ class TaylorEmulator:
 
     # ── fitting ──────────────────────────────────────────────────────────────
 
-    def fit(self, center=None):
+    def fit(self, center=None, jit=True):
         """Compute Taylor expansion coefficients around *center*.
 
         Parameters
@@ -131,6 +131,10 @@ class TaylorEmulator:
         center : dict[str, float | array], optional
             Values of the *input* parameters at the expansion point.  Defaults
             to the graph's compile-time parameter values.
+        jit : bool, optional
+            When ``True``, JIT-compile each graph evaluation via ``jax.jit``
+            (using the graph's cached :attr:`~desilike.base.CompiledGraph._jit_call_fn`).
+            Speeds up repeated evaluations during FD stencil computations.
 
         Returns
         -------
@@ -154,8 +158,9 @@ class TaylorEmulator:
             fd_t = tuple(jnp.asarray(p0[n]) for n in g._fd_names)
             jax_t = tuple(jnp.asarray(p0[n]) for n in g._jax_names)
             input_saved = {p.name: p._value for p in g.params if g.params[p.name].varied}
+            call_fn = g._jit_call_fn if jit else g._call_fn
             try:
-                return g._call_fn(fd_t, jax_t)
+                return call_fn(fd_t, jax_t)
             finally:
                 for p in g.params:
                     if p.name in input_saved:
@@ -204,10 +209,10 @@ class TaylorEmulator:
             prefactor = 1.0 / math.prod(math.factorial(k) for k in mi)
 
             if order_arg:
-                d_fn = differentiate(child_graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps)
+                d_fn = differentiate(child_graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)
                 deriv_children, deriv_derived = d_fn(p0, return_derived=True)
                 if self._return_kind == 'value':
-                    deriv_rv = differentiate(graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps)(p0)
+                    deriv_rv = differentiate(graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)(p0)
             else:
                 deriv_children = children0_t
                 deriv_derived = dict(derived0)

@@ -1156,6 +1156,155 @@ def test_two_stage_marginalization():
         assert float(pipe_full(p_down)) < logpdf_full_at_opt + 1e-10, f'{name}-eps improves logpdf_full'
 
 
+def test_two_stage_marginalization_multi_tracer():
+    """Two-stage analytic marginalization with two independent Gaussian likelihoods sharing one cosmo.
+
+    Regression test for the bug where compile(stage_i_root, ...) only ran the sub-graph reachable
+    from the last Stage-i node in topo order.  In a 2-tracer setup the PT for the first tracer
+    (pt1) came earlier in topo order than the second tracer's full chain, so pt1 had stale
+    compile-time values in stage_i_flat — giving wrong Jacobians and wrong optimal alphas for
+    tracer 1.
+
+    Validates (for each tracer independently):
+    1. logpdf_marg == logpdf_full evaluated at the analytically derived argmin alpha.
+    2. Derived (optimal alpha) from eager call == derived from JIT call.
+    3. Gradient of logpdf_full w.r.t. alpha at its argmin is ~0.
+    4. Perturbing alpha away from its argmin decreases logpdf_full.
+    """
+
+    class PTTable(Calculator):
+        def __init__(self, cosmo, A, ns):
+            self.cosmo = cosmo
+            self.A = A
+            self.ns = ns
+
+        def __call__(self):
+            self.table = jnp.stack([
+                self.A * K ** self.ns * self.cosmo.growth_factor ** 2,
+                self.A * K ** (self.ns + 0.5) * self.cosmo.growth_factor ** 2,
+            ])
+            return self.table
+
+        def tree_flatten(self):
+            return [self.table], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.table = children[0]
+            return obj
+
+    class PTTracer(GaussianLikelihood):
+        def __init__(self, pt, alpha_0, alpha_1, data, covariance):
+            self.pt = pt
+            self.alpha_0 = alpha_0
+            self.alpha_1 = alpha_1
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.alpha_0 * self.pt.table[0] + self.alpha_1 * self.pt.table[1]
+            return super().__call__()
+
+    sigma_d = 0.1
+    rng = np.random.default_rng(7)
+    data1 = jnp.array(rng.normal(1.2, sigma_d, len(K)))
+    data2 = jnp.array(rng.normal(0.8, sigma_d, len(K)))
+
+    omega_m_val, z_val = 0.3, 0.5
+    A1_val, ns1_val = 1.0, 0.96
+    A2_val, ns2_val = 0.8, 1.02
+
+    # ── marginalizing pipeline ──────────────────────────────────────────────────
+    omega_m  = Parameter('omega_m',  value=omega_m_val)
+    z        = Parameter('z',        value=z_val)
+    A1       = Parameter('A1',       value=A1_val)
+    ns1      = Parameter('ns1',      value=ns1_val)
+    A2       = Parameter('A2',       value=A2_val)
+    ns2      = Parameter('ns2',      value=ns2_val)
+    alpha_01 = Parameter('alpha_01', value=0., derived='best')
+    alpha_11 = Parameter('alpha_11', value=0., derived='best')
+    alpha_02 = Parameter('alpha_02', value=0., derived='best')
+    alpha_12 = Parameter('alpha_12', value=0., derived='best')
+
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    pt1   = PTTable(cosmo=cosmo, A=A1, ns=ns1)
+    pt2   = PTTable(cosmo=cosmo, A=A2, ns=ns2)
+    lik1  = PTTracer(pt=pt1, alpha_0=alpha_01, alpha_1=alpha_11,
+                     data=data1, covariance=np.eye(len(K)) * sigma_d ** 2)
+    lik2  = PTTracer(pt=pt2, alpha_0=alpha_02, alpha_1=alpha_12,
+                     data=data2, covariance=np.eye(len(K)) * sigma_d ** 2)
+    pipe_marg = compile(Posterior(SumLikelihood([lik1, lik2])))
+
+    # ── full pipeline (alphas free) for reference ───────────────────────────────
+    om2 = Parameter('omega_m',  value=omega_m_val)
+    z2  = Parameter('z',        value=z_val)
+    b1  = Parameter('A1',       value=A1_val)
+    c1  = Parameter('ns1',      value=ns1_val)
+    b2  = Parameter('A2',       value=A2_val)
+    c2  = Parameter('ns2',      value=ns2_val)
+    a01 = Parameter('alpha_01', value=0.)
+    a11 = Parameter('alpha_11', value=0.)
+    a02 = Parameter('alpha_02', value=0.)
+    a12 = Parameter('alpha_12', value=0.)
+    cosmo2 = Cosmology(omega_m=om2, z=z2)
+    pt1f   = PTTable(cosmo=cosmo2, A=b1, ns=c1)
+    pt2f   = PTTable(cosmo=cosmo2, A=b2, ns=c2)
+    lik1f  = PTTracer(pt=pt1f, alpha_0=a01, alpha_1=a11,
+                      data=data1, covariance=np.eye(len(K)) * sigma_d ** 2)
+    lik2f  = PTTracer(pt=pt2f, alpha_0=a02, alpha_1=a12,
+                      data=data2, covariance=np.eye(len(K)) * sigma_d ** 2)
+    pipe_full = compile(Posterior(SumLikelihood([lik1f, lik2f])))
+
+    # Perturb cosmo/shape params so optimal alpha != 0 for both tracers.
+    params_marg = {'omega_m': omega_m_val + 0.05, 'z': z_val,
+                   'A1': A1_val + 0.15, 'ns1': ns1_val,
+                   'A2': A2_val - 0.10, 'ns2': ns2_val + 0.02}
+
+    # ----- 1. Eager: value correctness -----
+    logpdf_marg = float(pipe_marg(params_marg))
+    derived_eager = {p.name: float(p.value)
+                     for p in pipe_marg.params.select(derived='best')}
+    alpha_names = list(derived_eager.keys())
+
+    params_full_at_opt = {**params_marg, **derived_eager}
+    logpdf_full_at_opt = float(pipe_full(params_full_at_opt))
+
+    assert abs(logpdf_marg - logpdf_full_at_opt) < 1e-8, (
+        f'marg logpdf {logpdf_marg:.12f} != full@argmin {logpdf_full_at_opt:.12f}, '
+        f'diff={logpdf_marg - logpdf_full_at_opt:.3e}'
+    )
+
+    # ----- 2. JIT: derived values match eager -----
+    jit_fn = jax.jit(lambda p: pipe_marg(p, return_derived=True))
+    logpdf_jit, dd_jit = jit_fn(params_marg)
+    jax.block_until_ready(logpdf_jit)
+    derived_jit = {name: float(dd_jit[name]) for name in alpha_names}
+
+    assert abs(float(logpdf_jit) - logpdf_marg) < 1e-8, (
+        f'JIT logpdf {float(logpdf_jit):.12f} != eager {logpdf_marg:.12f}'
+    )
+    for name in alpha_names:
+        assert abs(derived_eager[name] - derived_jit[name]) < 1e-10, (
+            f'JIT derived[{name}] {derived_jit[name]:.10f} != eager {derived_eager[name]:.10f}'
+        )
+
+    # ----- 3. Gradient at argmin is ~0 -----
+    grad_full = jax.grad(pipe_full)(params_full_at_opt)
+    for name in alpha_names:
+        assert abs(float(grad_full[name])) < 1e-7, (
+            f'grad wrt {name} = {float(grad_full[name]):.3e} at claimed argmin; expected ~0'
+        )
+
+    # ----- 4. Perturbation test -----
+    eps = 1e-3
+    for name in alpha_names:
+        p_up   = {**params_full_at_opt, name: params_full_at_opt[name] + eps}
+        p_down = {**params_full_at_opt, name: params_full_at_opt[name] - eps}
+        assert float(pipe_full(p_up))   < logpdf_full_at_opt + 1e-10, f'{name}+eps improves logpdf_full'
+        assert float(pipe_full(p_down)) < logpdf_full_at_opt + 1e-10, f'{name}-eps improves logpdf_full'
+
+
 def test_sum_likelihood():
     """SumLikelihood: logpdf is the sum of components; Posterior marginalizes only components that depend on solved params."""
 

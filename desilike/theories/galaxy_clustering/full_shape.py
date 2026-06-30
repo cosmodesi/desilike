@@ -3010,9 +3010,9 @@ class COMETPTSpectrum2Poles(Calculator):
         # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
+        self.h = self.cosmo['h']
         if _use_jax:
             md.clear_jax_state()
-        self.h = self.cosmo['h']
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.h]
@@ -3415,7 +3415,7 @@ class COMETPTSpectrum3Poles(Calculator):
 
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
         AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f = qpar, qper, AsD, f
+        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
 
         if avir is not None:
             params['avirB'] = _wrap(avir)
@@ -3429,18 +3429,19 @@ class COMETPTSpectrum3Poles(Calculator):
         # Build table of shape (ndiag, nell, npair).
         self.table = xp.stack(
             [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
+        self.h = self.cosmo['h']
         if _use_jax:
             md.clear_jax_state()
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.h]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.h = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3557,7 +3558,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
         AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f = qpar, qper, AsD, f
+        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
 
         # rescale_counterterms=True (default): NP0/NB0/MB0 are nbar-normalised but NOT
         # h³-rescaled (no h-rescaling comment on these in _get_canonical_params applies

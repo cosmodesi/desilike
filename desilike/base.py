@@ -473,12 +473,17 @@ class Posterior(Calculator):
                 stage_i_nodes_ordered = [pipe_node for pipe_node in group_theory_pipe.nodes
                                          if id(pipe_node) in stage_i_ids]
 
-                # Build Stage i pipeline: rooted at the last Stage i node (deepest dependent),
-                # output = flat tuple of all Stage i nodes' tree_flatten leaves.
-                # output() is called before _run_graph's save/restore, so leaves are live JAX
-                # tracers from the forward pass — captured correctly as return values.
+                # Build Stage-i pre-pass: runs ALL Stage-i nodes via group_theory_pipe with
+                # Stage-ii nodes skipped (skip_ids), captures every Stage-i node's
+                # tree_flatten leaves as the return value (output_override).  This fixes a
+                # prior bug where compile(stage_i_root, ...) only ran the sub-graph reachable
+                # from the last Stage-i node in topo order, leaving earlier-branch Stage-i
+                # nodes (e.g. pt_LRG / pt_ELG in a 3-tracer pipeline) with stale
+                # compile-time values in stage_i_flat.
+
                 if stage_i_nodes_ordered:
-                    stage_i_root = stage_i_nodes_ordered[-1]
+                    stage_ii_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
+                                             if id(pipe_node) not in stage_i_ids)
 
                     def make_stage_i_output(ordered_nodes):
                         return lambda: tuple(
@@ -487,7 +492,17 @@ class Posterior(Calculator):
                             for leaf in jax.tree_util.tree_leaves(stage_i_node.tree_flatten()[0])
                         )
 
-                    stage_i_pipe = compile(stage_i_root, output=make_stage_i_output(stage_i_nodes_ordered))
+                    stage_i_output_fn = make_stage_i_output(stage_i_nodes_ordered)
+
+                    def make_stage_i_prepass(pipe, s2_ids, out_fn):
+                        def fn(params):
+                            ret, _, _ = pipe._run_graph_fn(
+                                params, skip_ids=s2_ids, output_override=out_fn)
+                            return ret
+                        return fn
+
+                    stage_i_pipe = make_stage_i_prepass(
+                        group_theory_pipe, stage_ii_ids, stage_i_output_fn)
                 else:
                     stage_i_pipe = None
 
@@ -548,11 +563,11 @@ class Posterior(Calculator):
 
             if stage_i_pipe is not None and stage_i_ids:
                 # Two-stage JVP optimisation:
-                # Stage i — run non-alpha nodes (e.g. cosmo + PT emulator) once, capture their
-                # tree_flatten outputs as a flat tuple of live JAX values.  XLA computes this
-                # block once; it never appears inside the JVP binary.
-                stage_i_params = {p.name: group_params[p.name] for p in stage_i_pipe.params}
-                stage_i_flat = stage_i_pipe(stage_i_params)
+                # Stage i — run ALL non-alpha nodes once (via group_theory_pipe with Stage-ii
+                # nodes skipped), capture every Stage-i node's tree_flatten leaves as a flat
+                # tuple of live JAX values.  XLA computes this block once; none of it appears
+                # inside the JVP binary.
+                stage_i_flat = stage_i_pipe(group_params)
 
                 # Stage ii — thin function that skips Stage i nodes (outputs injected from
                 # stage_i_flat) and runs only alpha-dependent nodes (Tracer + downstream).
@@ -956,7 +971,8 @@ def _build_graph_call_fn(pipeline):
     fd_names = [p.name for p in fd_params]
     jax_names = [p.name for p in jax_params]
 
-    def _run_graph(params, ext_flat=None, stage_i_ids=frozenset(), stage_i_flat=None):
+    def _run_graph(params, ext_flat=None, stage_i_ids=frozenset(), stage_i_flat=None,
+                   skip_ids=frozenset(), output_override=None):
         """
         Execute the graph.
         ext_flat=None  : full run — External nodes execute via pure_callback.
@@ -969,6 +985,14 @@ def _build_graph_call_fn(pipeline):
             frozenset of node id()s, those nodes are skipped — their outputs are injected
             from stage_i_flat via tree_unflatten rather than recomputed.  Their params are
             still set so that downstream nodes can read them via .value.
+        skip_ids :
+            Nodes whose id() is in this set are skipped entirely (not called, not injected).
+            Used in the Stage-i pre-pass to execute only Stage-i nodes via the full
+            group_theory_pipe while bypassing Stage-ii nodes.
+        output_override :
+            If not None, replaces the pipeline's compiled output function when computing
+            return_val.  Used in the Stage-i pre-pass to capture Stage-i node leaves as the
+            return value rather than the pipeline's normal output.
         Returns (return_val, derived_dict, ext_outputs_flat).
         """
         is_tracing = any(isinstance(params[p.name], jax.core.Tracer) for p in all_params)
@@ -983,6 +1007,8 @@ def _build_graph_call_fn(pipeline):
         stage_i_offset = 0
 
         for i, node in enumerate(nodes):
+            if id(node) in skip_ids:
+                continue
             nvd = node_var_deps[id(node)]
             ncd = node_calc_deps[id(node)]
 
@@ -1074,11 +1100,12 @@ def _build_graph_call_fn(pipeline):
         # Use the cached output value when available, so live attributes updated by
         # a different CompiledGraph sharing the same node are not incorrectly returned.
         root_state = node_states.get(id(root))
-        if (output is not None and root_state is not None
+        if (output_override is None and output is not None and root_state is not None
                 and 'last_output' in root_state and not root_state.get('was_called', True)):
             return_val = root_state['last_output']
         else:
-            return_val = output() if output is not None else result
+            effective_output = output_override if output_override is not None else output
+            return_val = effective_output() if effective_output is not None else result
         # Capture derived (incl. solved) values before the tracing restore below
         # overwrites _value back to the pre-call snapshot.
         derived_dict = {p.name: p._value for p in derived_params}
@@ -1309,6 +1336,11 @@ class CompiledGraph:
 
         self._call_fn = _build_graph_call_fn(self)
 
+    @functools.cached_property
+    def _jit_call_fn(self):
+        """JIT-compiled version of ``_call_fn``; created once and cached on the graph."""
+        return jax.jit(self._call_fn)
+
     def __call__(self, *args, return_derived=False, **kwargs):
         """
         Pure function: params → return_val, or ``(return_val, derived_dict)``
@@ -1448,15 +1480,21 @@ def replace(node, old, new, level: int=None):
     for calc in _iter_calculators(node, maxlevel=level, exclude=exclude):
         # Constructor args (so a later __post_init__ that reads _init stays consistent).
         args, kwargs = calc._init
-        calc._init = (tuple(_substitute_node(arg, match, new) for arg in args),
-                      {key: _substitute_node(val, match, new) for key, val in kwargs.items()})
+        new_args = tuple(_substitute_node(arg, match, new) for arg in args)
+        new_kwargs = {key: _substitute_node(val, match, new) for key, val in kwargs.items()}
         # Public attributes.
+        extra_init_kwargs = {}
         for key, val in list(calc.__dict__.items()):
             if key.startswith('_'):
                 continue
             new_val = _substitute_node(val, match, new)
             if new_val is not val:
                 setattr(calc, key, new_val)
+                # Sync _init so that a subsequent update() re-uses the replacement
+                # rather than re-creating the old node from scratch.
+                if key not in new_kwargs or new_kwargs[key] is not new_val:
+                    extra_init_kwargs[key] = new_val
+        calc._init = (new_args, {**new_kwargs, **extra_init_kwargs})
     return node
 
 
@@ -1736,7 +1774,7 @@ def compile(root: Calculator, output: Callable=None, input: Callable=None) -> Co
     return CompiledGraph(root, ctx, output=output, input=input)
 
 
-def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
+def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=False):
     """
     Build a derivative callable for a compiled graph.
 
@@ -1858,11 +1896,12 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
     # derived_dict.  jax.jacfwd re-traces on every call so changing the flag
     # between calls is safe.
     _return_derived = [False]
+    _call_fn = graph._jit_call_fn if jit else graph._call_fn
 
     def _eval(p_dict):
         fd_t  = tuple(jnp.asarray(p_dict[n]) for n in graph._fd_names)
         jax_t = tuple(jnp.asarray(p_dict[n]) for n in graph._jax_names)
-        val, derived_dict, _ = graph._call_fn(fd_t, jax_t)
+        val, derived_dict, _ = _call_fn(fd_t, jax_t)
         if _return_derived[0]:
             return val, derived_dict
         return val

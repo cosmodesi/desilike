@@ -92,7 +92,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 ELLS_FOLPS = (0, 2, 4)
 K = np.linspace(0.02, 0.2, 101)
 TRACERS_FOLPS = ['LRG', 'ELG']
-Z_TRACERS = {'LRG': 0.8, 'ELG': 1.1}
+Z_TRACERS = {'LRG': 0.8, 'ELG': 1.1, 'QSO': 2.1}
 K3 = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
 ELLS3_FOLPS = ((0, 0, 0), (2, 0, 2))
 
@@ -121,12 +121,12 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     rng = np.random.default_rng(42)
     tracer_list = [None] if tracers is None else list(tracers)
 
+    cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI')
+    for param in get_params(cosmo).select(basename=['w0_fld', 'wa_fld']):
+        param.update(fixed=False)
     likelihoods = []
     for tracer in tracer_list:
         z = Z_TRACERS.get(tracer, 0.8)
-        cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI')
-        for param in get_params(cosmo).select(basename=['w0_fld', 'wa_fld']):
-            param.update(fixed=False)
         template = DirectSpectrum2Template(z=z, cosmo=cosmo)
         tracer_arg = (tracer,) if tracer is not None else None
         theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=tracer_arg)
@@ -422,18 +422,15 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
 
-    if 'folps_vs_emu' in test:
+    if 'folps_noemu' in test:
         print(f'\n{"─" * 60}')
         print(f'FOLPS: eisenstein_hu (no emulator) vs camb + TaylorEmulator(order=1)')
         print(f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
         run('EH (no emulator), analytic marg.',
-            lambda: build_posterior_folps(marginalize=True, engine='eisenstein_hu'),
+            lambda: build_posterior_folps(tracers=['LRG', 'ELG', 'QSO'], marginalize=True, engine='eisenstein_hu'),
             vary_param='logA', warmup=2, number=10, run=('eager', 'jit', 'grad')[1:2])
-        run('camb + TaylorEmu(order=1), analytic marg.',
-            lambda: build_posterior_folps(marginalize=True, emulator_order=1, engine='camb'),
-            vary_param='logA', warmup=2, number=10, run=('eager', 'jit', 'grad'))
 
     if 'folps_3poles' in test:
         print(f'\n{"─" * 60}')
@@ -667,4 +664,4 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('bao',))
+    main(test=('folps_noemu',))

@@ -18,7 +18,6 @@ TNSTracerCorrelation2Poles
 """
 
 import os
-import functools
 import numpy as np
 from scipy import constants
 import jax
@@ -2824,9 +2823,14 @@ _CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 
                      'w0': 'w0_fld', 'wa': 'wa_fld', 'Ok': 'Omega_k'}
 
 
-@functools.cache
 def _load_comet_model(model, use_mpc=False):
-    """Return a (cached) PTEmu instance for *model*."""
+    """Return a fresh PTEmu instance for *model*.
+
+    Each call creates a new instance with independent mutable state (params,
+    Pk_lin, Pk_ratios, …) so that separate PT nodes never share state.
+    The expensive read-only data (FITS training tables and pickle GP objects)
+    is cached at the comet-emu file level and shared across instances.
+    """
     from comet.PTEmu import PTEmu
     return PTEmu(model=model, use_Mpc=use_mpc)
 
@@ -3006,6 +3010,8 @@ class COMETPTSpectrum2Poles(Calculator):
         # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
+        if _use_jax:
+            md.clear_jax_state()
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.AsD]
@@ -3218,6 +3224,8 @@ class COMETTracerSpectrum2Poles(Calculator):
                         ell_for_recon=[0, 2, 4, 6])
         # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
+        if _use_jax:
+            md.clear_jax_state()
         return self.poles
 
     def _get_canonical_params(self, rescale_counterterms=True, only=None):
@@ -3420,6 +3428,8 @@ class COMETPTSpectrum3Poles(Calculator):
         # Build table of shape (ndiag, nell, npair).
         self.table = xp.stack(
             [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
+        if _use_jax:
+            md.clear_jax_state()
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.AsD]
@@ -3566,6 +3576,8 @@ class COMETTracerSpectrum3Poles(Calculator):
         # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
         # xp.squeeze handles both shapes uniformly.
         self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)
+        if _use_jax:
+            md.clear_jax_state()
         return self.poles
 
     def _get_canonical_params(self, rescale_counterterms=True, only=None):

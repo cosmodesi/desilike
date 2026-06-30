@@ -462,15 +462,58 @@ class Posterior(Calculator):
 
             # Build one descriptor per independent group.
             # All group_theory_pipes share _likelihood_ctx so __post_init__ doesn't re-run per group.
-            self._groups = []
+            # Two-stage partition (computed before creating pipes so we can find globally-stage-i nodes):
+            # Stage i = nodes whose transitive param deps have zero overlap with group_alpha_names.
+            # Stage ii = nodes that (transitively) depend on alpha params.
+            # Only Stage ii is traced through jax.linearize, so stage-i external nodes (cosmo,
+            # PT emulators) are never differentiated through.
+            # Since all group_theory_pipes share the same graph, _node_var_deps/_node_calc_deps
+            # are the same as self._likelihood's — compute stage_i_ids from there directly.
+            def _compute_stage_i_ids(group_alpha_names_set):
+                alpha_dep_ids = set()
+                for pipe_node in self._likelihood.nodes:
+                    direct_alpha = {p.name for p in self._likelihood._node_var_deps[id(pipe_node)]} & group_alpha_names_set
+                    transitive_alpha = {id(dep) for dep in self._likelihood._node_calc_deps[id(pipe_node)]} & alpha_dep_ids
+                    if direct_alpha or transitive_alpha:
+                        alpha_dep_ids.add(id(pipe_node))
+                return frozenset(id(pipe_node) for pipe_node in self._likelihood.nodes if id(pipe_node) not in alpha_dep_ids)
+
+            # Phase A: compute per-group stage_i_ids before creating any CompiledGraph.
+            pending_groups = []
             for root, global_idx in root_sorted.items():
                 comps = root_comps[root]
                 group_gaussians = [gauss for gauss, _, _, _ in comps]
+                group_alpha_names = [alpha_names[g] for g in global_idx]
+                stage_i_ids = _compute_stage_i_ids(set(group_alpha_names))
+                pending_groups.append((root, global_idx, comps, group_gaussians, group_alpha_names, stage_i_ids))
 
-                def make_group_output(gaussians):
-                    return lambda: jnp.concatenate([jnp.ravel(jnp.asarray(g.flattheory)) for g in gaussians])
+            # Phase B: build a shared node_state dict for nodes that are stage-i in ALL groups.
+            # When multiple CompiledGraph instances share the same node_state object for a
+            # globally-stage-i external node (e.g. CosmoprimoCosmology), the pure_callback
+            # cache hit from the first group's pre-pass is visible to all other groups AND to
+            # self._likelihood's extra derived-params pass — CAMB runs once, not n_groups+1 times.
+            global_stage_i_ids = frozenset.intersection(*[gdata[5] for gdata in pending_groups]) if pending_groups else frozenset()
+            shared_node_states = {
+                id(node): {'last_params': None, 'was_called': False, 'last_result': None,
+                           'dep_result': None, 'call_result': None, 'last_dep_args': None}
+                for node in self._likelihood.nodes
+                if id(node) in global_stage_i_ids and node._is_external
+            }
 
-                group_theory_pipe = CompiledGraph(likelihood, _likelihood_ctx, output=make_group_output(group_gaussians))
+            # Rebuild self._likelihood so its _fn_dep closures capture the shared node_state
+            # dicts (the original self._likelihood used private dicts from before Phase B).
+            if shared_node_states:
+                self._likelihood = CompiledGraph(likelihood, _likelihood_ctx, shared_node_states=shared_node_states)
+
+            def make_group_output(gaussians):
+                return lambda: jnp.concatenate([jnp.ravel(jnp.asarray(g.flattheory)) for g in gaussians])
+
+            # Phase C: create group CompiledGraphs with the shared node_states injected.
+            self._groups = []
+            for root, global_idx, comps, group_gaussians, group_alpha_names, stage_i_ids in pending_groups:
+                group_theory_pipe = CompiledGraph(likelihood, _likelihood_ctx,
+                                                  output=make_group_output(group_gaussians),
+                                                  shared_node_states=shared_node_states)
 
                 # Per-component metadata for splitting the concatenated theories/Jacobians.
                 comp_meta = []
@@ -484,23 +527,7 @@ class Posterior(Calculator):
                 marg_local = np.array([j for j, g in enumerate(global_idx) if g in marg_global], dtype=int)
                 best_local = np.array([j for j, g in enumerate(global_idx) if g in best_global], dtype=int)
                 prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx])
-                group_alpha_names = [alpha_names[g] for g in global_idx]
 
-                # Two-stage partition: Stage i = nodes whose transitive param deps have
-                # zero overlap with group_alpha_names (e.g. cosmo + PT emulator).
-                # Stage ii = nodes that depend on alpha params or on Stage i outputs.
-                # Only Stage ii is traced through jax.linearize, avoiding GP re-runs in JVP.
-                alpha_names_set = set(group_alpha_names)
-                node_var_deps_pipe = group_theory_pipe._node_var_deps
-                node_calc_deps_pipe = group_theory_pipe._node_calc_deps
-                alpha_dep_ids = set()
-                for pipe_node in group_theory_pipe.nodes:
-                    direct_alpha = {p.name for p in node_var_deps_pipe[id(pipe_node)]} & alpha_names_set
-                    transitive_alpha = {id(dep) for dep in node_calc_deps_pipe[id(pipe_node)]} & alpha_dep_ids
-                    if direct_alpha or transitive_alpha:
-                        alpha_dep_ids.add(id(pipe_node))
-                stage_i_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
-                                        if id(pipe_node) not in alpha_dep_ids)
                 stage_i_nodes_ordered = [pipe_node for pipe_node in group_theory_pipe.nodes
                                          if id(pipe_node) in stage_i_ids]
 
@@ -511,7 +538,6 @@ class Posterior(Calculator):
                 # from the last Stage-i node in topo order, leaving earlier-branch Stage-i
                 # nodes (e.g. pt_LRG / pt_ELG in a 3-tracer pipeline) with stale
                 # compile-time values in stage_i_flat.
-
                 if stage_i_nodes_ordered:
                     stage_ii_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
                                              if id(pipe_node) not in stage_i_ids)
@@ -1150,11 +1176,17 @@ def _build_graph_call_fn(pipeline):
                 p._value = saved_param_values[p.name]
             # The shallow dict save/restore above cannot undo in-place mutations of
             # nested mutable objects (e.g. a cosmoprimo _results dict written during
-            # __call__ with Tracer-valued inputs). Reset last_params for every node so
-            # the next eager call re-runs them all and overwrites any stale
+            # __call__ with Tracer-valued inputs). Reset last_params for every non-external
+            # node so the next eager call re-runs them and overwrites any stale
             # trace-escaped state (including JAX Tracers trapped in nested attributes).
+            # External nodes are excluded: their attributes are always set from concrete
+            # pure_callback outputs (never from Tracer-valued writes), so their last_params
+            # cache is safe to preserve across the jax.linearize boundary. This allows the
+            # shared-node_state caching (e.g. CosmoprimoCosmology shared across groups) to
+            # remain valid after stage-ii tracing, so sibling groups find a cache hit.
             for node in nodes:
-                node_states[id(node)]['last_params'] = None
+                if not node._is_external:
+                    node_states[id(node)]['last_params'] = None
 
         return return_val, derived_dict, ext_flat_out
 
@@ -1287,7 +1319,7 @@ class CompiledGraph:
     jax.jit, jax.vmap, and jax.grad.
     """
 
-    def __init__(self, root: Calculator, ctx: _CompileContext, output=None, input=None):
+    def __init__(self, root: Calculator, ctx: _CompileContext, output=None, input=None, shared_node_states=None):
         self.root = root
         self.output = output
         self.input = input
@@ -1319,6 +1351,14 @@ class CompiledGraph:
         self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None,
                                         'dep_result': None, 'call_result': None, 'last_dep_args': None}
                              for node in self.nodes}
+        # Allow callers to share a node_state dict across multiple CompiledGraph instances so
+        # that a pure_callback cache hit in one graph is visible to sibling graphs.  The shared
+        # dict must be installed BEFORE _fn_dep closures are built below, because those closures
+        # capture node_state by reference at creation time.
+        if shared_node_states:
+            for nid, shared_state in shared_node_states.items():
+                if nid in self._node_states:
+                    self._node_states[nid] = shared_state
 
         # Build external (_is_external=True) callables; record tree_flatten child counts.
         self._tree_own_aux = []

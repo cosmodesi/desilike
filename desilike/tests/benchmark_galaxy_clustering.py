@@ -409,7 +409,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         print(f'{"─" * 60}')
         run('EH (no emulator), analytic marg.',
             lambda: build_posterior_folps(tracers=['LRG', 'ELG', 'QSO'], marginalize=True, engine='camb'),
-            vary_param='logA', warmup=2, number=10, run=('jit',))
+            vary_param='logA', warmup=2, number=5, run=('jit',))
 
     if 'folps_3poles' in test:
         print(f'\n{"─" * 60}')

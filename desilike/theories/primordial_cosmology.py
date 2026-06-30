@@ -553,7 +553,6 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # Here set derived_params
         for param, getter in self._get_derived.items():
             self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
-
     # tree_flatten/tree_unflatten: inherited as-is from PrimordialCosmology.
     # self._cosmo (the live cosmoprimo.Cosmology) is deliberately *not* exposed as a
     # leaf: it is itself a huge, cache-dependent pytree (its leaf count can change with

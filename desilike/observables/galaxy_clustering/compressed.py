@@ -1,13 +1,13 @@
 """
 Compressed (summary-statistic) observables for galaxy clustering.
 
-Each class wraps one Extractor Calculator and presents its scalar outputs
+Each class wraps one theory Calculator and presents its scalar outputs
 as a flat data/theory vector so that a Gaussian likelihood can be attached.
 
 Classes
 -------
 BaseCompressionObservable
-    Base class: stores extractor dep, formats data, assembles flattheory in __call__.
+    Base class: stores theory dep, formats data, assembles flattheory in __call__.
 BAOCompressionObservable
     Compare BAO distance measurements to :class:`BAOExtractor` predictions.
     Measurable parameters: ``DH_over_rd``, ``DM_over_rd``, ``DV_over_rd``,
@@ -82,19 +82,19 @@ def _format_compression_data(data, covariance, parameters):
 class BaseCompressionObservable(Calculator):
     """Base class for compressed observables.
 
-    Wraps a single Extractor Calculator.  At each call, assembles
-    ``flattheory`` by reading the requested parameter attributes from the extractor.
+    Wraps a single theory Calculator.  At each call, assembles
+    ``flattheory`` by reading the requested parameter attributes from the theory.
 
     Parameters
     ----------
-    extractor : Calculator
-        Extractor that computes the scalar observables.
+    theory : Calculator
+        Theory Calculator that computes the scalar observables.
     data : None, array-like, or lsstypes.ObservableLike, default=None
         Measured values.  Set to zeros when None (requires *parameters*).
     covariance : None, array-like, or lsstypes.CovarianceMatrix, default=None
         Covariance matrix passed to the likelihood.
     parameters : list of str, default=None
-        Names of extractor attributes to compare to data.
+        Names of theory attributes to compare to data.
         Required when *data* is not an lsstypes object.
     name : str, default='compressed'
         Observable name used to match covariance matrices in multi-observable likelihoods.
@@ -105,14 +105,14 @@ class BaseCompressionObservable(Calculator):
         Theory prediction vector in the same order as *parameters*.
     """
 
-    def __init__(self, extractor, data=None, covariance=None, parameters=None, name='compressed'):
-        self.extractor = extractor
+    def __init__(self, theory, data=None, covariance=None, parameters=None, name='compressed'):
+        self.theory = theory
         self.name = str(name)
         self.data, self.flatdata, self.parameters, self.covariance = _format_compression_data(
             data=data, covariance=covariance, parameters=parameters)
 
     def __call__(self):
-        self.flattheory = jnp.array([getattr(self.extractor, param) for param in self.parameters])
+        self.flattheory = jnp.array([getattr(self.theory, param) for param in self.parameters])
         return self.flattheory
 
     def tree_flatten(self):
@@ -142,10 +142,10 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Parameter names to compare; required when *data* is not an lsstypes object.
     name : str, default='bao'
         Observable name.
-    extractor : BAOExtractor, optional
-        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
-        to ``extractor.update()``.  If absent, a new :class:`BAOExtractor` is
-        constructed from *kwargs*.
+    theory : BAOExtractor, optional
+        Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
+        forwarded to ``theory.update()``.  If absent, a new :class:`BAOExtractor`
+        is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift forwarded to :class:`BAOExtractor`.
     eta : float, default=1./3.
@@ -156,12 +156,12 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Cosmology provider forwarded to :class:`BAOExtractor`.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='bao', extractor=None, **kwargs):
-        if extractor is None:
-            extractor = BAOExtractor(**kwargs)
+    def __init__(self, data=None, covariance=None, parameters=None, name='bao', theory=None, **kwargs):
+        if theory is None:
+            theory = BAOExtractor(**kwargs)
         elif kwargs:
-            extractor.update(**kwargs)
-        super().__init__(extractor=extractor,
+            theory.update(**kwargs)
+        super().__init__(theory=theory,
                          data=data, covariance=covariance, parameters=parameters, name=name)
 
 
@@ -185,10 +185,10 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='baoshift'
         Observable name.
-    extractor : BAOPhaseShiftExtractor, optional
-        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
-        to ``extractor.update()``.  If absent, a new :class:`BAOPhaseShiftExtractor`
-        is constructed from *kwargs*.
+    theory : BAOPhaseShiftExtractor, optional
+        Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
+        forwarded to ``theory.update()``.  If absent, a new
+        :class:`BAOPhaseShiftExtractor` is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -199,12 +199,12 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
         Cosmology provider.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', extractor=None, **kwargs):
-        if extractor is None:
-            extractor = BAOPhaseShiftExtractor(**kwargs)
+    def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', theory=None, **kwargs):
+        if theory is None:
+            theory = BAOPhaseShiftExtractor(**kwargs)
         elif kwargs:
-            extractor.update(**kwargs)
-        super().__init__(extractor=extractor,
+            theory.update(**kwargs)
+        super().__init__(theory=theory,
                          data=data, covariance=covariance, parameters=parameters, name=name)
 
 
@@ -229,10 +229,10 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='turnover'
         Observable name.
-    extractor : TurnOverExtractor, optional
-        Pre-constructed extractor.  If provided, any extra *kwargs* are forwarded
-        to ``extractor.update()``.  If absent, a new :class:`TurnOverExtractor`
-        is constructed from *kwargs*.
+    theory : TurnOverExtractor, optional
+        Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
+        forwarded to ``theory.update()``.  If absent, a new
+        :class:`TurnOverExtractor` is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -243,10 +243,10 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Cosmology provider.
     """
 
-    def __init__(self, data=None, covariance=None, parameters=None, name='turnover', extractor=None, **kwargs):
-        if extractor is None:
-            extractor = TurnOverExtractor(**kwargs)
+    def __init__(self, data=None, covariance=None, parameters=None, name='turnover', theory=None, **kwargs):
+        if theory is None:
+            theory = TurnOverExtractor(**kwargs)
         elif kwargs:
-            extractor.update(**kwargs)
-        super().__init__(extractor=extractor,
+            theory.update(**kwargs)
+        super().__init__(theory=theory,
                          data=data, covariance=covariance, parameters=parameters, name=name)

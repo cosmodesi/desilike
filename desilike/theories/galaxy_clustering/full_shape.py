@@ -3012,16 +3012,17 @@ class COMETPTSpectrum2Poles(Calculator):
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
         if _use_jax:
             md.clear_jax_state()
+        self.h = self.cosmo['h']
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.h]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.h = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3324,7 +3325,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
 
         if not pt._use_mpc:
-            h = pt.cosmo['h']
+            h = pt.h
             if rescale_counterterms:
                 # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
                 # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here.

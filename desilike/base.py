@@ -304,6 +304,24 @@ class Prior(Calculator):
         return obj
 
 
+def _transitive_param_names(node: Calculator, pipe: 'CompiledGraph') -> set:
+    """Return the set of param names that *node*'s subgraph transitively depends on within *pipe*."""
+    visited_ids = set()
+    stack = [node]
+    param_names = set()
+    while stack:
+        n = stack.pop()
+        nid = id(n)
+        if nid in visited_ids:
+            continue
+        visited_ids.add(nid)
+        for p in pipe._node_var_deps.get(nid, []):
+            param_names.add(p.name)
+        for dep in pipe._node_calc_deps.get(nid, []):
+            stack.append(dep)
+    return param_names
+
+
 class Posterior(Calculator):
     """
     Log-posterior = log-likelihood + log-prior, with optional analytic treatment of solved params.
@@ -339,7 +357,13 @@ class Posterior(Calculator):
         # in __init__ so they are discoverable before __post_init__/compile.
         if prior is None:
             prior = Prior(get_params(likelihood))
-        self._likelihood = compile(likelihood)
+        # Build __post_init__ + __call__ context once; all same-root CompiledGraphs below
+        # (self._likelihood, per-component no-alpha pipes, group_theory_pipes) are created
+        # from this shared context without re-running __post_init__.  Re-running __post_init__
+        # is harmful: template nodes call cosmo.add_requirements() there, and repeated calls
+        # accumulate duplicate k/z grid entries that mis-align tree_flatten leaf shapes.
+        _likelihood_ctx = _run_compile_phases(likelihood)
+        self._likelihood = CompiledGraph(likelihood, _likelihood_ctx)
         self._solved_params = self._likelihood.params.select(solved=True)
 
         # Public (scanned by build_graph) so non-solved likelihood params are in Posterior's
@@ -383,12 +407,21 @@ class Posterior(Calculator):
                 inv_scales[i] = (1. / std) if (std is not None and np.isfinite(std)) else 0.
 
             # Build per-gaussian-component list: (gauss, theory_pipe, precision, flatdata, alpha_idx).
-            # theory_pipe is compiled per-component only to discover which alpha params each depends on.
+            # For alpha-dependent components, theory_pipe is not used later (the group_theory_pipe
+            # covers them); alpha params are discovered by subgraph BFS over self._likelihood
+            # without triggering another compile.  For no-alpha components, theory_pipe IS used for
+            # evaluation: build it from the shared context when possible (g is likelihood) so that
+            # __post_init__ still does not re-run; fall back to a fresh compile otherwise.
             components = []
             for g in gaussians:
-                theory = compile(g, output=lambda g=g: g.flattheory)
-                comp_param_names = set(theory.params.names())
+                comp_param_names = _transitive_param_names(g, self._likelihood)
                 alpha_idx = [i for i, p in enumerate(self._solved_params) if p.name in comp_param_names]
+                if alpha_idx:
+                    theory = None  # dropped below; group_theory_pipe takes over
+                elif g is likelihood:
+                    theory = CompiledGraph(g, _likelihood_ctx, output=lambda g=g: g.flattheory)
+                else:
+                    theory = compile(g, output=lambda g=g: g.flattheory)
                 components.append((g, theory, g.precision, g.flatdata, alpha_idx))
 
             # Components with no solved-param dependence: keep the per-component pipe for evaluation.
@@ -428,9 +461,7 @@ class Posterior(Calculator):
                 root_comps[root].append((gauss, precision, flatdata, [g_to_l[g] for g in alpha_idx]))
 
             # Build one descriptor per independent group.
-            # Issue 1 fix: compile ONE combined theory pipe per group, rooted at likelihood,
-            # so shared upstream Calculators (cosmo, template, PT) are evaluated only once per group call
-            # instead of once per component.
+            # All group_theory_pipes share _likelihood_ctx so __post_init__ doesn't re-run per group.
             self._groups = []
             for root, global_idx in root_sorted.items():
                 comps = root_comps[root]
@@ -439,7 +470,7 @@ class Posterior(Calculator):
                 def make_group_output(gaussians):
                     return lambda: jnp.concatenate([jnp.ravel(jnp.asarray(g.flattheory)) for g in gaussians])
 
-                group_theory_pipe = compile(likelihood, output=make_group_output(group_gaussians))
+                group_theory_pipe = CompiledGraph(likelihood, _likelihood_ctx, output=make_group_output(group_gaussians))
 
                 # Per-component metadata for splitting the concatenated theories/Jacobians.
                 comp_meta = []
@@ -1743,6 +1774,20 @@ def compile(root: Calculator, output: Callable=None, input: Callable=None) -> Co
     To get derived parameter values on a call, pass ``return_derived=True`` to the
     compiled graph's ``__call__``, e.g. ``val, derived = pipe(params, return_derived=True)``.
     """
+    ctx = _run_compile_phases(root)
+    return CompiledGraph(root, ctx, output=output, input=input)
+
+
+def _run_compile_phases(root: Calculator) -> '_CompileContext':
+    """Run build_graph + __post_init__ + __call__ for *root* and return the populated context.
+
+    Separated from :func:`compile` so that :class:`Posterior` can build the context once and
+    then create multiple :class:`CompiledGraph` instances (with different ``output`` functions)
+    without re-running ``__post_init__`` on each.  Re-running ``__post_init__`` is harmful
+    because downstream callers (e.g. template nodes) invoke ``cosmo.add_requirements`` there,
+    and repeated calls concatenate duplicate k/z grid entries that silently mis-align the
+    ``tree_flatten`` leaf shapes across graphs.
+    """
     outer_ctx = getattr(_compile_context, 'ctx', None)
     ctx = build_graph(root)
     _compile_context.ctx = ctx
@@ -1776,7 +1821,7 @@ def compile(root: Calculator, output: Callable=None, input: Callable=None) -> Co
             ctx.node_deps[nid] = [d for d in ctx.node_deps[nid] if not isinstance(d, Calculator) or id(d) in ctx.call_activated]
     finally:
         _compile_context.ctx = outer_ctx
-    return CompiledGraph(root, ctx, output=output, input=input)
+    return ctx
 
 
 def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=False):

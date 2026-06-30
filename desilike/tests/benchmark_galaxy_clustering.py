@@ -408,7 +408,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
         run('EH (no emulator), analytic marg.',
-            lambda: build_posterior_folps(tracers=['LRG', 'ELG', 'QSO'], marginalize=True, engine='eisenstein_hu'),
+            lambda: build_posterior_folps(tracers=['LRG', 'ELG', 'QSO'], marginalize=True, engine='camb'),
             vary_param='logA', warmup=2, number=10, run=('jit',))
 
     if 'folps_3poles' in test:
@@ -459,6 +459,8 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         # Mock data is theory-anchored (see build_posterior_comet's comment), so the
         # chi2 surface has genuine structure for Minuit to climb rather than riding a
         # parameter to its prior boundary.
+        run('shared PT (PX_ell, marg)', lambda: build_posterior_comet(direct=False, marginalize=False),
+            vary_param='n_s', warmup=2, number=5, run=('jit', 'grad'))
         run('shared PT (PX_ell, marg)', lambda: build_posterior_comet(direct=False, marginalize=True),
             vary_param='n_s', warmup=2, number=5, run=('jit', 'grad'))
         run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
@@ -638,4 +640,4 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('comet',))
+    main(test=('folps_noemu',))

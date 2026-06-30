@@ -184,7 +184,7 @@ class PrimordialCosmology(Calculator):
                     spec = self._requirements[spec_key]
                     for coord in _COORDS:
                         if coord in kwargs:
-                            spec[coord] = np.sort(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
+                            spec[coord] = np.unique(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
 
     def __getitem__(self, name):
         # Return parameter value. Free params are already live in _param_values (jit-safe).

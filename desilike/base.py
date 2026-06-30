@@ -1490,9 +1490,14 @@ def replace(node, old, new, level: int=None):
             new_val = _substitute_node(val, match, new)
             if new_val is not val:
                 setattr(calc, key, new_val)
-                # Sync _init so that a subsequent update() re-uses the replacement
-                # rather than re-creating the old node from scratch.
-                if key not in new_kwargs or new_kwargs[key] is not new_val:
+                # Sync _init for direct Calculator-valued attributes so that a subsequent
+                # update() re-uses the replacement rather than re-creating the old node.
+                # Variables/Parameters are excluded (their identity in _init is fine to keep
+                # as-is; auto-share replaces them in _init directly above).
+                # Containers are excluded because _substitute_node already updated their
+                # counterparts in new_args/new_kwargs, and adding a container key here would
+                # duplicate positional args already stored in _init.
+                if isinstance(val, Calculator) and (key not in new_kwargs or new_kwargs[key] is not new_val):
                     extra_init_kwargs[key] = new_val
         calc._init = (new_args, {**new_kwargs, **extra_init_kwargs})
     return node

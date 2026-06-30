@@ -116,12 +116,12 @@ class BaseCompressionObservable(Calculator):
         return self.flattheory
 
     def tree_flatten(self):
-        return [self.flattheory], None
+        return [self.flattheory, self.flatdata], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory = children[0]
+        obj.flattheory, obj.flatdata = children
         return obj
 
 

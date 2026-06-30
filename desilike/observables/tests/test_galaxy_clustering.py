@@ -510,3 +510,165 @@ def test_gaussian_likelihood_lsstypes_covariance():
     assert np.isfinite(float(like_joint.logpdf))
     # Joint logpdf = 2 × single because data=zeros, theory≈signal → residuals same for both obs
     np.testing.assert_allclose(float(like_joint.logpdf), 2. * float(like_single.logpdf), rtol=1e-10)
+
+
+# ── templates ────────────────────────────────────────────────────────────────
+
+def test_spectrum2poles_templates_scalar():
+    """templates: scalar Parameter contribution is added to flattheory and is discoverable in the graph."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import Parameter, compile
+
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    theory = _make_spectrum_theory(k, ells)
+
+    rng = np.random.default_rng(20)
+    template_array = rng.normal(size=n)
+    param = Parameter('my_template', value=2.5, prior={'dist': 'norm', 'loc': 0., 'scale': 1.}, fixed=False)
+
+    obs = Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells,
+                                   templates=[(param, template_array)])
+    assert len(obs.templates) == 1
+    assert obs.templates[0][0].name == 'my_template'
+    np.testing.assert_array_equal(obs.templates[0][1], template_array)
+
+    pipe = compile(obs)
+    assert any(p.name == 'my_template' for p in pipe.params)
+
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    expected = obs._window_matrix @ np.ravel(theory.poles) + template_array * pipe_params['my_template']
+    np.testing.assert_allclose(np.asarray(obs.flattheory), expected, rtol=1e-6)
+
+
+def test_spectrum2poles_templates_vector():
+    """templates: vector Parameter contribution (shape=(m,)) is added to flattheory."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import Parameter, compile
+
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    m = 3
+    theory = _make_spectrum_theory(k, ells)
+
+    rng = np.random.default_rng(21)
+    template_array = rng.normal(size=(n, m))
+    param_value = np.array([1., -0.5, 2.])
+    param = Parameter('my_vector_template', value=param_value,
+                      prior={'dist': 'norm', 'loc': 0., 'scale': 1.}, shape=(m,), fixed=False)
+
+    obs = Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells,
+                                   templates=[(param, template_array)])
+    assert obs.templates[0][1].shape == (n, m)
+
+    pipe = compile(obs)
+    pipe_params = {}
+    for p in pipe.params:
+        pipe_params[p.name] = np.asarray(p.value) if p.shape else float(p.value)
+    pipe(pipe_params)
+
+    expected = obs._window_matrix @ np.ravel(theory.poles) + template_array @ pipe_params['my_vector_template']
+    np.testing.assert_allclose(np.asarray(obs.flattheory), expected, rtol=1e-6)
+
+
+def test_spectrum2poles_templates_dict():
+    """templates: dict argument is converted to Parameter, discovered in graph."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import Parameter, compile
+
+    k = np.linspace(0.01, 0.3, 15)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    theory = _make_spectrum_theory(k, ells)
+
+    rng = np.random.default_rng(22)
+    template_array = rng.normal(size=n)
+    param_dict = {'name': 'dict_template', 'value': 1.0,
+                  'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'fixed': False}
+
+    obs = Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells,
+                                   templates=[(param_dict, template_array)])
+    assert isinstance(obs.templates[0][0], Parameter)
+    assert obs.templates[0][0].name == 'dict_template'
+
+    pipe = compile(obs)
+    assert any(p.name == 'dict_template' for p in pipe.params)
+
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+    assert obs.flattheory.shape == (n,)
+
+
+def test_spectrum2poles_templates_shape_error():
+    """templates: array with wrong shape raises ValueError at construction."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import Parameter
+
+    k = np.linspace(0.01, 0.3, 10)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    theory = _make_spectrum_theory(k, ells)
+    param = Parameter('bad_template', value=1., fixed=False)
+
+    with pytest.raises(ValueError, match='shape'):
+        Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells,
+                                 templates=[(param, np.ones(n + 1))])
+
+
+def test_correlation2poles_templates():
+    """Correlation2PolesObservable: scalar template contribution is added to flattheory."""
+    from desilike.observables import Correlation2PolesObservable
+    from desilike.base import Parameter, compile
+
+    s = np.linspace(20., 180., 20)
+    ells = (0, 2)
+    n = len(ells) * len(s)
+    theory = _make_correlation_theory(s, ells)
+
+    rng = np.random.default_rng(23)
+    template_array = rng.normal(size=n)
+    param = Parameter('xi_template', value=-1.5, prior={'dist': 'norm', 'loc': 0., 'scale': 1.}, fixed=False)
+
+    obs = Correlation2PolesObservable(data=None, theory=theory, s=s, ells=ells,
+                                      templates=[(param, template_array)])
+    assert len(obs.templates) == 1
+
+    pipe = compile(obs)
+    assert any(p.name == 'xi_template' for p in pipe.params)
+
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    expected = obs._window_matrix @ np.ravel(theory.poles) + template_array * pipe_params['xi_template']
+    np.testing.assert_allclose(np.asarray(obs.flattheory), expected, rtol=1e-6)
+
+
+def test_spectrum3poles_templates():
+    """Spectrum3PolesObservable: templates are stored and Parameter is discovered in graph."""
+    import lsstypes as types
+    from desilike.observables import Spectrum3PolesObservable
+    from desilike.base import Parameter
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
+
+    data = _make_spectrum3_lsstypes(size=5)
+    window = _make_spectrum3_window(data, size=4)
+
+    fiducial = _make_fiducial()
+    kin = next(iter(window.theory)).coords('k')
+    tmpl = BAOSpectrum2Template(k=kin[..., 0], z=0.5, fiducial=fiducial)
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[(0, 0, 0), (2, 0, 2)])
+
+    n = data.size
+    rng = np.random.default_rng(24)
+    template_array = rng.normal(size=n)
+    param = Parameter('b3_template', value=0.3, prior={'dist': 'norm', 'loc': 0., 'scale': 1.}, fixed=False)
+
+    obs = Spectrum3PolesObservable(data=data, theory=theory, window=window,
+                                   templates=[(param, template_array)])
+    assert len(obs.templates) == 1
+    assert obs.templates[0][0].name == 'b3_template'
+    np.testing.assert_array_equal(obs.templates[0][1], template_array)

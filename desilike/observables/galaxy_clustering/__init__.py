@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import lsstypes as types
 from matplotlib import pyplot as plt
 
-from ...base import Calculator, compile, copy, replace, get_params as _get_params
+from ...base import Calculator, Parameter, compile, copy, replace, get_params as _get_params
 from ...base import _iter_calculators
 from ...theories.galaxy_clustering.template import Spectrum2Template
 from ... import plotting
@@ -144,6 +144,37 @@ def _format_clustering_data_window_covariance(data, window, covariance,
     return data, window, covariance
 
 
+def _parse_templates(templates, n_data):
+    """Normalise the *templates* constructor argument into a list of (Parameter, ndarray) pairs.
+
+    Each entry may be ``(param, array)`` where *param* is either a :class:`Parameter` instance
+    or a dict of keyword arguments for ``Parameter(**param)``.  *array* must be a numpy array
+    of shape ``(n_data,) + param.shape``.
+    """
+    if templates is None:
+        return []
+    result = []
+    for param, template_array in templates:
+        if isinstance(param, dict):
+            param = Parameter(**param)
+        template_array = np.asarray(template_array, dtype='f8')
+        expected_shape = (n_data,) + param.shape
+        if template_array.shape != expected_shape:
+            raise ValueError(
+                f"template array for parameter '{param.name}' has shape {template_array.shape}, "
+                f"expected {expected_shape} = (n_data={n_data},) + param.shape={param.shape}")
+        result.append((param, template_array))
+    return result
+
+
+def _apply_templates(flattheory, templates):
+    """Add template contributions to *flattheory* and return the result."""
+    for param, template_array in templates:
+        flattheory = flattheory + jnp.dot(template_array.reshape(template_array.shape[0], -1),
+            jnp.atleast_1d(param.value).ravel())
+    return flattheory
+
+
 class Spectrum2PolesObservable(Calculator):
     r"""
     Power spectrum multipoles observable.
@@ -173,18 +204,25 @@ class Spectrum2PolesObservable(Calculator):
         Theory multipoles (required when ``window`` is a plain 2-D array).
     covariance : 2-D array, lsstypes.CovarianceMatrix, or None, default=None
         Covariance matrix stored for use by :class:`ObservablesGaussianLikelihood`.
+    templates : list of (Parameter or dict, array) pairs, or None, default=None
+        Extra linear templates added to the theory prediction.  Each entry is
+        ``(param, array)`` where *param* is a :class:`Parameter` instance (or a dict
+        of keyword arguments for ``Parameter(**param)``) and *array* has shape
+        ``(n_data,) + param.shape``.  The contribution ``array.reshape(n_data, -1) @
+        ravel(param.value)`` is added to ``flattheory`` after window convolution.
     name : str, default='spectrum2poles'
         Observable name.
 
     Attributes set by ``__call__``
     --------------------------------
     flattheory : ndarray, shape (n_data,)
-        Window-convolved theory prediction.
+        Window-convolved theory prediction plus any template contributions.
     """
 
     def __init__(self, data, theory, k=None, ells=None,
                  window=None, kin=None, ellsin=None,
-                 covariance=None, name='spectrum2poles'):
+                 covariance=None, templates=None,
+                 name='spectrum2poles'):
         self.name = str(name)
         if not isinstance(data, types.ObservableLike) and ells is not None:
             ells = [int(ell) for ell in (ells if hasattr(ells, '__iter__') else [ells])]
@@ -197,9 +235,11 @@ class Spectrum2PolesObservable(Calculator):
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
+        self.templates = _parse_templates(templates, n_data=self.flatdata.size)
 
     def __call__(self):
         self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
+        self.flattheory = _apply_templates(self.flattheory, self.templates)
         return self.flattheory
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
@@ -384,18 +424,24 @@ class Correlation2PolesObservable(Calculator):
         Theory multipoles (required when ``window`` is a plain 2-D array).
     covariance : 2-D array, lsstypes.CovarianceMatrix, or None, default=None
         Covariance matrix stored for use by :class:`ObservablesGaussianLikelihood`.
+    templates : list of (Parameter or dict, array) pairs, or None, default=None
+        Extra linear templates added to the theory prediction.  Each entry is
+        ``(param, array)`` where *param* is a :class:`Parameter` instance (or a dict
+        of keyword arguments for ``Parameter(**param)``) and *array* has shape
+        ``(n_data,) + param.shape``.  The contribution ``array.reshape(n_data, -1) @
+        ravel(param.value)`` is added to ``flattheory`` after window convolution.
     name : str, default='correlation2poles'
         Observable name.
 
     Attributes set by ``__call__``
     --------------------------------
     flattheory : ndarray, shape (n_data,)
-        Window-convolved theory prediction.
+        Window-convolved theory prediction plus any template contributions.
     """
 
     def __init__(self, data, theory, s=None, ells=None,
                  window=None, sin=None, ellsin=None,
-                 covariance=None, name='correlation2poles'):
+                 covariance=None, templates=None, name='correlation2poles'):
         self.name = str(name)
         if not isinstance(data, types.ObservableLike) and ells is not None:
             ells = [int(ell) for ell in (ells if hasattr(ells, '__iter__') else [ells])]
@@ -407,9 +453,11 @@ class Correlation2PolesObservable(Calculator):
         self.theory = theory
         self.theory.update(s=next(iter(self.window.theory)).coords('s'),
                            ells=self.window.theory.ells)
+        self.templates = _parse_templates(templates, n_data=self.flatdata.size)
 
     def __call__(self):
         self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
+        self.flattheory = _apply_templates(self.flattheory, self.templates)
         return self.flattheory
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
@@ -579,18 +627,24 @@ class Spectrum3PolesObservable(Calculator):
         Theory multipoles (required when ``window`` is a plain 2-D array).
     covariance : 2-D array, lsstypes.CovarianceMatrix, or None, default=None
         Covariance matrix stored for use by :class:`ObservablesGaussianLikelihood`.
+    templates : list of (Parameter or dict, array) pairs, or None, default=None
+        Extra linear templates added to the theory prediction.  Each entry is
+        ``(param, array)`` where *param* is a :class:`Parameter` instance (or a dict
+        of keyword arguments for ``Parameter(**param)``) and *array* has shape
+        ``(n_data,) + param.shape``.  The contribution ``array.reshape(n_data, -1) @
+        ravel(param.value)`` is added to ``flattheory`` after window convolution.
     name : str, default='spectrum3poles'
         Observable name.
 
     Attributes set by ``__call__``
     --------------------------------
     flattheory : ndarray, shape (n_data,)
-        Window-convolved theory prediction.
+        Window-convolved theory prediction plus any template contributions.
     """
 
     def __init__(self, data, theory, k=None, ells=None,
                  window=None, kin=None, ellsin=None,
-                 covariance=None, name='spectrum3poles'):
+                 covariance=None, templates=None, name='spectrum3poles'):
         self.name = str(name)
         if not isinstance(data, types.ObservableLike) and ells is not None:
             if hasattr(ells[0], '__iter__'):
@@ -605,9 +659,11 @@ class Spectrum3PolesObservable(Calculator):
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
+        self.templates = _parse_templates(templates, n_data=self.flatdata.size)
 
     def __call__(self):
         self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
+        self.flattheory = _apply_templates(self.flattheory, self.templates)
         return self.flattheory
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})

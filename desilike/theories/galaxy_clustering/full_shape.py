@@ -3209,7 +3209,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
         AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f = qpar, qper, AsD, f
+        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
 
         # rescale_counterterms=False: PTEmu.Pell() applies h²/h⁴ rescaling to
         # c0/c2/c4/cnlo internally, so we must not pre-scale them; NP*/h³ and NP*/nbar

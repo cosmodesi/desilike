@@ -459,8 +459,8 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         # Mock data is theory-anchored (see build_posterior_comet's comment), so the
         # chi2 surface has genuine structure for Minuit to climb rather than riding a
         # parameter to its prior boundary.
-        run('shared PT (PX_ell)', lambda: build_posterior_comet(direct=False, marginalize=True),
-            vary_param='n_s', warmup=2, number=5, run=('jit',))
+        run('shared PT (PX_ell, marg)', lambda: build_posterior_comet(direct=False, marginalize=True),
+            vary_param='n_s', warmup=2, number=5, run=('jit', 'grad'))
         run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
             vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'))
 
@@ -638,4 +638,4 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('folps_emu',))
+    main(test=('comet',))

@@ -485,20 +485,6 @@ class Posterior(Calculator):
                     stage_ii_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
                                              if id(pipe_node) not in stage_i_ids)
 
-                    # Interface stage-i nodes: the subset whose output attrs are read directly
-                    # by at least one Stage-ii node.  Only their tree_flatten leaves go into
-                    # stage_i_flat; non-interface nodes (e.g. cosmo, template) only need params
-                    # set, not output injection, inside jax.linearize.
-                    stage_i_output_ids = frozenset(
-                        id(dep)
-                        for pipe_node in group_theory_pipe.nodes
-                        if id(pipe_node) in stage_ii_ids
-                        for dep in group_theory_pipe._node_calc_deps.get(id(pipe_node), [])
-                        if id(dep) in stage_i_ids
-                    )
-                    interface_nodes_ordered = [n for n in stage_i_nodes_ordered
-                                               if id(n) in stage_i_output_ids]
-
                     def make_stage_i_output(ordered_nodes):
                         return lambda: tuple(
                             leaf
@@ -506,7 +492,7 @@ class Posterior(Calculator):
                             for leaf in jax.tree_util.tree_leaves(stage_i_node.tree_flatten()[0])
                         )
 
-                    stage_i_output_fn = make_stage_i_output(interface_nodes_ordered)
+                    stage_i_output_fn = make_stage_i_output(stage_i_nodes_ordered)
 
                     def make_stage_i_prepass(pipe, s2_ids, out_fn):
                         def fn(params):
@@ -518,11 +504,10 @@ class Posterior(Calculator):
                     stage_i_pipe = make_stage_i_prepass(
                         group_theory_pipe, stage_ii_ids, stage_i_output_fn)
                 else:
-                    stage_i_output_ids = frozenset()
                     stage_i_pipe = None
 
                 self._groups.append((group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local,
-                                     prior_prec, stage_i_pipe, stage_i_ids, stage_i_output_ids))
+                                     prior_prec, stage_i_pipe, stage_i_ids))
 
             prior.update(self._likelihood.params.select(solved=False))
         else:
@@ -569,7 +554,7 @@ class Posterior(Calculator):
             logL = logL - 0.5 * r @ (precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids, stage_i_output_ids in self._groups:
+        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids in self._groups:
             n_g = len(group_alpha_names)
 
             # All params needed by the combined group pipe (includes both alpha and non-alpha params).
@@ -592,10 +577,9 @@ class Posterior(Calculator):
                 def thin_group_fn(alpha_vec,
                                    _pipe=group_theory_pipe, _params=group_params,
                                    _names=group_alpha_names, _s1_ids=stage_i_ids,
-                                   _s1_out_ids=stage_i_output_ids, _s1_flat=stage_i_flat):
+                                   _s1_flat=stage_i_flat):
                     p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
-                    return_val, _, _ = _pipe._run_graph_fn(
-                        p, stage_i_ids=_s1_ids, stage_i_output_ids=_s1_out_ids, stage_i_flat=_s1_flat)
+                    return_val, _, _ = _pipe._run_graph_fn(p, stage_i_ids=_s1_ids, stage_i_flat=_s1_flat)
                     return return_val
 
                 theories_concat, jvp_fn = jax.linearize(thin_group_fn, alpha_vec)
@@ -988,7 +972,7 @@ def _build_graph_call_fn(pipeline):
     jax_names = [p.name for p in jax_params]
 
     def _run_graph(params, ext_flat=None, stage_i_ids=frozenset(), stage_i_flat=None,
-                   stage_i_output_ids=None, skip_ids=frozenset(), output_override=None):
+                   skip_ids=frozenset(), output_override=None):
         """
         Execute the graph.
         ext_flat=None  : full run — External nodes execute via pure_callback.
@@ -1029,25 +1013,20 @@ def _build_graph_call_fn(pipeline):
             ncd = node_calc_deps[id(node)]
 
             if stage_i_flat is not None and id(node) in stage_i_ids:
-                # Stage-i node: always set params so downstream can read via .value; skip __call__.
+                # Stage i injection: set params so downstream nodes can read them via .value,
+                # unpack pre-computed tree_flatten outputs into node.__dict__, skip node().
                 free_nvd = [param for param in nvd if getattr(param, '_call_fn', None) is None]
                 for param in free_nvd:
                     param.value = params[param.name]
                 for param in nvd:
                     param()
-                # Interface nodes only: inject pre-computed tree_flatten outputs into __dict__.
-                # Non-interface stage-i nodes (e.g. cosmo, template) are skipped here because
-                # no Stage-ii node reads their output attrs directly; their leaves were not
-                # captured in stage_i_flat and stage_i_offset must not advance for them.
-                _s1_out_ids = stage_i_ids if stage_i_output_ids is None else stage_i_output_ids
-                if id(node) in _s1_out_ids:
-                    n_ch = tree_own_treedef[i].num_leaves
-                    flat_children = list(stage_i_flat[stage_i_offset:stage_i_offset + n_ch])
-                    stage_i_offset += n_ch
-                    children = jax.tree_util.tree_unflatten(tree_own_treedef[i], flat_children)
-                    proxy = node.__class__.tree_unflatten(tree_own_aux[i], children)
-                    node.__dict__.update(proxy.__dict__)
-                    node_states[id(node)]['was_called'] = True
+                n_ch = tree_own_treedef[i].num_leaves
+                flat_children = list(stage_i_flat[stage_i_offset:stage_i_offset + n_ch])
+                stage_i_offset += n_ch
+                children = jax.tree_util.tree_unflatten(tree_own_treedef[i], flat_children)
+                proxy = node.__class__.tree_unflatten(tree_own_aux[i], children)
+                node.__dict__.update(proxy.__dict__)
+                node_states[id(node)]['was_called'] = True
             elif node._is_external:
                 n_ch = ext_n_children[id(node)]
                 if ext_flat is not None:

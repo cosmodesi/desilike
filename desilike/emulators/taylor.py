@@ -227,6 +227,7 @@ class TaylorEmulator:
                                  for n in self._derived_names}
         self._coeffs_returned = (np.stack(coeffs_returned, axis=0)
                                  if coeffs_returned is not None else None)
+        self._jitted_predict_children = jax.jit(self._predict_children)
         return self
 
     # ── prediction ───────────────────────────────────────────────────────────
@@ -283,7 +284,7 @@ class TaylorEmulator:
         derived : dict[str, jax array]
             Emulated derived quantities (empty dict when none are tracked).
         """
-        monomials, children, derived = self._predict_children(params)
+        monomials, children, derived = self._jitted_predict_children(params)
         return self._return_value(monomials, children), derived
 
     # ── calculator factory ───────────────────────────────────────────────────
@@ -315,7 +316,7 @@ class TaylorEmulator:
             def __call__(self):
                 # Collect input parameter values and reconstruct the full child state.
                 p = {n: self.params[n].value for n in input_param_names}
-                monomials, children, derived = emulator._predict_children(p)
+                monomials, children, derived = emulator._jitted_predict_children(p)
 
                 # Reconstruct the root's attribute state via tree_unflatten so
                 # downstream calculators can access e.g. self.theory.table or
@@ -453,6 +454,8 @@ class TaylorEmulator:
         # Reconstruct treedef (None when not serialised).
         treedef_hex = attrs.get('treedef_hex')
         self._treedef = pickle.loads(bytes.fromhex(treedef_hex)) if treedef_hex else None
+
+        self._jitted_predict_children = jax.jit(self._predict_children)
 
     # ── convenience I/O ──────────────────────────────────────────────────────
 

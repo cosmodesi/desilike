@@ -100,12 +100,25 @@ class _BaseCandlLikelihood(Likelihood):
     # (matches cmb/camspec.py; not tied to the cosmology's T_cmb parameter).
     T0_cmb = 2.7255
 
-    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, **kwargs):
+    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, ell_cuts=None, **kwargs):
         import candl
 
         if variant is not None:
             kwargs['variant'] = variant
-        self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
+
+        if ell_cuts is not None:
+            # Pull out any data_selection so we can combine it with ell_cuts below.
+            data_selection = kwargs.pop('data_selection', None)
+            # Create with full data first (no selection) to access bin structure.
+            self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
+            mask = self._build_ell_cuts_mask(ell_cuts)
+            if data_selection is not None:
+                self.like.data_set_dict['data_selection'] = data_selection
+                mask = mask & self.like.generate_crop_mask()
+            self.like.crop_mask = mask
+            self.like.crop_for_data_selection()
+        else:
+            self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
 
         dl_requirements = self.like.requirements_dict.get('Dl', {})
         self._ellmax_standard = max([ellmax for name, ellmax in dl_requirements.items() if name.lower() != 'kk'], default=0)
@@ -122,6 +135,36 @@ class _BaseCandlLikelihood(Likelihood):
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+
+    def _build_ell_cuts_mask(self, ell_cuts):
+        """Boolean mask for per-spectrum ell cuts on the FULL (uncropped) candl likelihood.
+
+        Parameters
+        ----------
+        ell_cuts : dict
+            Maps spectrum type (e.g. ``'TT'``) to ``[lmin, lmax]``.  Either bound
+            may be ``None`` to leave that edge open.
+
+        Returns
+        -------
+        mask : np.ndarray of bool, shape (N_bins_total,)
+        """
+        N = int(self.like.N_bins_total)
+        effective_ells = np.array(self.like.effective_ells)
+        spec_type_per_bin = []
+        for spec_idx, spec_type in enumerate(self.like.spec_types):
+            spec_type_per_bin.extend([spec_type] * int(self.like.N_bins[spec_idx]))
+        mask = np.ones(N, dtype=bool)
+        for bin_idx in range(N):
+            cut = ell_cuts.get(spec_type_per_bin[bin_idx])
+            if cut is not None:
+                lmin, lmax = cut
+                ell = effective_ells[bin_idx]
+                if lmin is not None and ell < lmin:
+                    mask[bin_idx] = False
+                if lmax is not None and ell > lmax:
+                    mask[bin_idx] = False
+        return mask
 
     def __post_init__(self, *args, **kwargs):
         if self._ellmax_standard:

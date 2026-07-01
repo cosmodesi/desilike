@@ -318,7 +318,9 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
                       ref=dict(dist='norm', loc=1., scale=0.01), latex='c_{EE}'),
         ])
 
-    def __init__(self, data_file=None, cosmo=None, params=None):
+    def __init__(self, data_file=None, ell_cuts=None, cosmo=None, params=None):
+        if ell_cuts is not None:
+            self.ell_cuts = ell_cuts
         if data_file is None:
             from desilike.install import Installer
             data_file = os.path.join(Installer().data_dir(self.installer_section),

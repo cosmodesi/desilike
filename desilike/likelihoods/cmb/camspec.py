@@ -42,6 +42,10 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
     installer_section = 'PlanckNPIPECamspecLikelihood'
     all_cls = ['100x100', '143x143', '217x217', '143x217', 'TE', 'EE']
     select_cls = None  # set by concrete subclasses
+    # Per-spectrum ell cuts applied on top of the data file's own ranges.
+    # Dict mapping spectrum name (e.g. '143x143', 'TE') to (lmin, lmax).
+    # None (default) means no extra restriction.
+    ell_ranges = None
     # Fixed CMB temperature used for the dimensionless-Cl -> muK^2 unit conversion
     # (matches the reference implementation; not tied to the cosmology's T_cmb parameter).
     T0_cmb = 2.7255
@@ -109,7 +113,13 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
                 tmp_ells = np.arange(elllim[0], elllim[1] + 1)
                 mask = np.zeros(nells, dtype='?')
                 if elllim[1] and nells and cl in self.select_cls:
-                    mask[...] = True
+                    cut_lmin, cut_lmax = (self.ell_ranges or {}).get(cl, (None, None))
+                    ell_mask = np.ones(nells, dtype=bool)
+                    if cut_lmin is not None:
+                        ell_mask &= tmp_ells >= cut_lmin
+                    if cut_lmax is not None:
+                        ell_mask &= tmp_ells <= cut_lmax
+                    mask[ell_mask] = True
                 masks.append(mask)
                 if mask.any():
                     index_ells[cl] = tmp_ells[mask]
@@ -123,8 +133,14 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
             raise ValueError('Covariance size {} does not match expected {}**2'.format(covariance.shape[0], nx))
         self.flatdata = jnp.asarray(np.concatenate(flatdata)[mask])
         covariance = covariance.reshape(nx, nx)[np.ix_(mask, mask)].astype('f8')
-        # Inverting the full (~11000x11000) matrix takes ~1 min; cache the result per select_cls.
-        precision_fn = os.path.join(data_dir, 'precision_{}.npy'.format('_'.join(self.select_cls)))
+        # Inverting the full (~11000x11000) matrix takes ~1 min; cache per (select_cls, ell_ranges).
+        cache_key = '_'.join(self.select_cls)
+        if self.ell_ranges:
+            cache_key += '__' + '_'.join(
+                '{}_{}-{}'.format(cl, lo if lo is not None else '', hi if hi is not None else '')
+                for cl, (lo, hi) in sorted(self.ell_ranges.items())
+            )
+        precision_fn = os.path.join(data_dir, 'precision_{}.npy'.format(cache_key))
         try:
             precision, cached_covariance = np.load(precision_fn, allow_pickle=True)
             if not np.allclose(covariance, cached_covariance):
@@ -217,3 +233,175 @@ class TTHighlPlanckNPIPECamspecLikelihood(_BasePlanckNPIPECamspecLikelihood):
     https://arxiv.org/abs/2205.10869
     """
     select_cls = ['143x143', '217x217', '143x217']
+
+
+class TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood(_BasePlanckNPIPECamspecLikelihood):
+    """
+    TT+TE+EE Planck NPIPE (PR4) CamSpec high-ell likelihood with a global ell-max of 600.
+
+    All spectra are restricted to ell ∈ [30, 600].  Useful as a conservative CMB prior
+    when combining with ACT/SPT data that cover smaller scales.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2205.10869
+    """
+    select_cls = ['143x143', '217x217', '143x217', 'TE', 'EE']
+    ell_ranges = {cl: (30, 600) for cl in select_cls}
+
+
+class TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood(_BasePlanckNPIPECamspecLikelihood):
+    """
+    TT+TE+EE Planck NPIPE (PR4) CamSpec high-ell likelihood with ACT-compatible ell cuts.
+
+    Per-spectrum ell ranges chosen to avoid overlap with ACT DR6 TT/TE/EE:
+
+    - 143×143 / TE / EE : [30, 2000] / [30, 1000] / [30, 1000]
+    - 217×217 / 143×217 : [500, 2000]
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2205.10869
+    """
+    select_cls = ['143x143', '217x217', '143x217', 'TE', 'EE']
+    ell_ranges = {
+        '143x143': (30, 2000),
+        '217x217': (500, 2000),
+        '143x217': (500, 2000),
+        'TE':      (30, 1000),
+        'EE':      (30, 1000),
+    }
+
+
+class CamspecNPIPELiteLikelihood(GaussianLikelihood):
+    r"""Planck NPIPE (PR4) CamSpec high-ell foreground-marginalized (lite) CMB likelihood.
+
+    Reads the pre-marginalised (CMB-only) TT+TE+EE data vector and covariance from a SACC
+    FITS file.  The only nuisance parameters are three calibration factors:
+
+    .. math::
+
+        D_\ell^{\rm theory, TT} / A_{\rm planck}^2, \quad
+        D_\ell^{\rm theory, TE} / (c_{TE}\,A_{\rm planck}^2), \quad
+        D_\ell^{\rm theory, EE} / (c_{EE}\,A_{\rm planck}^2).
+
+    Ell ranges used: TT [30, 2500], TE [30, 2000], EE [30, 2000].
+
+    Parameters
+    ----------
+    data_file : str, Path, default=None
+        Path to ``CamSpec_NPIPE_cmb_sacc.fits``.  Defaults to the path saved by
+        :class:`~desilike.install.Installer` once the likelihood has been installed.
+    cosmo : PrimordialCosmology, default=None
+        Cosmology calculator.  If ``None``, defaults to
+        ``CosmoprimoCosmology(engine='camb', fiducial='DESI')`` at the ell_max
+        determined by the data file.
+    params : Parameter, VariableCollection, dict, default=None
+        Override the default nuisance parameters.
+
+    References
+    ----------
+    https://arxiv.org/abs/2510.09430
+    """
+    installer_section = 'CamspecNPIPELiteLikelihood'
+    T0_cmb = 2.7255
+    ell_cuts = {'TT': [30, 2500], 'TE': [30, 2000], 'EE': [30, 2000]}
+
+    @classmethod
+    def propose_params(cls):
+        return VariableCollection([
+            Parameter('A_planck', value=1., prior=dict(dist='norm', loc=1., scale=0.0025),
+                      ref=dict(dist='norm', loc=1., scale=0.002), latex=r'y_\mathrm{cal}'),
+            Parameter('calTE', value=1., prior=dict(dist='norm', loc=1., scale=0.01),
+                      ref=dict(dist='norm', loc=1., scale=0.01), latex='c_{TE}'),
+            Parameter('calEE', value=1., prior=dict(dist='norm', loc=1., scale=0.01),
+                      ref=dict(dist='norm', loc=1., scale=0.01), latex='c_{EE}'),
+        ])
+
+    def __init__(self, data_file=None, cosmo=None, params=None):
+        if data_file is None:
+            from desilike.install import Installer
+            data_file = os.path.join(Installer().data_dir(self.installer_section),
+                                     'CamSpec_NPIPE_cmb_sacc.fits')
+        self._load_data(data_file)
+        if cosmo is None:
+            from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+            cosmo = CosmoprimoCosmology(engine='camb',
+                                        fiducial=('DESI', dict(lensing=True, ellmax_cl=self._ellmax,
+                                                               non_linear='mead')))
+        self.cosmo = cosmo
+        vc = self.propose_params()
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        self.params = {param.basename: param for param in vc}
+
+    def __post_init__(self, *args, **kwargs):
+        self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self._ellmax}]})
+
+    def _load_data(self, data_file):
+        import sacc
+
+        sacc_data = sacc.Sacc.load_fits(data_file)
+
+        pol_to_sacc_dt = {'TT': 'cl_00', 'TE': 'cl_0e', 'EE': 'cl_ee'}
+        spec_meta = []
+        cull_idx = []
+
+        for pol in ['TT', 'TE', 'EE']:
+            lmin, lmax = self.ell_cuts[pol]
+            dt = pol_to_sacc_dt[pol]
+            for tr1, tr2 in sacc_data.get_tracer_combinations(dt):
+                ls, mu, ind = sacc_data.get_ell_cl(dt, tr1, tr2, return_ind=True)
+                mask = (ls >= lmin) & (ls <= lmax)
+                if not np.all(mask):
+                    cull_idx.append(ind[~mask])
+                if np.any(mask):
+                    spec_meta.append({'pol': pol, 'ell': ls[mask].astype(int),
+                                      'mu': mu[mask], 'idx': ind[mask]})
+
+        # Extract sub-block of the covariance for selected indices only.
+        all_idx = np.concatenate([m['idx'] for m in spec_meta])
+        covmat = sacc_data.covariance.covmat
+        sub_cov = covmat[np.ix_(all_idx, all_idx)]
+
+        self.flatdata = jnp.asarray(np.concatenate([m['mu'] for m in spec_meta]))
+        self.precision = jnp.asarray(np.linalg.inv(sub_cov))
+        self._spec_meta = spec_meta
+        self._ellmax = int(max(m['ell'].max() for m in spec_meta))
+
+    def __call__(self):
+        cl = self.cosmo.get_harmonic().lensed_cl(ellmax=self._ellmax)
+        ells = jnp.arange(self._ellmax + 1)
+        factor = ells * (ells + 1) / (2 * np.pi)
+        unit = (self.T0_cmb * 1e6) ** 2
+        dl = {spec: factor * unit * cl[spec.lower()] for spec in ['TT', 'TE', 'EE']}
+
+        A_planck = self.params['A_planck'].value
+        cals = {'TT': A_planck ** 2,
+                'TE': self.params['calTE'].value * A_planck ** 2,
+                'EE': self.params['calEE'].value * A_planck ** 2}
+
+        self.flattheory = jnp.concatenate(
+            [dl[m['pol']][m['ell']] / cals[m['pol']] for m in self._spec_meta]
+        )
+        return super().__call__()
+
+    @classmethod
+    def install(cls, installer):
+        try:
+            data_dir = installer[cls.installer_section]['data_dir']
+        except KeyError:
+            data_dir = installer.data_dir(cls.installer_section)
+
+        from desilike.install import exists_path, download, extract
+
+        installer.pip('sacc')
+
+        target = os.path.join(data_dir, 'CamSpec_NPIPE_cmb_sacc.fits')
+        if installer.reinstall or not exists_path(target):
+            tar_fn = os.path.join(data_dir, 'CamSpec_NPIPE_cmb_sacc.tar.gz')
+            download('https://github.com/HTJense/camspec_npipe-lite/releases/download/v1.0/CamSpec_NPIPE_cmb_sacc.tar.gz',
+                     tar_fn)
+            extract(tar_fn, data_dir)
+
+        installer.write({cls.installer_section: {'data_dir': data_dir}})

@@ -10,7 +10,7 @@ import pytest
 def _make_fiducial():
     """Return a cosmoprimo fiducial cosmology that doesn't need CLASS."""
     import cosmoprimo.fiducial as fid
-    return fid.BOSS(engine='eisenstein_hu')
+    return fid.DESI(engine='eisenstein_hu')
 
 
 def _check(result, name=''):

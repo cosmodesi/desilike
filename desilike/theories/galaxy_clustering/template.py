@@ -20,11 +20,11 @@ TurnOverSpectrum2Template
     Template based on the matter power-spectrum turn-over scale.
 DirectWiggleSplitSpectrum2Template
     Direct template with explicit wiggle/no-wiggle split and BAO dilation.
-BAOExtractor
+BAOTheory
     Extracts BAO distance parameters (DH/rd, DM/rd, DV/rd, qpar, qper, qiso, qap) from a cosmology.
-BAOPhaseShiftExtractor
+BAOPhaseShiftTheory
     BAO extractor extended with the neutrino-driven BAO phase shift (N_eff, baoshift).
-TurnOverExtractor
+TurnOverTheory
     Extracts turn-over observables (kTO, DV*kTO, DH/DM, qto, qap) from a cosmology.
 
 Spectrum2Template contract
@@ -1090,7 +1090,7 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
 
 # ── BAO extractors ─────────────────────────────────────────────────────────────
 
-class BAOExtractor(Calculator):
+class BAOTheory(Calculator):
     r"""Extract BAO distance parameters from a cosmology provider.
 
     At each call, retrieves :math:`E(z) = H(z)/H_0`, the comoving transverse distance
@@ -1179,7 +1179,7 @@ class BAOExtractor(Calculator):
         return obj
 
 
-class BAOPhaseShiftExtractor(BAOExtractor):
+class BAOPhaseShiftTheory(BAOTheory):
     r"""BAO extractor extended with the neutrino-induced BAO phase shift.
 
     Adds :attr:`N_eff` (effective number of relativistic species from the cosmology) and
@@ -1194,7 +1194,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
 
     Parameters
     ----------
-    Same as :class:`BAOExtractor`.
+    Same as :class:`BAOTheory`.
 
     Attributes
     ----------
@@ -1233,7 +1233,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
         return obj
 
 
-class TurnOverExtractor(Calculator):
+class TurnOverTheory(Calculator):
     r"""Extract turn-over observables from a cosmology provider.
 
     Evaluates the matter power spectrum on a fine internal k grid, locates the

@@ -1,10 +1,13 @@
-"""Tests for the generic candl CMB likelihood wrapper.
+"""Tests for the generic candl CMB likelihood wrapper and the clipy-based
+Planck PR3 wrappers.
 
-Uses a minimal synthetic candl data set (a single 'TT 90x90' spectrum with 3 bins,
-a single-scalar calibration nuisance parameter with a Gaussian prior) written to a
-temporary directory, so these tests run offline and fast. Harmonic :math:`C_\\ell`
-require a real Boltzmann engine (the JAX-native ``eisenstein_hu`` engine cannot
-compute them), so ``cosmo`` is built with ``engine='camb'`` here.
+candl tests use a minimal synthetic data set (one 'TT 90x90' spectrum, 3 bins)
+written to a temporary directory.  clipy integration tests download the real
+Sroll2 ``.clik`` file via the :meth:`install` method (network required).
+
+Harmonic :math:`C_\\ell` require a real Boltzmann engine (the JAX-native
+``eisenstein_hu`` engine cannot compute them), so ``cosmo`` is built with
+``engine='camb'`` throughout.
 """
 
 import numpy as np
@@ -221,8 +224,40 @@ def test_lens_likelihood(tmp_path):
     assert np.isclose(float(logpdf), float(jit_logpdf))
 
 
+# ── clipy / clik_candl integration tests ─────────────────────────────────────
+
+pytest.importorskip('clipy')
+
+
+def test_planck_pr3_lowl_ee_sroll2(tmp_path, monkeypatch):
+    """Install PlanckPR3LowlEESroll2Likelihood to a temporary directory and run it.
+
+    Downloads the Sroll2 ``.clik`` file (~590 KB) from INFN, installs clipy-like,
+    and verifies the compiled logpdf is finite at fiducial parameters.
+
+    Both DESILIKE_CONFIG_DIR and DESILIKE_INSTALL_DIR are redirected to ``tmp_path``
+    so the download goes there and does not touch the user's real install.
+    """
+    from desilike.install import Installer
+    from desilike.likelihoods.cmb.candl import PlanckPR3LowlEESroll2Likelihood
+
+    monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))
+
+    PlanckPR3LowlEESroll2Likelihood.install(Installer())
+
+    cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=30, non_linear='mead')))
+    like = PlanckPR3LowlEESroll2Likelihood(cosmo=cosmo)
+
+    pipe = compile(like)
+    defaults = {p.name: p._value for p in get_params(like)}
+    logpdf = pipe(defaults)
+    assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
+
+
 if __name__ == '__main__':
 
+    import os
     import tempfile
     from pathlib import Path
 
@@ -240,3 +275,8 @@ if __name__ == '__main__':
         test_cosmo_params_external_prior(Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_lens_likelihood(Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DESILIKE_CONFIG_DIR'] = tmp
+        os.environ['DESILIKE_INSTALL_DIR'] = tmp
+        test_planck_pr3_lowl_ee_sroll2(Path(tmp), type('_MP', (), {'setenv': lambda self, k, v: None})())
+    print('All tests passed.')

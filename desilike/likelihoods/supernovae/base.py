@@ -41,12 +41,23 @@ class BaseSNLikelihood(GaussianLikelihood):
         """Return the default nuisance :class:`~desilike.parameter.VariableCollection` (``Mb``)."""
         return VariableCollection([Parameter('Mb', value=-19.263, prior=dict(limits=[-20., -18.]), latex='M_b')])
 
-    def __init__(self, data_dir=None, cosmo=None, params=None):
+    def __init__(self, data_dir=None, cosmo=None, params=None, zrange=(None, None)):
         if data_dir is None:
             from desilike.install import Installer
             data_dir = Installer().data_dir(self.installer_section)
         self.light_curve_params = self.read_light_curve_params(os.path.join(data_dir, self.data_file))
         self.covariance = self.read_covariance(os.path.join(data_dir, self.covariance_file))
+        zmin, zmax = zrange
+        if zmin is not None or zmax is not None:
+            z = self.light_curve_params[self._zname]
+            mask = np.ones(len(z), dtype=bool)
+            if zmin is not None:
+                mask &= (z >= zmin)
+            if zmax is not None:
+                mask &= (z <= zmax)
+            if not np.all(mask):
+                self.light_curve_params = {key: arr[mask] for key, arr in self.light_curve_params.items()}
+                self.covariance = self.covariance[np.ix_(mask, mask)]
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(fiducial='DESI')

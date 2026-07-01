@@ -5,6 +5,9 @@ Uses small synthetic light-curve/covariance files written to a temporary directo
 tests run offline and fast. ``cosmo`` is built with the JAX-native ``eisenstein_hu``
 engine so jit/grad checks do not exercise the (unrelated) external-engine
 finite-difference machinery.
+
+``test_desy5_dovekie_install`` downloads the real DES-Y5 Dovekie data files from
+GitHub (network required) and verifies end-to-end construction and evaluation.
 """
 
 import numpy as np
@@ -175,8 +178,30 @@ def test_pantheonplusshoes_calibrator(tmp_path):
     assert np.isclose(float(like.flattheory[is_calibrator][0]), expected)
 
 
+def test_desy5_dovekie_install(tmp_path, monkeypatch):
+    """Install DESY5DovekieSNLikelihood to a temporary directory and run it.
+
+    Downloads the two Dovekie data files from GitHub (network required) and
+    verifies the compiled logpdf is finite at fiducial parameters.
+    """
+    from desilike.install import Installer
+
+    monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))
+
+    DESY5DovekieSNLikelihood.install(Installer())
+
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
+    like = DESY5DovekieSNLikelihood(cosmo=cosmo)
+    pipe = compile(like)
+    defaults = {p.name: p._value for p in get_params(like)}
+    logpdf = pipe(defaults)
+    assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
+
+
 if __name__ == '__main__':
 
+    import os
     import tempfile
     from pathlib import Path
 
@@ -189,3 +214,7 @@ if __name__ == '__main__':
         test_des_dovekie_precision(Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_pantheonplusshoes_calibrator(Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ['DESILIKE_CONFIG_DIR'] = tmp
+        os.environ['DESILIKE_INSTALL_DIR'] = tmp
+        test_desy5_dovekie_install(Path(tmp), type('_MP', (), {'setenv': lambda self, k, v: None})())

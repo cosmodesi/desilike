@@ -9,14 +9,14 @@ Classes
 BaseCompressionObservable
     Base class: stores theory dep, formats data, assembles flattheory in __call__.
 BAOCompressionObservable
-    Compare BAO distance measurements to :class:`BAOExtractor` predictions.
+    Compare BAO distance measurements to :class:`BAOTheory` predictions.
     Measurable parameters: ``DH_over_rd``, ``DM_over_rd``, ``DV_over_rd``,
     ``DH_over_DM``, ``qpar``, ``qper``, ``qiso``, ``qap``.
 BAOPhaseShiftCompressionObservable
-    Compare BAO + N_eff phase-shift measurements to :class:`BAOPhaseShiftExtractor` predictions.
+    Compare BAO + N_eff phase-shift measurements to :class:`BAOPhaseShiftTheory` predictions.
     Measurable parameters: same as BAO plus ``N_eff``, ``baoshift``.
 TurnOverCompressionObservable
-    Compare turn-over measurements to :class:`TurnOverExtractor` predictions.
+    Compare turn-over measurements to :class:`TurnOverTheory` predictions.
     Measurable parameters: ``DV_times_kTO``, ``DH_over_DM``, ``kTO``, ``pkTO_dd``,
     ``qto``, ``qap``.
 """
@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import lsstypes as types
 
 from ...base import Calculator
-from ...theories.galaxy_clustering.template import BAOExtractor, BAOPhaseShiftExtractor, TurnOverExtractor
+from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, TurnOverTheory
 
 
 def _format_compression_data(data, covariance, parameters):
@@ -128,7 +128,7 @@ class BaseCompressionObservable(Calculator):
 class BAOCompressionObservable(BaseCompressionObservable):
     r"""Compare BAO distance measurements to theory predictions.
 
-    Wraps :class:`BAOExtractor`.  Valid parameter names are
+    Wraps :class:`BAOTheory`.  Valid parameter names are
     ``'DH_over_rd'``, ``'DM_over_rd'``, ``'DV_over_rd'``, ``'DH_over_DM'``,
     ``'qpar'``, ``'qper'``, ``'qiso'``, ``'qap'``.
 
@@ -142,23 +142,23 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Parameter names to compare; required when *data* is not an lsstypes object.
     name : str, default='bao'
         Observable name.
-    theory : BAOExtractor, optional
+    theory : BAOTheory, optional
         Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
-        forwarded to ``theory.update()``.  If absent, a new :class:`BAOExtractor`
+        forwarded to ``theory.update()``.  If absent, a new :class:`BAOTheory`
         is constructed from *kwargs*.
     z : float, default=1.
-        Effective redshift forwarded to :class:`BAOExtractor`.
+        Effective redshift forwarded to :class:`BAOTheory`.
     eta : float, default=1./3.
-        DV exponent forwarded to :class:`BAOExtractor`.
+        DV exponent forwarded to :class:`BAOTheory`.
     fiducial : str or cosmoprimo.Cosmology, default='DESI'
-        Fiducial cosmology forwarded to :class:`BAOExtractor`.
+        Fiducial cosmology forwarded to :class:`BAOTheory`.
     cosmo : PrimordialCosmology, optional
-        Cosmology provider forwarded to :class:`BAOExtractor`.
+        Cosmology provider forwarded to :class:`BAOTheory`.
     """
 
     def __init__(self, data=None, covariance=None, parameters=None, name='bao', theory=None, **kwargs):
         if theory is None:
-            theory = BAOExtractor(**kwargs)
+            theory = BAOTheory(**kwargs)
         elif kwargs:
             theory.update(**kwargs)
         super().__init__(theory=theory,
@@ -168,7 +168,7 @@ class BAOCompressionObservable(BaseCompressionObservable):
 class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
     r"""Compare BAO + phase-shift measurements to theory predictions.
 
-    Wraps :class:`BAOPhaseShiftExtractor`.  Valid parameter names are the same as
+    Wraps :class:`BAOPhaseShiftTheory`.  Valid parameter names are the same as
     :class:`BAOCompressionObservable` plus ``'N_eff'`` and ``'baoshift'``.
 
     Reference
@@ -185,10 +185,10 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='baoshift'
         Observable name.
-    theory : BAOPhaseShiftExtractor, optional
+    theory : BAOPhaseShiftTheory, optional
         Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
         forwarded to ``theory.update()``.  If absent, a new
-        :class:`BAOPhaseShiftExtractor` is constructed from *kwargs*.
+        :class:`BAOPhaseShiftTheory` is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -201,7 +201,7 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
 
     def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', theory=None, **kwargs):
         if theory is None:
-            theory = BAOPhaseShiftExtractor(**kwargs)
+            theory = BAOPhaseShiftTheory(**kwargs)
         elif kwargs:
             theory.update(**kwargs)
         super().__init__(theory=theory,
@@ -211,7 +211,7 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
 class TurnOverCompressionObservable(BaseCompressionObservable):
     r"""Compare turn-over measurements to theory predictions.
 
-    Wraps :class:`TurnOverExtractor`.  Valid parameter names are
+    Wraps :class:`TurnOverTheory`.  Valid parameter names are
     ``'DV_times_kTO'``, ``'DH_over_DM'``, ``'kTO'``, ``'pkTO_dd'``,
     ``'qto'``, ``'qap'``.
 
@@ -229,10 +229,10 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Parameter names; required when *data* is not an lsstypes object.
     name : str, default='turnover'
         Observable name.
-    theory : TurnOverExtractor, optional
+    theory : TurnOverTheory, optional
         Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
         forwarded to ``theory.update()``.  If absent, a new
-        :class:`TurnOverExtractor` is constructed from *kwargs*.
+        :class:`TurnOverTheory` is constructed from *kwargs*.
     z : float, default=1.
         Effective redshift.
     eta : float, default=1./3.
@@ -245,7 +245,7 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
 
     def __init__(self, data=None, covariance=None, parameters=None, name='turnover', theory=None, **kwargs):
         if theory is None:
-            theory = TurnOverExtractor(**kwargs)
+            theory = TurnOverTheory(**kwargs)
         elif kwargs:
             theory.update(**kwargs)
         super().__init__(theory=theory,

@@ -21,6 +21,7 @@ from ...base import Calculator, Parameter, compile, copy, replace, get_params as
 from ...base import _iter_calculators
 from ...theories.galaxy_clustering.template import Spectrum2Template
 from ... import plotting
+from .compressed import (BAOCompressionObservable, BAOPhaseShiftCompressionObservable, TurnOverCompressionObservable)
 
 
 def _compute_flattheory_nobao(observable):

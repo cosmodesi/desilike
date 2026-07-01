@@ -92,7 +92,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 ELLS_FOLPS = (0, 2, 4)
 K = np.linspace(0.02, 0.2, 101)
 TRACERS_FOLPS = ['LRG', 'ELG']
-Z_TRACERS = {'LRG': 0.8, 'ELG': 1.1, 'QSO': 2.1}
+Z_TRACERS = {'LRG1': 0.4, 'LRG2': 0.6, 'LRG3': 0.8, 'LRG': 0.8, 'ELG': 1.1, 'QSO': 2.1}
 K3 = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
 ELLS3_FOLPS = ((0, 0, 0), (2, 0, 2))
 
@@ -329,7 +329,9 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
     pipe = compile(build_fn())
 
     params = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
+    solved_params = pipe.params.select(solved=True).names()
     print(f'  sampled parameters ({len(params)}): {", ".join(params)}')
+    print(f'  solved parameters ({len(solved_params)}): {", ".join(solved_params)}')
     print(f'  logpdf at center: {float(pipe(params)):.4f}\n')
 
     if vary_param is None or vary_param not in params:
@@ -408,8 +410,8 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
         run('EH (no emulator), analytic marg.',
-            lambda: build_posterior_folps(tracers=['LRG', 'ELG', 'QSO'], marginalize=True, engine='camb'),
-            vary_param='logA', warmup=2, number=5, run=('jit',))
+            lambda: build_posterior_folps(tracers=['LRG1', 'LRG2', 'LRG3', 'ELG', 'QSO'], marginalize=True, engine='camb'),
+            vary_param='logA', warmup=2, number=10, run=('jit',))
 
     if 'folps_3poles' in test:
         print(f'\n{"─" * 60}')

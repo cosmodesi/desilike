@@ -511,13 +511,20 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         print(f'{"─" * 60}')
         posterior = compile(build_posterior_comet(direct=False, marginalize=True))
         # Extract the group_fn from the first (and only) group
-        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids in posterior.root._groups:
-            n_g = len(group_alpha_names)
+        for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
+             group_theory_pipe, comp_meta, marg_local, best_local,
+             prior_prec, prior_center, stage_i_pipe, stage_i_ids) in posterior.root._groups:
+            n_g = sum(group_alpha_sizes)
             group_params = {p.name: jnp.asarray(float(p.value)) for p in group_theory_pipe.params}
-            alpha_vec = jnp.stack([group_params[name] for name in group_alpha_names])
+            alpha_vec = jnp.concatenate([jnp.ravel(jnp.asarray(group_params[name])) for name in group_alpha_names])
 
-            def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
-                p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
+            def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params,
+                         _names=group_alpha_names, _sizes=group_alpha_sizes, _shapes=group_alpha_shapes):
+                p = dict(_params)
+                offset = 0
+                for name, size, shape in zip(_names, _sizes, _shapes):
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    offset += size
                 return _pipe(p)
 
             # JIT: primal only (jax.linearize but only use theories_concat, not jvp_fn)

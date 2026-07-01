@@ -399,12 +399,20 @@ class Posterior(Calculator):
             marg_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'marg'}
             best_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'best'}
 
-            # Prior inverse-scale (1/std) per solved parameter; 0 for an improper prior.
-            # Used as prior precision in the linear solve for both 'best' and 'marg' params.
+            # Per solved param: prior inverse-scale (0 for improper), prior center, DOF count, shape.
+            # DOF count: np.prod(p.shape) for shaped params, 1 for scalars (shape=()).
+            # The prior for each solved param is treated as independent per-element with the same
+            # 1D ParameterPrior applied to each DOF.
             inv_scales = {}
+            alpha_prior_centers = {}
+            alpha_sizes_map = {}
+            alpha_shapes_map = {}
             for i, p in enumerate(self._solved_params):
                 std = p.prior.std() if p.prior is not None else None
                 inv_scales[i] = (1. / std) if (std is not None and np.isfinite(std)) else 0.
+                alpha_prior_centers[i] = float(p.prior.center()) if p.prior is not None else 0.
+                alpha_sizes_map[i] = int(np.prod(p.shape)) if p.shape else 1
+                alpha_shapes_map[i] = p.shape  # () for scalars, (k,...) for arrays
 
             # Build per-gaussian-component list: (gauss, theory_pipe, precision, flatdata, alpha_idx).
             # For alpha-dependent components, theory_pipe is not used later (the group_theory_pipe
@@ -478,21 +486,54 @@ class Posterior(Calculator):
                         alpha_dep_ids.add(id(pipe_node))
                 return frozenset(id(pipe_node) for pipe_node in self._likelihood.nodes if id(pipe_node) not in alpha_dep_ids)
 
-            # Phase A: compute per-group stage_i_ids before creating any CompiledGraph.
+            # Phase A: compute per-group stage_i_ids and DOF-level metadata before creating any CompiledGraph.
+            # Converts comp local_idx from param-level indices to DOF-level indices so that _marg_loglik
+            # can handle solved params with non-scalar shapes (e.g. shape=(2,)).
             pending_groups = []
             for root, global_idx in root_sorted.items():
                 comps = root_comps[root]
                 group_gaussians = [gauss for gauss, _, _, _ in comps]
                 group_alpha_names = [alpha_names[g] for g in global_idx]
+                group_alpha_sizes = [alpha_sizes_map[g] for g in global_idx]
+                group_alpha_shapes = [alpha_shapes_map[g] for g in global_idx]
+
+                # DOF offset within the group for each local param index j.
+                group_dof_offsets = []
+                dof_off = 0
+                for g in global_idx:
+                    group_dof_offsets.append(dof_off)
+                    dof_off += alpha_sizes_map[g]
+
+                # marg/best membership at DOF level.
+                marg_local = np.array([group_dof_offsets[j] + k for j, g in enumerate(global_idx)
+                                       if g in marg_global for k in range(alpha_sizes_map[g])], dtype=int)
+                best_local = np.array([group_dof_offsets[j] + k for j, g in enumerate(global_idx)
+                                       if g in best_global for k in range(alpha_sizes_map[g])], dtype=int)
+
+                # Per-DOF prior precision and center (same value repeated for all DOFs of a param).
+                prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx
+                                        for _ in range(alpha_sizes_map[g])])
+                prior_center = jnp.array([alpha_prior_centers[g] for g in global_idx
+                                          for _ in range(alpha_sizes_map[g])])
+
+                # Remap comp local_idx_params (param-level local indices) → DOF-level indices.
+                comps_dof = []
+                for gauss, precision, flatdata, local_idx_params in comps:
+                    local_dof_idx = [group_dof_offsets[j] + k for j in local_idx_params
+                                     for k in range(group_alpha_sizes[j])]
+                    comps_dof.append((gauss, precision, flatdata, local_dof_idx))
+
                 stage_i_ids = _compute_stage_i_ids(set(group_alpha_names))
-                pending_groups.append((root, global_idx, comps, group_gaussians, group_alpha_names, stage_i_ids))
+                pending_groups.append((root, global_idx, comps_dof, group_gaussians, group_alpha_names,
+                                       group_alpha_sizes, group_alpha_shapes, stage_i_ids,
+                                       marg_local, best_local, prior_prec, prior_center))
 
             # Phase B: build a shared node_state dict for nodes that are stage-i in ALL groups.
             # When multiple CompiledGraph instances share the same node_state object for a
             # globally-stage-i external node (e.g. CosmoprimoCosmology), the pure_callback
             # cache hit from the first group's pre-pass is visible to all other groups AND to
             # self._likelihood's extra derived-params pass — CAMB runs once, not n_groups+1 times.
-            global_stage_i_ids = frozenset.intersection(*[gdata[5] for gdata in pending_groups]) if pending_groups else frozenset()
+            global_stage_i_ids = frozenset.intersection(*[gdata[7] for gdata in pending_groups]) if pending_groups else frozenset()
             shared_node_states = {
                 id(node): {'last_params': None, 'was_called': False, 'last_result': None,
                            'dep_result': None, 'call_result': None, 'last_dep_args': None}
@@ -510,23 +551,22 @@ class Posterior(Calculator):
 
             # Phase C: create group CompiledGraphs with the shared node_states injected.
             self._groups = []
-            for root, global_idx, comps, group_gaussians, group_alpha_names, stage_i_ids in pending_groups:
+            for (root, global_idx, comps_dof, group_gaussians, group_alpha_names,
+                 group_alpha_sizes, group_alpha_shapes, stage_i_ids,
+                 marg_local, best_local, prior_prec, prior_center) in pending_groups:
                 group_theory_pipe = CompiledGraph(likelihood, _likelihood_ctx,
                                                   output=make_group_output(group_gaussians),
                                                   shared_node_states=shared_node_states)
 
                 # Per-component metadata for splitting the concatenated theories/Jacobians.
+                # local_dof_idx: DOF indices (within the group's alpha_vec) for this component.
                 comp_meta = []
                 data_offset = 0
-                for gauss, precision, flatdata, local_idx in comps:
+                for gauss, precision, flatdata, local_dof_idx in comps_dof:
                     flat_data = np.ravel(np.asarray(flatdata))
                     n_i = flat_data.size
-                    comp_meta.append((precision, flat_data, local_idx, data_offset, n_i))
+                    comp_meta.append((precision, flat_data, local_dof_idx, data_offset, n_i))
                     data_offset += n_i
-
-                marg_local = np.array([j for j, g in enumerate(global_idx) if g in marg_global], dtype=int)
-                best_local = np.array([j for j, g in enumerate(global_idx) if g in best_global], dtype=int)
-                prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx])
 
                 stage_i_nodes_ordered = [pipe_node for pipe_node in group_theory_pipe.nodes
                                          if id(pipe_node) in stage_i_ids]
@@ -563,8 +603,9 @@ class Posterior(Calculator):
                 else:
                     stage_i_pipe = None
 
-                self._groups.append((group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local,
-                                     prior_prec, stage_i_pipe, stage_i_ids))
+                self._groups.append((group_alpha_names, group_alpha_sizes, group_alpha_shapes,
+                                     group_theory_pipe, comp_meta, marg_local, best_local,
+                                     prior_prec, prior_center, stage_i_pipe, stage_i_ids))
 
             prior.update(self._likelihood.params.select(solved=False))
         else:
@@ -611,12 +652,26 @@ class Posterior(Calculator):
             logL = logL - 0.5 * r @ (precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec, stage_i_pipe, stage_i_ids in self._groups:
-            n_g = len(group_alpha_names)
+        for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
+             group_theory_pipe, comp_meta, marg_local, best_local,
+             prior_prec, prior_center, stage_i_pipe, stage_i_ids) in self._groups:
+            # n_g: total DOF across all alpha params in this group (sum of per-param sizes).
+            n_g = sum(group_alpha_sizes)
 
             # All params needed by the combined group pipe (includes both alpha and non-alpha params).
             group_params = {p.name: jnp.asarray(params[p.name]) for p in group_theory_pipe.params}
-            alpha_vec = jnp.stack([group_params[name] for name in group_alpha_names])
+            # Flatten+concatenate alpha values → shape (n_g,); scalars (shape=()) become size-1 slices.
+            alpha_vec = jnp.concatenate([jnp.ravel(jnp.asarray(group_params[name])) for name in group_alpha_names])
+
+            def _unpack_alpha(alpha_vec, _names=group_alpha_names, _sizes=group_alpha_sizes,
+                              _shapes=group_alpha_shapes, _params=group_params):
+                """Reconstruct param dict from flat alpha_vec, respecting each param's shape."""
+                p = dict(_params)
+                offset = 0
+                for name, size, shape in zip(_names, _sizes, _shapes):
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    offset += size
+                return p
 
             if stage_i_pipe is not None and stage_i_ids:
                 # Two-stage JVP optimisation:
@@ -632,54 +687,55 @@ class Posterior(Calculator):
                 # forward-mode AD traces through Stage ii only.  stage_i_flat is a closed-over
                 # constant: XLA reuses it without rematerialisation.
                 def thin_group_fn(alpha_vec,
-                                   _pipe=group_theory_pipe, _params=group_params,
-                                   _names=group_alpha_names, _s1_ids=stage_i_ids,
-                                   _s1_flat=stage_i_flat):
-                    p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
-                    return_val, _, _ = _pipe._run_graph_fn(p, stage_i_ids=_s1_ids, stage_i_flat=_s1_flat)
+                                   _pipe=group_theory_pipe, _unpack=_unpack_alpha,
+                                   _s1_ids=stage_i_ids, _s1_flat=stage_i_flat):
+                    return_val, _, _ = _pipe._run_graph_fn(_unpack(alpha_vec),
+                                                           stage_i_ids=_s1_ids, stage_i_flat=_s1_flat)
                     return return_val
 
                 theories_concat, jvp_fn = jax.linearize(thin_group_fn, alpha_vec)
             else:
                 # Fallback: no Stage i nodes identified, linearize the full pipeline.
-                def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
-                    p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
-                    return _pipe(p)
+                def group_fn(alpha_vec, _pipe=group_theory_pipe, _unpack=_unpack_alpha):
+                    return _pipe(_unpack(alpha_vec))
 
                 theories_concat, jvp_fn = jax.linearize(group_fn, alpha_vec)
 
-            # jvp_fn(e_i) = i-th column of the Jacobian; vmap → shape (n_g, total_n_data).
+            # jvp_fn(e_j) = j-th Jacobian column; vmap over identity → shape (n_g, total_n_data).
             B_rows = jax.vmap(jvp_fn)(jnp.eye(n_g))
 
             F_g = jnp.zeros((n_g, n_g))
             b_g = jnp.zeros(n_g)
             logL_g = jnp.zeros(())
 
-            for precision, flat_data, local_idx, data_offset, n_i in comp_meta:
+            for precision, flat_data, local_dof_idx, data_offset, n_i in comp_meta:
                 theory_i = theories_concat[data_offset:data_offset + n_i]
-                # B_rows[alpha_j, data_k] = Jacobian element; transpose to (n_i, n_g),
-                # then select the columns for this component's local alpha indices.
-                B_i = B_rows[:, data_offset:data_offset + n_i].T[:, local_idx]  # (n_i, n_local)
+                # B_rows[dof_j, data_k] = Jacobian; transpose to (n_i, n_g), select local DOF columns.
+                B_i = B_rows[:, data_offset:data_offset + n_i].T[:, local_dof_idx]  # (n_i, n_local_dof)
                 r_i = flat_data - theory_i
                 BtP = B_i.T @ precision
-                ix = np.array(local_idx)
+                ix = np.array(local_dof_idx)
                 F_g = F_g.at[ix[:, None], ix[None, :]].add(BtP @ B_i)
                 b_g = b_g.at[ix].add(BtP @ r_i)
                 logL_g = logL_g - 0.5 * r_i @ (precision @ r_i)
 
-            logL = logL + logL_g
-
-            # Add prior precision for every solved param in the group (best or marg).
+            # Add prior precision for every solved DOF in the group.
             F_g = F_g + jnp.diag(prior_prec)
 
-            delta_alpha = jnp.linalg.solve(F_g, b_g)
-            logL = logL + 0.5 * b_g @ delta_alpha
+            # With a non-zero prior center μ the solve RHS gains a P·μ term, and the
+            # log-posterior at α₀=0 gains the prior chi2 −½ μᵀP μ.
+            b_tilde = b_g + prior_prec * prior_center
+            delta_alpha = jnp.linalg.solve(F_g, b_tilde)
+            logL = logL + logL_g - 0.5 * jnp.dot(prior_prec * prior_center, prior_center) + 0.5 * b_tilde @ delta_alpha
 
-            # Store absolute best-fit values (linearisation point + delta).
-            for j, name in enumerate(group_alpha_names):
-                solved_values[name] = jnp.asarray(params[name]) + delta_alpha[j]
+            # Store absolute best-fit values (linearisation point α₀=0 + delta).
+            dof_off = 0
+            for name, size, shape in zip(group_alpha_names, group_alpha_sizes, group_alpha_shapes):
+                chunk = delta_alpha[dof_off:dof_off + size]
+                solved_values[name] = jnp.asarray(params[name]) + chunk.reshape(shape if shape else ())
+                dof_off += size
 
-            # Volume factor: only 'marg' params contribute; the 'best' block is profiled
+            # Volume factor: only 'marg' DOFs contribute; the 'best' block is profiled
             # out via the Schur complement  + ½ log|P_marg| − ½ log|F_g| + ½ log|F_g[best, best]|.
             # Empty marg/best index sets contribute 0, so no special-casing is needed.
             logdet_Pmarg = 0.  # jnp.sum(jnp.log(prior_prec[marg_local])) — omitted: prior_prec can be 0 (improper prior)

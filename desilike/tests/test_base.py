@@ -1305,6 +1305,145 @@ def test_two_stage_marginalization_multi_tracer():
         assert float(pipe_full(p_down)) < logpdf_full_at_opt + 1e-10, f'{name}-eps improves logpdf_full'
 
 
+def test_marginalization_nonzero_prior_center():
+    """Analytic marginalization with a non-zero prior center (mu != 0).
+
+    When the Gaussian prior on an alpha param has loc=mu != 0, the linear solve RHS
+    gains a P*mu term and the log-posterior at alpha=0 gains -1/2 mu^T P mu.
+
+    For derived='best': logpdf_marg equals the full posterior (likelihood + prior) at alpha_opt.
+    For derived='marg': logpdf_marg differs by a log-determinant term (the Gaussian integration
+      volume), so we only verify that alpha_opt is pulled toward the prior center.
+    """
+
+    class PTTracer(GaussianLikelihood):
+        def __init__(self, B_col, alpha, data, covariance):
+            self.B_col = B_col
+            self.alpha = alpha
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.alpha * self.B_col
+            return super().__call__()
+
+    rng = np.random.default_rng(99)
+    sigma_d = 0.1
+    mu_prior = 2.5   # non-zero prior center
+    sigma_prior = 0.8
+
+    B = jnp.array(rng.normal(0., 1., len(K)))
+    data = jnp.array(rng.normal(1.5, sigma_d, len(K)))
+    cov = np.eye(len(K)) * sigma_d ** 2
+
+    # Reference: free param with the same prior — pipe_full evaluates (loglik + logprior) at alpha_opt.
+    alpha_ref = Parameter('alpha', value=0., prior=dict(dist='norm', loc=mu_prior, scale=sigma_prior))
+    lik_ref = PTTracer(B_col=B, alpha=alpha_ref, data=data, covariance=cov)
+    pipe_full = compile(Posterior(lik_ref))
+
+    for derived_mode in ('best', 'marg'):
+        alpha_val = Parameter('alpha', value=0., derived=derived_mode,
+                              prior=dict(dist='norm', loc=mu_prior, scale=sigma_prior))
+        lik = PTTracer(B_col=B, alpha=alpha_val, data=data, covariance=cov)
+        pipe_marg = compile(Posterior(lik))
+
+        logpdf_marg = float(pipe_marg({}))
+        alpha_opt = float(pipe_marg.params.select(derived=derived_mode)[0].value)
+
+        # For 'best' mode: logpdf_marg == max_alpha [loglik + logprior] == full_posterior(alpha_opt).
+        if derived_mode == 'best':
+            logpdf_full_at_opt = float(pipe_full({'alpha': alpha_opt}))
+            assert abs(logpdf_marg - logpdf_full_at_opt) < 1e-9, (
+                f'[{derived_mode}] marg logpdf {logpdf_marg:.12f} != full@argmin {logpdf_full_at_opt:.12f}, '
+                f'alpha_opt={alpha_opt:.6f}, diff={logpdf_marg - logpdf_full_at_opt:.3e}'
+            )
+
+        # The optimal alpha should be pulled toward the prior center (regardless of derived mode).
+        # With a proper prior, the regularised MLE satisfies |alpha_opt - mu| < |alpha_mle - mu|.
+        alpha_mle = float(jnp.dot(B, jnp.asarray(data)) / jnp.dot(B, B))
+        assert abs(alpha_opt - mu_prior) <= abs(alpha_mle - mu_prior) + 1e-10, (
+            f'[{derived_mode}] alpha_opt={alpha_opt:.4f} is not pulled toward prior center mu={mu_prior}'
+        )
+
+
+def test_marginalization_shaped_param():
+    """Analytic marginalization with a non-scalar (shaped) solved parameter.
+
+    A parameter alpha with shape=(2,) represents two bias coefficients.
+    The theory is linear in alpha[0] and alpha[1] independently.
+
+    For derived='best': logpdf_marg equals the pure log-likelihood at alpha_opt (no prior).
+    For derived='marg': logpdf_marg includes a log-determinant volume term so does not match
+      the raw likelihood; we verify instead that the gradient of the reference pipeline is ~0
+      at alpha_opt (true minimum of the log-likelihood).
+
+    Note: Parameter.shape must be set explicitly to (2,); the default shape=() gives a scalar.
+    """
+
+    class PTTracer(GaussianLikelihood):
+        def __init__(self, B_mat, alpha, data, covariance):
+            self.B_mat = B_mat   # shape (n_data, 2)
+            self.alpha = alpha   # shape (2,) — must use shape=(2,) in Parameter
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.B_mat @ self.alpha
+            return super().__call__()
+
+    rng = np.random.default_rng(77)
+    sigma_d = 0.1
+    B_mat = jnp.array(rng.normal(0., 1., (len(K), 2)))
+    alpha_true = np.array([1.3, -0.7])
+    data = jnp.array(B_mat @ alpha_true + rng.normal(0., sigma_d, len(K)))
+    cov = np.eye(len(K)) * sigma_d ** 2
+
+    # Reference pipeline: two free scalar params (no prior), used for logpdf and gradient checks.
+    alpha_ref0 = Parameter('alpha0', value=0.)
+    alpha_ref1 = Parameter('alpha1', value=0.)
+
+    class PTTracerScalar(GaussianLikelihood):
+        def __init__(self, B_mat, alpha0, alpha1, data, covariance):
+            self.B_mat = B_mat
+            self.alpha0 = alpha0
+            self.alpha1 = alpha1
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.B_mat @ jnp.array([self.alpha0, self.alpha1])
+            return super().__call__()
+
+    lik_ref = PTTracerScalar(B_mat=B_mat, alpha0=alpha_ref0, alpha1=alpha_ref1,
+                             data=data, covariance=cov)
+    pipe_full = compile(Posterior(lik_ref))
+
+    for derived_mode in ('best', 'marg'):
+        # shape=(2,) must be explicit; Parameter defaults to shape=() (scalar).
+        alpha = Parameter('alpha', value=np.zeros(2), shape=(2,), derived=derived_mode)
+
+        lik = PTTracer(B_mat=B_mat, alpha=alpha, data=data, covariance=cov)
+        pipe_marg = compile(Posterior(lik))
+
+        logpdf_marg = float(pipe_marg({}))
+        alpha_opt = np.array(pipe_marg.params.select(derived=derived_mode)[0].value)
+
+        # For 'best' mode: logpdf_marg == pure log-likelihood at alpha_opt (no prior, no logdet term).
+        if derived_mode == 'best':
+            logpdf_full_at_opt = float(pipe_full({'alpha0': float(alpha_opt[0]), 'alpha1': float(alpha_opt[1])}))
+            assert abs(logpdf_marg - logpdf_full_at_opt) < 1e-8, (
+                f'[{derived_mode}] marg logpdf {logpdf_marg:.12f} != full@argmin {logpdf_full_at_opt:.12f}, '
+                f'alpha_opt={alpha_opt}, diff={logpdf_marg - logpdf_full_at_opt:.3e}'
+            )
+
+        # Gradient of the reference pipeline w.r.t. alpha at argmin should be ~0.
+        grad_full = jax.grad(pipe_full)({'alpha0': float(alpha_opt[0]), 'alpha1': float(alpha_opt[1])})
+        for gname in ('alpha0', 'alpha1'):
+            assert abs(float(grad_full[gname])) < 1e-7, (
+                f'[{derived_mode}] grad[{gname}] = {float(grad_full[gname]):.3e} at argmin; expected ~0'
+            )
+
+
 def test_sum_likelihood():
     """SumLikelihood: logpdf is the sum of components; Posterior marginalizes only components that depend on solved params."""
 

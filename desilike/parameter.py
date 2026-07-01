@@ -777,7 +777,7 @@ class Parameter(Variable):
     _solved_values = frozenset(['best', 'marg'])
 
     def __init__(self, name, value=None, prior=None, ref=None, latex=None, fixed=None,
-                 derived=False, shape=(), fd_eps=None, fd_acc=2,
+                 derived=False, shape=None, fd_eps=None, fd_acc=2,
                  namespace=None, depends=None):
         """
         Parameters
@@ -798,8 +798,9 @@ class Parameter(Variable):
         derived : bool or str
             False (default), True, 'best' or 'marg' (solved), or an expression string using
             {param_name} placeholders (e.g. '{omega_m} * {h}**2').
-        shape : tuple
-            Array shape; () for scalars.
+        shape : tuple or None
+            Array shape; () for scalars. None (default) infers shape from value when provided,
+            falling back to () when value is absent.
         fd_eps : float, optional
             Finite-difference step. Defaults to ref.std().
         fd_acc : int, optional
@@ -840,16 +841,18 @@ class Parameter(Variable):
         else:
             self.prior = ParameterPrior(**prior)
 
-        self.shape = tuple(shape) if shape else ()
-
-        # Value: explicit, or inferred from prior center
+        # Value and shape: set shape first when explicit, then assign value.
+        # When shape=None, infer from value; fall back to () when value is absent.
         if value is not None:
             v = np.asarray(value)
+            self.shape = v.shape if shape is None else (tuple(shape) if shape else ())
             self.value = float(v) if v.shape == () else v
-        elif self.prior.is_proper():
-            self._value = self.prior.center()
         else:
-            self._value = None
+            self.shape = () if shape is None else (tuple(shape) if shape else ())
+            if self.prior.is_proper():
+                self._value = self.prior.center()
+            else:
+                self._value = None
 
         # Ref: defaults to copy of prior
         if ref is None:

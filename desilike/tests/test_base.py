@@ -1377,7 +1377,7 @@ def test_marginalization_shaped_param():
       the raw likelihood; we verify instead that the gradient of the reference pipeline is ~0
       at alpha_opt (true minimum of the log-likelihood).
 
-    Note: Parameter.shape must be set explicitly to (2,); the default shape=() gives a scalar.
+    Note: shape is inferred from value when not provided (value=np.zeros(2) gives shape=(2,)).
     """
 
     class PTTracer(GaussianLikelihood):
@@ -1419,8 +1419,8 @@ def test_marginalization_shaped_param():
     pipe_full = compile(Posterior(lik_ref))
 
     for derived_mode in ('best', 'marg'):
-        # shape=(2,) must be explicit; Parameter defaults to shape=() (scalar).
-        alpha = Parameter('alpha', value=np.zeros(2), shape=(2,), derived=derived_mode)
+        # shape is inferred from value (np.zeros(2) → shape=(2,)) when not explicit.
+        alpha = Parameter('alpha', value=np.zeros(2), derived=derived_mode)
 
         lik = PTTracer(B_mat=B_mat, alpha=alpha, data=data, covariance=cov)
         pipe_marg = compile(Posterior(lik))

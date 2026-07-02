@@ -616,36 +616,49 @@ class Profiles:
 
         rows = []
         for pname in params:
-            row = []
             param = (self.params[pname]
                      if self.params is not None and pname in self.params else None)
-            if is_latex and param is not None and hasattr(param, 'latex'):
-                row.append(param.latex(inline=True))
+
+            # Determine element shape from params metadata or from best array.
+            if param is not None:
+                var_shape = param.shape
+            elif self.best is not None and pname in self.best:
+                var_shape = np.asarray(self.best[pname]).shape[1:]   # strip n_runs
             else:
-                row.append(str(pname))
+                var_shape = ()
 
-            ref_err = None
-            if self.error is not None and pname in self.error:
-                ref_err = abs(float(self.error[pname].ravel()[idx]))
+            # One table row per element.
+            for elem_idx in (np.ndindex(var_shape) if var_shape else [()]):
+                row = []
+                if var_shape:
+                    row.append(f'{pname}[{", ".join(str(i) for i in elem_idx)}]')
+                elif is_latex and param is not None and hasattr(param, 'latex'):
+                    row.append(param.latex(inline=True))
+                else:
+                    row.append(str(pname))
 
-            for q in quantities:
-                slot = getattr(self, q, None)
-                if slot is None or pname not in slot:
-                    row.append('')
-                    continue
-                if q in ('best', 'error'):
-                    val = float(slot[pname].ravel()[idx])
-                    s = _fmt(val, ref_err)
-                    row.append(f'${s}$' if is_latex else s)
-                elif q == 'interval':
-                    lo, hi = slot[pname]
-                    lo_v = float(lo.ravel()[idx]) if lo.ndim > 0 else float(lo)
-                    hi_v = float(hi.ravel()[idx]) if hi.ndim > 0 else float(hi)
-                    lo_s, hi_s = _fmt(lo_v, ref_err), _fmt(hi_v, ref_err)
-                    s = (f'$[{lo_s},\\,{hi_s}]$' if is_latex
-                         else f'[{lo_s}, {hi_s}]')
-                    row.append(s)
-            rows.append(row)
+                ref_err = None
+                if self.error is not None and pname in self.error:
+                    ref_err = abs(float(np.asarray(self.error[pname][idx])[elem_idx]))
+
+                for q in quantities:
+                    slot = getattr(self, q, None)
+                    if slot is None or pname not in slot:
+                        row.append('')
+                        continue
+                    if q in ('best', 'error'):
+                        val = float(np.asarray(slot[pname][idx])[elem_idx])
+                        s = _fmt(val, ref_err)
+                        row.append(f'${s}$' if is_latex else s)
+                    elif q == 'interval':
+                        lo, hi = slot[pname]
+                        lo_v = float(np.asarray(lo[idx])[elem_idx]) if np.ndim(lo) > 0 else float(lo)
+                        hi_v = float(np.asarray(hi[idx])[elem_idx]) if np.ndim(hi) > 0 else float(hi)
+                        lo_s, hi_s = _fmt(lo_v, ref_err), _fmt(hi_v, ref_err)
+                        s = (f'$[{lo_s},\\,{hi_s}]$' if is_latex
+                             else f'[{lo_s}, {hi_s}]')
+                        row.append(s)
+                rows.append(row)
 
         chi2_str = f'{self.chi2min:.2f}'
         ndata = self.attrs.get('ndata')

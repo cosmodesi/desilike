@@ -8,6 +8,9 @@ import pytest
 
 from desilike.parameter import Variable, Parameter
 from desilike.samples import MCSamples
+from desilike.samples.diagnostics import (
+    gelman_rubin, autocorrelation, integrated_autocorrelation_time, geweke,
+)
 
 RNG = np.random.default_rng(42)
 N = 500   # number of samples used throughout
@@ -392,6 +395,154 @@ def test_2d_mean():
     s['x'] = RNG.normal(0., 1., (4, 250))
     m = s.mean('x')
     assert m.shape == ()   # scalar variable → scalar mean
+
+
+# ── diagnostics ───────────────────────────────────────────────────────────────
+
+# Two independent chains: scalar param 'a' and 5-element vector param 'pk'.
+_DIAG_RNG   = np.random.default_rng(0)
+_DIAG_NSTEP = 600
+
+
+def _diag_chain(seed):
+    rng = np.random.default_rng(seed)
+    c = MCSamples()
+    c['a'] = rng.normal(0.3, 0.01, _DIAG_NSTEP)
+    pk_var = Variable('pk', value=np.zeros(5))
+    c[pk_var] = rng.normal(1.0, 0.1, (_DIAG_NSTEP, 5))
+    c.logposterior = -rng.chisquare(2, _DIAG_NSTEP)
+    return c
+
+
+_CHAIN1 = _diag_chain(1)
+_CHAIN2 = _diag_chain(2)
+_CHAINS = [_CHAIN1, _CHAIN2]
+
+
+class TestGelmanRubin:
+    def test_scalar_single_string_returns_scalar(self):
+        gr = gelman_rubin(_CHAINS, params='a')
+        assert np.ndim(gr) == 0
+
+    def test_scalar_list_returns_1d(self):
+        gr = gelman_rubin(_CHAINS, params=['a'])
+        assert gr.shape == (1,)
+
+    def test_nonscalar_single_string_returns_array(self):
+        gr = gelman_rubin(_CHAINS, params='pk')
+        assert gr.shape == (5,)   # one GR value per element
+
+    def test_mixed_list_returns_flat(self):
+        gr = gelman_rubin(_CHAINS, params=['a', 'pk'])
+        assert gr.shape == (6,)   # 1 scalar + 5 vector elements
+
+    def test_default_params_non_scalar_chain(self):
+        # With _varied_names fixed (derived=False), both 'a' and 'pk' are included.
+        gr = gelman_rubin(_CHAINS)
+        assert gr.shape == (6,)
+
+    def test_values_near_one_for_iid_chains(self):
+        gr = gelman_rubin(_CHAINS, params=['a', 'pk'])
+        assert np.all(np.abs(gr - 1.0) < 0.05)
+
+    def test_nsplits_single_chain(self):
+        gr = gelman_rubin(_CHAIN1, params='a', nsplits=2)
+        assert np.isscalar(gr) or gr.ndim == 0
+
+
+class TestAutocorrelation:
+    def test_scalar_shape(self):
+        ac = autocorrelation(_CHAIN1, params='a')
+        assert ac.shape == (_DIAG_NSTEP,)
+
+    def test_scalar_starts_at_one(self):
+        ac = autocorrelation(_CHAIN1, params='a')
+        assert abs(ac[0] - 1.0) < 1e-10
+
+    def test_nonscalar_shape(self):
+        ac = autocorrelation(_CHAIN1, params='pk')
+        assert ac.shape == (5, _DIAG_NSTEP)   # (*var_shape, nsamples)
+
+    def test_nonscalar_each_row_starts_at_one(self):
+        ac = autocorrelation(_CHAIN1, params='pk')
+        np.testing.assert_allclose(ac[:, 0], 1.0, atol=1e-10)
+
+    def test_list_scalar_shape(self):
+        ac = autocorrelation(_CHAIN1, params=['a'])
+        assert ac.shape == (1, _DIAG_NSTEP)
+
+    def test_list_mixed_shape(self):
+        ac = autocorrelation(_CHAIN1, params=['a', 'pk'])
+        assert ac.shape == (6, _DIAG_NSTEP)   # 1 scalar + 5 vector elements
+
+    def test_default_params_shape(self):
+        ac = autocorrelation(_CHAIN1)
+        assert ac.shape == (6, _DIAG_NSTEP)
+
+    def test_multi_chain_average(self):
+        ac_single = autocorrelation(_CHAIN1, params='a')
+        ac_both   = autocorrelation(_CHAINS, params='a')
+        # Both are normalised; they should be similar but not identical.
+        assert ac_both.shape == (_DIAG_NSTEP,)
+        assert abs(ac_both[0] - 1.0) < 1e-10
+
+
+class TestIntegratedAutocorrelationTime:
+    def test_scalar_returns_scalar(self):
+        iat = integrated_autocorrelation_time(_CHAIN1, params='a', check_valid='ignore')
+        assert np.ndim(iat) == 0
+
+    def test_nonscalar_returns_array(self):
+        iat = integrated_autocorrelation_time(_CHAIN1, params='pk', check_valid='ignore')
+        assert iat.shape == (5,)   # one IAT per element
+
+    def test_list_mixed_returns_1d(self):
+        iat = integrated_autocorrelation_time(_CHAIN1, params=['a', 'pk'], check_valid='ignore')
+        assert iat.shape == (6,)
+
+    def test_default_params(self):
+        iat = integrated_autocorrelation_time(_CHAIN1, check_valid='ignore')
+        assert iat.shape == (6,)
+
+    def test_all_criteria(self):
+        for crit in ('sokal', 'geyer', 'min_corr'):
+            iat = integrated_autocorrelation_time(_CHAIN1, params='a', criterion=crit, check_valid='ignore')
+            assert np.isfinite(iat), f'IAT not finite for criterion={crit!r}'
+
+    def test_nonscalar_all_finite(self):
+        iat = integrated_autocorrelation_time(_CHAIN1, params='pk', check_valid='ignore')
+        assert np.all(np.isfinite(iat))
+
+
+class TestGeweke:
+    def test_scalar_shape(self):
+        gw = geweke(_CHAINS, params='a')
+        assert gw.shape == (2,)   # one value per chain
+
+    def test_nonscalar_shape(self):
+        gw = geweke(_CHAINS, params='pk')
+        assert gw.shape == (5, 2)   # (*var_shape, nchains)
+
+    def test_list_scalar_shape(self):
+        gw = geweke(_CHAINS, params=['a'])
+        assert gw.shape == (1, 2)
+
+    def test_list_mixed_shape(self):
+        gw = geweke(_CHAINS, params=['a', 'pk'])
+        assert gw.shape == (6, 2)
+
+    def test_default_params_shape(self):
+        gw = geweke(_CHAINS)
+        assert gw.shape == (6, 2)
+
+    def test_iid_chains_small_statistic(self):
+        # IID chains should give small Geweke statistic (< 3 sigma).
+        gw = geweke(_CHAINS, params='a')
+        assert np.all(gw < 3.0)
+
+    def test_nonscalar_all_finite(self):
+        gw = geweke(_CHAINS, params='pk')
+        assert np.all(np.isfinite(gw))
 
 
 if __name__ == '__main__':

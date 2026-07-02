@@ -68,7 +68,66 @@ def _inv(mat, check_valid='raise'):
 
 def _varied_names(chain):
     """Return names of non-derived variables in *chain*."""
-    return chain.names(varied=True)
+    return chain.names(derived=False)
+
+
+def _auto_window(taus, c):
+    """Automated windowing procedure following Sokal (1989)."""
+    m = np.arange(len(taus)) < c * taus
+    if np.any(m):
+        return np.argmin(m)
+    return len(taus) - 1
+
+
+def _iat_from_corr(corr, size, criterion, reliable, check_valid, param_name, **kwargs):
+    """Compute IAT scalar from a 1-D normalised autocorrelation array."""
+    if criterion == 'min_corr':
+        min_corr_val = kwargs.get('min_corr', 0.0)
+        ix = np.argmin(corr > min_corr_val * corr[0])
+        toret = 2.0 * np.sum(corr[:ix]) - 1.0
+    elif criterion == 'sokal':
+        c_val  = kwargs.get('c', 5.0)
+        taus   = 2.0 * np.cumsum(corr) - 1.0
+        window = _auto_window(taus, c_val)
+        toret  = taus[window]
+    elif criterion == 'geyer':
+        size_even  = size - size % 2
+        corr       = corr[:size_even]
+        corr_even  = corr[0::2].copy()
+        corr_odd   = corr[1::2].copy()
+        corr_sum   = corr_even + corr_odd
+        mask       = np.ones_like(corr_sum, dtype=bool)
+        ix         = np.argmin(mask)
+        mask[:ix]  = False
+        corr_odd[mask] = 0.0
+        if ix < len(mask):
+            mask[ix] = corr_even[ix] <= 0.0
+        corr_even[mask] = 0.0
+        corr_sum = corr_even + corr_odd
+        updated  = np.minimum.accumulate(corr_sum)
+        corr_even[corr_sum > updated] = updated[corr_sum > updated] / 2.0
+        corr_odd[corr_sum > updated]  = updated[corr_sum > updated] / 2.0
+        corr_sum = corr_even + corr_odd
+        toret    = 2.0 * np.sum(corr_sum) - 1.0 - corr_even[ix]
+    else:
+        raise ValueError(
+            'Unknown criterion {!r}; must be one of "min_corr", "sokal", "geyer"'.format(criterion)
+        )
+
+    if reliable * toret > size:
+        msg = (
+            'The chain is shorter than {:d} times the integrated autocorrelation '
+            'time for {!r}. Use this estimate with caution and run a longer chain!\n'
+            'N/{:d} = {:.0f};\ntau: {}'.format(reliable, param_name, reliable, size / reliable, toret)
+        )
+        if check_valid == 'raise':
+            raise ValueError(msg)
+        elif check_valid == 'warn':
+            warnings.warn(msg)
+        elif check_valid != 'ignore':
+            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]')
+
+    return toret
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -80,6 +139,10 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     covariances.  For 2-D chains (shape ``(nsteps, nwalkers)``), each chain is
     first flattened to ``(nsteps * nwalkers,)`` and GR is computed across those
     flattened chains.
+
+    Non-scalar parameters (``shape != ()``) are flattened element-wise so that
+    a parameter of shape ``(k,)`` contributes k columns to the joint statistic,
+    consistent with how :meth:`~desilike.samples.MCSamples.covariance` treats them.
 
     Parameters
     ----------
@@ -93,7 +156,8 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         *nsplits* parts to produce at least 2 sub-chains.
     statistic : str or callable, default='mean'
         If ``'mean'``, compare chain means.  Otherwise a callable
-        ``(chain, params) -> array`` that returns one value per parameter.
+        ``(chain, params) -> 1-D array`` of length ``total_flat_size``
+        (i.e. already flattened across non-scalar variable dimensions).
     method : str, default='eigen'
         If ``'eigen'``, return eigenvalues of the covariance ratio; if
         ``'diag'``, return diagonal ratios.
@@ -107,8 +171,8 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     Returns
     -------
     gr : scalar or array
-        Gelman-Rubin statistics; scalar when *params* is a single string,
-        else 1-D array of length ``len(params)``.
+        Gelman-Rubin statistics; scalar when *params* is a single scalar
+        string, else 1-D array of length ``total_flat_size``.
     matrices : tuple of array, optional
         Only when *return_matrices* is ``True``: ``(V, Wn1)``.
 
@@ -148,10 +212,13 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
 
     if statistic == 'mean':
         def statistic(chain, params):
-            return [chain.mean(param) for param in params]
+            # Flatten non-scalar param means to a 1-D array of total_flat_size,
+            # matching the column layout used by covariance().
+            parts = [np.atleast_1d(np.asarray(chain.mean(param))).ravel() for param in params]
+            return np.concatenate(parts)
 
-    means  = np.asarray([statistic(chain, params) for chain in chains])          # (nchains, nparams)
-    covs   = np.asarray([np.asarray(chain.covariance(params)) for chain in chains])  # (nchains, nparams, nparams)
+    means  = np.asarray([statistic(chain, params) for chain in chains])          # (nchains, total_flat_size)
+    covs   = np.asarray([np.asarray(chain.covariance(params)) for chain in chains])  # (nchains, total_flat_size, total_flat_size)
     wsums  = np.asarray([chain.weight.sum() for chain in chains])
     w2sums = np.asarray([(chain.weight * chain.aweight).sum() for chain in chains])
 
@@ -181,7 +248,9 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     else:
         toret = np.diag(V) / np.diag(Wn1)
 
-    if is_scalar:
+    # Only unwrap to a scalar when the single requested param is truly scalar
+    # (contributes exactly one column); non-scalar params return an array.
+    if is_scalar and toret.size == 1:
         toret = toret[0]
 
     if return_matrices:
@@ -194,6 +263,10 @@ def autocorrelation(chains, params=None):
 
     Adapted from https://github.com/dfm/emcee/blob/main/src/emcee/autocorr.py
 
+    For non-scalar parameters (``shape != ()``), the autocorrelation is computed
+    independently for each element.  A parameter of shape ``(k,)`` contributes
+    k rows to the output.
+
     Parameters
     ----------
     chains : MCSamples or list of MCSamples
@@ -205,8 +278,14 @@ def autocorrelation(chains, params=None):
     Returns
     -------
     autocorr : array
-        Normalised autocorrelation; shape ``(nsamples,)`` for a single
-        parameter, or ``(nparams, nsamples)`` when *params* is a list.
+        Normalised autocorrelation.
+
+        - Single scalar parameter: shape ``(nsamples,)``.
+        - Single non-scalar parameter of shape ``(*var_shape,)``:
+          shape ``(*var_shape, nsamples)``.
+        - List of parameters (possibly mixed): shape
+          ``(total_flat_size, nsamples)`` where each non-scalar parameter
+          contributes its flattened number of elements.
     """
     if not _is_chain_sequence(chains):
         chains = [chains]
@@ -215,9 +294,30 @@ def autocorrelation(chains, params=None):
         params = _varied_names(chains[0])
 
     if isinstance(params, (list, tuple)):
-        return np.array([autocorrelation(chains, param) for param in params])
+        # Concatenate along axis 0 so mixed scalar/non-scalar shapes are handled.
+        # np.atleast_2d turns a scalar result (size,) into (1, size).
+        results = [np.atleast_2d(autocorrelation(chains, param)) for param in params]
+        return np.concatenate(results, axis=0)
 
-    # params is a single name string from here on
+    # Single param from here on
+    value_0 = _vals(chains[0], params)   # (size,) or (size, *var_shape)
+    var_shape = value_0.shape[1:]
+    size = value_0.shape[0]
+
+    if var_shape:
+        # Non-scalar: compute per element and return (*var_shape, size).
+        flat_size = int(np.prod(var_shape))
+        toret = np.zeros((flat_size, size))
+        for chain in chains:
+            value  = _vals(chain, params).reshape(size, flat_size)   # (size, flat_size)
+            weight = chain.weight.ravel()
+            for elem_idx in range(flat_size):
+                col = value[:, elem_idx]
+                x = (col - np.average(col, weights=weight)) * weight
+                toret[elem_idx] += _autocorrelation_1d(x)
+        return (toret / len(chains)).reshape(var_shape + (size,))
+
+    # Scalar param
     toret = 0.0
     for chain in chains:
         value  = _vals(chain, params).ravel()
@@ -236,6 +336,8 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     and https://github.com/blackjax-devs/blackjax/blob/main/blackjax/diagnostics.py
 
     The effective sample size (ESS) is ``(number of samples) / IAT``.
+
+    For non-scalar parameters, IAT is computed independently for each element.
 
     Parameters
     ----------
@@ -266,8 +368,13 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     Returns
     -------
     iat : scalar or array
-        Integrated autocorrelation time; scalar for a single parameter,
-        else 1-D array of length ``len(params)``.
+        Integrated autocorrelation time.
+
+        - Single scalar parameter: scalar.
+        - Single non-scalar parameter of shape ``(*var_shape,)``:
+          array of shape ``(*var_shape,)``.
+        - List of parameters (possibly mixed): 1-D array of length
+          ``total_flat_size``.
     """
     if not _is_chain_sequence(chains):
         chains = [chains]
@@ -285,23 +392,19 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
         params = _varied_names(chains[0])
 
     if isinstance(params, (list, tuple)):
-        return np.array([
-            integrated_autocorrelation_time(
-                chains, param,
-                criterion=criterion, reliable=reliable,
-                check_valid=check_valid, **kwargs,
-            )
+        results = [
+            np.atleast_1d(np.asarray(
+                integrated_autocorrelation_time(
+                    chains, param,
+                    criterion=criterion, reliable=reliable,
+                    check_valid=check_valid, **kwargs,
+                )
+            ))
             for param in params
-        ])
+        ]
+        return np.concatenate(results)
 
     # Single parameter from here on
-    def _auto_window(taus, c):
-        """Automated windowing procedure following Sokal (1989)."""
-        m = np.arange(len(taus)) < c * taus
-        if np.any(m):
-            return np.argmin(m)
-        return len(taus) - 1
-
     sizes = [chain.size for chain in chains]
     if not all(size == sizes[0] for size in sizes):
         raise ValueError('All chains must have the same length; found {}'.format(sizes))
@@ -309,55 +412,20 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
         raise ValueError('Not enough samples ({}) to estimate IAT'.format(sizes))
 
     size = chains[0].size
-    corr = autocorrelation(chains, params)
+    corr = autocorrelation(chains, params)   # (size,) for scalar, (*var_shape, size) for non-scalar
 
-    if criterion == 'min_corr':
-        min_corr_val = kwargs.get('min_corr', 0.0)
-        ix = np.argmin(corr > min_corr_val * corr[0])
-        toret = 2.0 * np.sum(corr[:ix]) - 1.0
-    elif criterion == 'sokal':
-        c_val  = kwargs.get('c', 5.0)
-        taus   = 2.0 * np.cumsum(corr) - 1.0
-        window = _auto_window(taus, c_val)
-        toret  = taus[window]
-    elif criterion == 'geyer':
-        size_even  = size - size % 2
-        corr       = corr[:size_even]
-        corr_even  = corr[0::2].copy()
-        corr_odd   = corr[1::2].copy()
-        corr_sum   = corr_even + corr_odd
-        mask       = np.ones_like(corr_sum, dtype=bool)
-        ix         = np.argmin(mask)
-        mask[:ix]  = False
-        corr_odd[mask] = 0.0
-        if ix < len(mask):
-            mask[ix] = corr_even[ix] <= 0.0
-        corr_even[mask] = 0.0
-        corr_sum = corr_even + corr_odd
-        updated  = np.minimum.accumulate(corr_sum)
-        corr_even[corr_sum > updated] = updated[corr_sum > updated] / 2.0
-        corr_odd[corr_sum > updated]  = updated[corr_sum > updated] / 2.0
-        corr_sum = corr_even + corr_odd
-        toret    = 2.0 * np.sum(corr_sum) - 1.0 - corr_even[ix]
-    else:
-        raise ValueError(
-            'Unknown criterion {!r}; must be one of "min_corr", "sokal", "geyer"'.format(criterion)
-        )
+    if corr.ndim > 1:
+        # Non-scalar parameter: compute IAT per element.
+        flat_size = int(np.prod(corr.shape[:-1]))
+        var_shape = corr.shape[:-1]
+        corr_flat = corr.reshape(flat_size, size)
+        iat_flat = np.array([
+            _iat_from_corr(corr_flat[elem_idx], size, criterion, reliable, check_valid, params, **kwargs)
+            for elem_idx in range(flat_size)
+        ])
+        return iat_flat.reshape(var_shape)
 
-    if reliable * toret > size:
-        msg = (
-            'The chain is shorter than {:d} times the integrated autocorrelation '
-            'time for {!r}. Use this estimate with caution and run a longer chain!\n'
-            'N/{:d} = {:.0f};\ntau: {}'.format(reliable, params, reliable, size / reliable, toret)
-        )
-        if check_valid == 'raise':
-            raise ValueError(msg)
-        elif check_valid == 'warn':
-            warnings.warn(msg)
-        elif check_valid != 'ignore':
-            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]')
-
-    return toret
+    return _iat_from_corr(corr, size, criterion, reliable, check_valid, params, **kwargs)
 
 
 def _autocorrelation_1d(x):
@@ -401,6 +469,9 @@ def geweke(chains, params=None, first=0.1, last=0.5):
     Tests stationarity by comparing the mean of the first and last
     fractions of each chain relative to the combined spectral variance.
 
+    For non-scalar parameters, the statistic is computed independently
+    for each element.
+
     Parameters
     ----------
     chains : MCSamples or list of MCSamples
@@ -416,8 +487,13 @@ def geweke(chains, params=None, first=0.1, last=0.5):
     Returns
     -------
     geweke : array
-        Geweke statistics; shape ``(nchains,)`` for a single parameter,
-        or ``(nparams, nchains)`` for multiple parameters.
+        Geweke statistics.
+
+        - Single scalar parameter: shape ``(nchains,)``.
+        - Single non-scalar parameter of shape ``(*var_shape,)``:
+          shape ``(*var_shape, nchains)``.
+        - List of parameters (possibly mixed): shape
+          ``(total_flat_size, nchains)``.
     """
     if not _is_chain_sequence(chains):
         chains = [chains]
@@ -426,33 +502,56 @@ def geweke(chains, params=None, first=0.1, last=0.5):
         params = _varied_names(chains[0])
 
     if isinstance(params, (list, tuple)):
-        return np.array([geweke(chains, param, first=first, last=last) for param in params])
+        # np.atleast_2d turns (nchains,) → (1, nchains) so shapes are compatible.
+        results = [np.atleast_2d(geweke(chains, param, first=first, last=last)) for param in params]
+        return np.concatenate(results, axis=0)
 
     # Single parameter from here on
     toret = []
     for chain in chains:
-        value   = _vals(chain, params).ravel()
-        aweight = chain.aweight.ravel()
-        fweight = chain.fweight.ravel()
+        value   = _vals(chain, params)         # (nsamples,) or (nsamples, *var_shape)
+        aweight = chain.aweight.ravel()        # (nsamples,)
+        fweight = chain.fweight.ravel()        # (nsamples,)
 
-        ifirst = int(first * value.size + 0.5)
-        ilast  = int(last  * value.size + 0.5)
+        nsamples = chain.size                  # number of sample steps (not value.size!)
+        ifirst = int(first * nsamples + 0.5)
+        ilast  = int(last  * nsamples + 0.5)
 
+        # Slice along the sample axis (axis 0); works for both scalar and non-scalar.
         value_first,   value_last   = value[:ifirst],   value[ilast:]
         aweight_first, aweight_last = aweight[:ifirst], aweight[ilast:]
         fweight_first, fweight_last = fweight[:ifirst], fweight[ilast:]
 
-        if value_first.size < 2 or value_last.size < 2:
+        nfirst = value_first.shape[0]
+        nlast  = value_last.shape[0]
+        if nfirst < 2 or nlast < 2:
             raise ValueError(
-                'Not enough samples ({:d}) to estimate Geweke statistics'.format(value.size)
+                'Not enough samples ({:d}) to estimate Geweke statistics'.format(nsamples)
             )
 
-        mean_first = np.average(value_first, weights=aweight_first * fweight_first)
-        mean_last  = np.average(value_last,  weights=aweight_last  * fweight_last)
-        diff = np.abs(mean_first - mean_last)
-        var_first = np.cov(value_first, aweights=aweight_first, fweights=fweight_first)
-        var_last  = np.cov(value_last,  aweights=aweight_last,  fweights=fweight_last)
-        diff /= (float(var_first) + float(var_last)) ** 0.5
-        toret.append(diff)
+        w_first = aweight_first * fweight_first
+        w_last  = aweight_last  * fweight_last
 
-    return np.array(toret)
+        var_shape = value.shape[1:]
+        if var_shape:
+            # Non-scalar: compute per element.
+            flat_size = int(np.prod(var_shape))
+            vf = value_first.reshape(nfirst, flat_size)
+            vl = value_last.reshape(nlast,   flat_size)
+            diff_flat = np.empty(flat_size)
+            for elem_idx in range(flat_size):
+                mean_f = np.average(vf[:, elem_idx], weights=w_first)
+                mean_l = np.average(vl[:, elem_idx], weights=w_last)
+                var_f  = np.cov(vf[:, elem_idx], aweights=aweight_first, fweights=fweight_first)
+                var_l  = np.cov(vl[:, elem_idx], aweights=aweight_last,  fweights=fweight_last)
+                diff_flat[elem_idx] = np.abs(mean_f - mean_l) / (float(var_f) + float(var_l)) ** 0.5
+            toret.append(diff_flat.reshape(var_shape))
+        else:
+            mean_first = np.average(value_first, weights=w_first)
+            mean_last  = np.average(value_last,  weights=w_last)
+            var_first = np.cov(value_first, aweights=aweight_first, fweights=fweight_first)
+            var_last  = np.cov(value_last,  aweights=aweight_last,  fweights=fweight_last)
+            toret.append(np.abs(mean_first - mean_last) / (float(var_first) + float(var_last)) ** 0.5)
+
+    # Stack along a new last axis: scalar → (nchains,); (*var_shape,) → (*var_shape, nchains).
+    return np.stack(toret, axis=-1)

@@ -394,7 +394,6 @@ class MCSamples(Samples):
         import tabulate as _tabulate
 
         if params is None:
-            # Default: non-derived variables only (exclude logposterior, weights, …)
             varied_params = [v.name for v in self._data if not v.derived]
         else:
             _, varied_params = _normalise_params(self, params)
@@ -403,53 +402,70 @@ class MCSamples(Samples):
                           'quantile:1sigma', 'interval:1sigma']
         is_latex = 'latex' in tablefmt
 
+        def _fmt_val(val, ref_error):
+            xr, _ = round_measurement(val, ref_error, sigfigs=sigfigs)
+            return f'${xr}$' if is_latex else xr
+
+        def _fmt_errs(lo_offset, hi_offset):
+            _, lo_r, hi_r = round_measurement(
+                0.0, hi_offset, lo_offset,
+                sigfigs=sigfigs, positive_sign='u',
+            )
+            if is_latex:
+                return '${{}}_{{{lo}}}^{{{hi}}}$'.format(lo=lo_r, hi=hi_r)
+            return f'{lo_r}/{hi_r}'
+
         rows = []
-        for p in varied_params:
-            row = []
-            if is_latex and hasattr(p, 'latex'):
-                row.append(p.latex(inline=True))
-            else:
-                row.append(str(p.name) if hasattr(p, 'name') else str(p))
+        for pname in varied_params:
+            var_shape = VariableCollection.__getitem__(self, pname).shape
 
-            ref_center = float(np.ravel(self.mean(p))[0])
-            ref_error  = float(np.ravel(self.std(p))[0])
-
-            def _fmt_val(val):
-                xr, _ = round_measurement(val, ref_error, sigfigs=sigfigs)
-                return f'${xr}$' if is_latex else xr
-
-            def _fmt_errs(lo_offset, hi_offset):
-                _, lo_r, hi_r = round_measurement(
-                    0.0, hi_offset, lo_offset,
-                    sigfigs=sigfigs, positive_sign='u',
-                )
-                if is_latex:
-                    return '${{}}_{{{lo}}}^{{{hi}}}$'.format(lo=lo_r, hi=hi_r)
-                return f'{lo_r}/{hi_r}'
-
+            # Pre-compute all stats once per param, then index per element below.
+            precomp = {}
+            precomp['mean'] = np.asarray(self.mean(pname))
+            precomp['std']  = np.asarray(self.std(pname))
             for quantity in quantities:
-                if quantity in ('argmax', 'mean', 'median', 'std'):
-                    val = float(np.ravel(getattr(self, quantity)(p))[0])
-                    row.append(_fmt_val(val))
+                if quantity in precomp:
+                    continue
+                if quantity in ('argmax', 'median'):
+                    precomp[quantity] = np.asarray(getattr(self, quantity)(pname))
                 elif quantity.startswith('quantile:'):
                     match = re.match(r'quantile:(\d+)sigma', quantity)
                     if match is None:
                         raise ValueError(f'Cannot parse quantity {quantity!r}; expected e.g. quantile:1sigma')
-                    nsigmas = int(match.group(1))
-                    q_lo, q_hi = _nsigmas_to_quantiles_1d_sym(nsigmas)
-                    lo, hi = (float(np.ravel(v)[0])
-                               for v in self.quantile(p, q=(q_lo, q_hi)))
-                    row.append(_fmt_errs(lo - ref_center, hi - ref_center))
+                    q_lo, q_hi = _nsigmas_to_quantiles_1d_sym(int(match.group(1)))
+                    lo_arr, hi_arr = self.quantile(pname, q=(q_lo, q_hi))
+                    precomp[quantity] = (np.asarray(lo_arr), np.asarray(hi_arr))
                 elif quantity.startswith('interval:'):
                     match = re.match(r'interval:(\d+)sigma', quantity)
                     if match is None:
                         raise ValueError(f'Cannot parse quantity {quantity!r}; expected e.g. interval:1sigma')
-                    nsigmas = int(match.group(1))
-                    lo, hi = (float(v) for v in self.interval(p, nsigmas=nsigmas))
-                    row.append(_fmt_errs(lo - ref_center, hi - ref_center))
-                else:
+                    lo_arr, hi_arr = self.interval(pname, nsigmas=int(match.group(1)))
+                    precomp[quantity] = (np.asarray(lo_arr), np.asarray(hi_arr))
+                elif quantity != 'std':
                     raise ValueError(f'Unknown quantity {quantity!r}')
-            rows.append(row)
+
+            # One table row per element (np.ndindex(()) yields a single () for scalars).
+            for elem_idx in (np.ndindex(var_shape) if var_shape else [()]):
+                row = []
+                if var_shape:
+                    row.append(f'{pname}[{", ".join(str(i) for i in elem_idx)}]')
+                else:
+                    row.append(str(pname))
+
+                ref_center = float(precomp['mean'][elem_idx])
+                ref_error  = float(precomp['std'][elem_idx])
+
+                for quantity in quantities:
+                    if quantity in ('argmax', 'mean', 'median', 'std'):
+                        row.append(_fmt_val(float(precomp[quantity][elem_idx]), ref_error))
+                    elif quantity.startswith(('quantile:', 'interval:')):
+                        lo_arr, hi_arr = precomp[quantity]
+                        lo = float(lo_arr[elem_idx])
+                        hi = float(hi_arr[elem_idx])
+                        row.append(_fmt_errs(lo - ref_center, hi - ref_center))
+                    else:
+                        raise ValueError(f'Unknown quantity {quantity!r}')
+                rows.append(row)
 
         headers = quantities
         if 'list' in tablefmt:

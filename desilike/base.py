@@ -1920,6 +1920,9 @@ def _run_compile_phases(root: Calculator) -> '_CompileContext':
     return ctx
 
 
+build = compile
+
+
 def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=False):
     """
     Build a derivative callable for a compiled graph.

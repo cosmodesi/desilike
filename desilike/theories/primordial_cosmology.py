@@ -127,6 +127,8 @@ class PrimordialCosmology(Calculator):
                 req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_cb'})
             elif param.basename in ['rs_drag']:
                 req = ('thermodynamics.rs_drag', {'of': 'delta_cb'})
+            elif param.basename in ['age']:
+                req = ('background.age', {})
             else:
                 req = (f'params.{param.basename}', {})
             self._get_derived[param.name] = req
@@ -273,7 +275,12 @@ class PrimordialCosmology(Calculator):
                 # Placeholder of correct shape for compile-time structure inference.
                 shape = tuple(spec[coord].size for coord in _COORDS)
                 leaves.append(jnp.zeros(shape))
-        return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params, 'get_derived': self._get_derived}
+        # Derived param values as leaves so they propagate as JAX Tracers through the
+        # external (pure_callback) path and appear correctly in derived_dict.
+        for param in self.derived_params:
+            v = param._value
+            leaves.append(jnp.asarray(v) if v is not None else jnp.zeros(param.shape or ()))
+        return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params, 'get_derived': self._get_derived, 'derived_params': self.derived_params}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
@@ -282,8 +289,14 @@ class PrimordialCosmology(Calculator):
         obj.params = aux['params']
         obj._get_derived = aux['get_derived']
         obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
+        n_results = len(aux['ordered_specs'])
         obj._param_values = children[0]
-        obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children[1:])}
+        obj._results = {sk: arr for (sk, _), arr in zip(aux['ordered_specs'], children[1:1 + n_results])}
+        obj.derived_params = aux['derived_params']
+        # Restore derived param _value from leaves so they flow as JAX Tracers
+        # when this is called inside _run_graph (external node path).
+        for param, val in zip(list(obj.derived_params), children[1 + n_results:]):
+            param._value = val
         return obj
 
 
@@ -538,6 +551,8 @@ class CosmoprimoCosmology(PrimordialCosmology):
                     # z-independent; broadcast to the registered z grid so get()'s
                     # per-z searchsorted indexing below still applies cleanly.
                     result = jnp.full(spec['z'].shape, result)
+            elif method_key == 'background.age':
+                result = cosmo.get_background().age
             elif method_key.startswith('params.'):
                 # Raw parameter/derived-quantity value, exposed as a tree_flatten leaf so
                 # external (pure_callback) consumers see the live, per-call value instead

@@ -235,7 +235,7 @@ class BAOSpectrum2Template(Spectrum2Template):
         # Fiducial BAO distance ratios
         rd = self._fiducial.rs_drag
         DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(z))
-        DM_fid = self._fiducial.comoving_transverse_distance(z)
+        DM_fid = self._fiducial.comoving_angular_distance(z)
         DV_fid = DH_fid**eta * DM_fid**(1. - eta) * z**(1. / 3.)
         self._DH_over_rd_fid = float(DH_fid / rd)
         self._DM_over_rd_fid = float(DM_fid / rd)
@@ -682,7 +682,7 @@ class DirectSpectrum2Template(Spectrum2Template):
                 {'of': 'theta_cb', 'z': self.z},
             ],
             'background.efunc':                        [{'z': self.z}],
-            'background.comoving_transverse_distance': [{'z': self.z}],
+            'background.comoving_angular_distance': [{'z': self.z}],
         }
         if with_now:
             reqs['fourier.pk_now'] = [
@@ -692,7 +692,7 @@ class DirectSpectrum2Template(Spectrum2Template):
 
         self._fiducial = _get_fiducial(fiducial)
         self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        self._DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
+        self._DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
 
         # Fiducial PK arrays (used by e.g. ResummedBAOWigglesPTSpectrum2Poles for damping scales).
         fo = self._fiducial.get_fourier()
@@ -723,7 +723,7 @@ class DirectSpectrum2Template(Spectrum2Template):
         self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
         self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
         DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
-        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
+        DM = self.cosmo.get_background().comoving_angular_distance(z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
@@ -948,7 +948,7 @@ class TurnOverSpectrum2Template(Spectrum2Template):
 
         # Fiducial distance combinations used for observable outputs.
         DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
+        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
         DV_fid = DH_fid ** eta * DM_fid ** (1. - eta) * self.z ** (1. / 3.)
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid
         self._DH_over_DM_fid = DH_fid / DM_fid
@@ -1135,7 +1135,7 @@ class BAOTheory(Calculator):
         from cosmoprimo import constants
         self.cosmo.add_requirements({
             'background.efunc':                        [{'z': float(z)}],
-            'background.comoving_transverse_distance': [{'z': float(z)}],
+            'background.comoving_angular_distance': [{'z': float(z)}],
             'thermodynamics.rs_drag':                  None,
         })
         self.z = float(z)
@@ -1143,7 +1143,7 @@ class BAOTheory(Calculator):
         self._fiducial = _get_fiducial(fiducial)
         rd_fid = self._fiducial.rs_drag
         DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(self.z))
-        DM_fid = self._fiducial.comoving_transverse_distance(self.z)
+        DM_fid = self._fiducial.comoving_angular_distance(self.z)
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_rd_fid = DH_fid / rd_fid
         self._DM_over_rd_fid = DM_fid / rd_fid
@@ -1153,7 +1153,7 @@ class BAOTheory(Calculator):
     def __call__(self):
         from cosmoprimo import constants
         efunc = self.cosmo.get_background().efunc(z=self.z)
-        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
+        DM = self.cosmo.get_background().comoving_angular_distance(z=self.z)
         rd = self.cosmo.get_thermodynamics().rs_drag
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
@@ -1291,7 +1291,7 @@ class TurnOverTheory(Calculator):
         self.cosmo.add_requirements({
             'fourier.pk':                              [{'of': 'delta_cb', 'z': float(z), 'k': self._k_fine}],
             'background.efunc':                        [{'z': float(z)}],
-            'background.comoving_transverse_distance': [{'z': float(z)}],
+            'background.comoving_angular_distance': [{'z': float(z)}],
         })
         self.z = float(z)
         self._eta = float(eta)
@@ -1303,7 +1303,7 @@ class TurnOverTheory(Calculator):
         self._pkTO_dd_fid = float(pk_interp.to_1d(z=self.z)(self._kTO_fid))
         # Fiducial distance combinations.
         DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
+        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_DM_fid = DH_fid / DM_fid
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid
@@ -1316,7 +1316,7 @@ class TurnOverTheory(Calculator):
         self.kTO = k_jnp[imax]
         self.pkTO_dd = pk_fine[imax]
         efunc = self.cosmo.get_background().efunc(z=self.z)
-        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
+        DM = self.cosmo.get_background().comoving_angular_distance(z=self.z)
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_DM = DH / DM

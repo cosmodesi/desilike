@@ -96,7 +96,7 @@ def _ap_k_mu(k, mu, qpar, qper):
 
 def _ap_auto_params(apmode):
     """Return the AP Parameter list for the given *apmode*.  Raises on unknown mode."""
-    _ap_prior = dict(limits=[0.5, 2.])
+    _ap_prior = dict(limits=[0.8, 1.2])
     _ap_ref = dict(dist='norm', loc=1., scale=0.05)
     _ap_fd = 0.008
     if apmode == 'qparqper':

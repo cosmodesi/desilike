@@ -2243,7 +2243,6 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         self.pt = pt
         if template is not None:
             self.pt.update(template=template)
-        self.pt.template.update(with_now='peakaverage')
 
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                       prior_basis='physical_aap', fsat=None, sigv=None,

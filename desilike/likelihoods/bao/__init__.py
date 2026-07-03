@@ -26,27 +26,44 @@ _TRACER_FILES = {
 }
 
 # BAOTheory attribute names vs quantity labels in data files.
-_QUANTITY_TO_PARAM = {'DM_over_rs': 'DM_over_rd', 'DH_over_rs': 'DH_over_rd', 'DV_over_rs': 'DV_over_rd'}
+_QUANTITY_TO_PARAM = {
+    'DM_over_rs': 'DM_over_rd',
+    'DH_over_rs': 'DH_over_rd',
+    'DV_over_rs': 'DV_over_rd',
+    'F_AP':       'F_AP',        # Alcock-Paczyński: DM_over_rd / DH_over_rd
+}
 
 _GITHUB_BASE = 'https://raw.githubusercontent.com/CobayaSampler/bao_data/master/desi_bao_dr2/'
 
 
 def _read_mean_file(fn):
-    """Return (z_eff, flat_values, param_names) from a BAO mean-values file."""
-    z_list, value_list, param_list = [], [], []
+    """Return a list of (z_eff, values_array, param_names) tuples, one per distinct redshift.
+
+    Rows are grouped by redshift in the order they first appear in the file, so
+    single-z files return a one-element list and multi-z files (e.g. ALL) return
+    one tuple per redshift bin.
+    """
+    z_order = []
+    z_values = {}
+    z_params = {}
     with open(fn) as file_handle:
         for line in file_handle:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
             parts = line.split()
-            z_list.append(float(parts[0]))
-            value_list.append(float(parts[1]))
+            z_eff = float(parts[0])
+            value = float(parts[1])
             quantity = parts[2]
             if quantity not in _QUANTITY_TO_PARAM:
                 raise ValueError(f'Unknown quantity {quantity!r} in {fn}')
-            param_list.append(_QUANTITY_TO_PARAM[quantity])
-    return float(z_list[0]), np.array(value_list, dtype='f8'), param_list
+            if z_eff not in z_values:
+                z_order.append(z_eff)
+                z_values[z_eff] = []
+                z_params[z_eff] = []
+            z_values[z_eff].append(value)
+            z_params[z_eff].append(_QUANTITY_TO_PARAM[quantity])
+    return [(z_eff, np.array(z_values[z_eff], dtype='f8'), z_params[z_eff]) for z_eff in z_order]
 
 
 def _read_cov_file(fn, size):
@@ -115,13 +132,16 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
 
         for zbin in zbins:
             mean_fn, cov_fn = _TRACER_FILES[zbin]
-            z_eff, meas_values, param_names = _read_mean_file(os.path.join(data_dir, mean_fn))
-            cov_block = _read_cov_file(os.path.join(data_dir, cov_fn), len(param_names))
-            obs = BAOCompressionObservable(
-                data=meas_values, parameters=param_names, name=zbin,
-                z=z_eff, cosmo=cosmo,
-            )
-            observables.append(obs)
+            z_groups = _read_mean_file(os.path.join(data_dir, mean_fn))
+            total_params = sum(len(param_names) for _, _, param_names in z_groups)
+            cov_block = _read_cov_file(os.path.join(data_dir, cov_fn), total_params)
+            for z_eff, meas_values, param_names in z_groups:
+                obs_name = f'{zbin}/{z_eff}' if len(z_groups) > 1 else zbin
+                obs = BAOCompressionObservable(
+                    data=meas_values, parameters=param_names, name=obs_name,
+                    z=z_eff, cosmo=cosmo,
+                )
+                observables.append(obs)
             covariance_blocks.append(cov_block)
 
         # Assemble block-diagonal joint covariance (tracers are uncorrelated).

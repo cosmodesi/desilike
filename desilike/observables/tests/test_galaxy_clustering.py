@@ -34,7 +34,7 @@ def _make_correlation_theory(s, ells=(0, 2)):
 
 def test_spectrum2poles_no_window():
     """Spectrum2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import compile
 
     k = np.linspace(0.01, 0.3, 30)
@@ -53,7 +53,7 @@ def test_spectrum2poles_no_window():
 
 def test_spectrum2poles_with_data():
     """Spectrum2PolesObservable: data provided, flatdata set correctly."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import compile
 
     k = np.linspace(0.01, 0.3, 20)
@@ -74,7 +74,7 @@ def test_spectrum2poles_with_data():
 
 def test_spectrum2poles_with_window():
     """Spectrum2PolesObservable: window matrix applied correctly."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import compile
 
     k_data = np.linspace(0.02, 0.25, 15)
@@ -103,7 +103,7 @@ def test_spectrum2poles_with_window():
 
 def test_correlation2poles_no_window():
     """Correlation2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
-    from desilike.observables import Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering import Correlation2PolesObservable
     from desilike.base import compile
 
     s = np.linspace(20., 180., 20)
@@ -121,7 +121,7 @@ def test_correlation2poles_no_window():
 
 def test_correlation2poles_with_data():
     """Correlation2PolesObservable: data and covariance stored correctly."""
-    from desilike.observables import Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering import Correlation2PolesObservable
     from desilike.base import compile
 
     s = np.linspace(20., 180., 15)
@@ -147,7 +147,7 @@ def test_correlation2poles_with_data():
 
 def test_gaussian_likelihood_basic():
     """ObservablesGaussianLikelihood: logpdf is finite, theory() shape matches flatdata."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
 
@@ -171,7 +171,7 @@ def test_gaussian_likelihood_basic():
 
 def test_gaussian_likelihood_obs_covariance():
     """ObservablesGaussianLikelihood: uses observable's covariance when none provided."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
 
@@ -195,7 +195,7 @@ def test_gaussian_likelihood_obs_covariance():
 
 def test_gaussian_likelihood_scale_covariance():
     """ObservablesGaussianLikelihood: scale_covariance rescales precision."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
 
@@ -233,7 +233,7 @@ def test_gaussian_likelihood_scale_covariance():
 
 def test_gaussian_likelihood_multi_observable():
     """ObservablesGaussianLikelihood: two observables sharing a template are concatenated correctly."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
@@ -270,7 +270,7 @@ def test_gaussian_likelihood_multi_observable():
 
 def test_gaussian_likelihood_hartlap():
     """ObservablesGaussianLikelihood: Hartlap correction scales precision correctly."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
 
@@ -285,7 +285,7 @@ def test_gaussian_likelihood_hartlap():
 
     obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
     like = ObservablesGaussianLikelihood(observables=obs, covariance=cov,
-                                         correct_covariance=dict(correction='hartlap', nobs=nobs))
+                                         correct_covariance=dict(correction='hartlap2007', nobs=nobs))
 
     pipe = compile(like)
     pipe_params = {p.name: float(p.value) for p in pipe.params}
@@ -373,7 +373,7 @@ def _make_correlation2_lsstypes():
 def test_spectrum2poles_lsstypes():
     """Spectrum2PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
@@ -410,7 +410,7 @@ def test_spectrum2poles_lsstypes():
 def test_spectrum3poles_lsstypes():
     """Spectrum3PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
-    from desilike.observables import Spectrum3PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum3PolesObservable
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
@@ -439,7 +439,7 @@ def test_spectrum3poles_lsstypes():
 def test_correlation2poles_lsstypes():
     """Correlation2PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
-    from desilike.observables import Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering import Correlation2PolesObservable
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerCorrelation2Poles,
                                                       DampedBAOWigglesPTSpectrum2Poles,
@@ -478,7 +478,7 @@ def test_correlation2poles_lsstypes():
 def test_gaussian_likelihood_lsstypes_covariance():
     """ObservablesGaussianLikelihood: lsstypes CovarianceMatrix accepted for multi-observable case."""
     import lsstypes as types
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
@@ -516,7 +516,7 @@ def test_gaussian_likelihood_lsstypes_covariance():
 
 def test_spectrum2poles_templates_scalar():
     """templates: scalar Parameter contribution is added to flattheory and is discoverable in the graph."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import Parameter, compile
 
     k = np.linspace(0.01, 0.3, 20)
@@ -546,7 +546,7 @@ def test_spectrum2poles_templates_scalar():
 
 def test_spectrum2poles_templates_vector():
     """templates: vector Parameter contribution (shape=(m,)) is added to flattheory."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import Parameter, compile
 
     k = np.linspace(0.01, 0.3, 20)
@@ -577,7 +577,7 @@ def test_spectrum2poles_templates_vector():
 
 def test_spectrum2poles_templates_dict():
     """templates: dict argument is converted to Parameter, discovered in graph."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import Parameter, compile
 
     k = np.linspace(0.01, 0.3, 15)
@@ -605,7 +605,7 @@ def test_spectrum2poles_templates_dict():
 
 def test_spectrum2poles_templates_shape_error():
     """templates: array with wrong shape raises ValueError at construction."""
-    from desilike.observables import Spectrum2PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.base import Parameter
 
     k = np.linspace(0.01, 0.3, 10)
@@ -621,7 +621,7 @@ def test_spectrum2poles_templates_shape_error():
 
 def test_correlation2poles_templates():
     """Correlation2PolesObservable: scalar template contribution is added to flattheory."""
-    from desilike.observables import Correlation2PolesObservable
+    from desilike.observables.galaxy_clustering import Correlation2PolesObservable
     from desilike.base import Parameter, compile
 
     s = np.linspace(20., 180., 20)
@@ -650,7 +650,7 @@ def test_correlation2poles_templates():
 def test_spectrum3poles_templates():
     """Spectrum3PolesObservable: templates are stored and Parameter is discovered in graph."""
     import lsstypes as types
-    from desilike.observables import Spectrum3PolesObservable
+    from desilike.observables.galaxy_clustering import Spectrum3PolesObservable
     from desilike.base import Parameter
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 

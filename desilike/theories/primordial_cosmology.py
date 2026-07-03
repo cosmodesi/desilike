@@ -16,13 +16,14 @@ from pathlib import Path
 
 import numpy as np
 import jax.numpy as jnp
+from cosmoprimo import CosmologyInputError, CosmologyComputationError
 
 from ..base import Calculator
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
 
-_COORDS = ['z', 'k']
+_COORDS = ['z', 'k', 'r']
 
 
 def _normalize_static(static):
@@ -369,6 +370,13 @@ def _build_cosmoprimo(fiducial, params):
     return fiducial.clone(base='input', **kw)
 
 
+def _nan_like(result):
+    """Replace array leaves in *result* (array, or dict of arrays) with same-shape NaNs."""
+    if isinstance(result, dict):
+        return {key: jnp.full(jnp.shape(value), jnp.nan) for key, value in result.items()}
+    return jnp.full(jnp.shape(result), jnp.nan)
+
+
 class CosmoprimoCosmology(PrimordialCosmology):
     r"""
     :class:`PrimordialCosmology` backed by :mod:`cosmoprimo`.
@@ -392,8 +400,17 @@ class CosmoprimoCosmology(PrimordialCosmology):
       the primordial scalar power spectrum :math:`P_R(k)` on the registered k grid.
     * ``'harmonic.lensed_cl'``                       — kwargs: ``ellmax``; returns a dict
       keyed by ``'tt', 'ee', 'bb', 'te'`` of raw (dimensionless) :math:`C_\ell`.
+    * ``'harmonic.unlensed_cl'``                     — kwargs: ``ellmax``; same as
+      ``'harmonic.lensed_cl'`` but for the unlensed spectra.
     * ``'harmonic.lens_potential_cl'``               — kwargs: ``ellmax``; returns a dict
       keyed by ``'pp', 'tp', 'ep'`` of raw (dimensionless) :math:`C_\ell`.
+    * ``'fourier.sigma_rz'``                         — kwargs: ``of``, ``z``, ``r``;
+      :math:`\sigma_r(z)` (RMS of ``of`` perturbations in a sphere of radius ``r``,
+      in :math:`\mathrm{Mpc}/h`), shaped ``(z, r)``. Matches cosmoprimo's own
+      ``Fourier.sigma_rz`` naming.
+    * ``'background.Omega_b'``, ``'background.Omega_cdm'``, ``'background.Omega_ncdm_tot'``
+      — kwargs: ``z``; density parameters (unitless, no ``h`` rescaling needed). Matches
+      cosmoprimo's own ``Background`` method names.
     * ``'thermodynamics.rs_drag'``                  —
     * ``'params.N_eff'``                            — effective number of relativistic species :math:`N_\mathrm{eff}`.
     * ``'params.<name>'``                           — .
@@ -506,7 +523,38 @@ class CosmoprimoCosmology(PrimordialCosmology):
         params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
                   for param in self.params}
         self._param_values = params
-        self._cosmo = _build_cosmoprimo(self._fiducial, params)
+        if self._is_external:
+            try:
+                self._cosmo = _build_cosmoprimo(self._fiducial, params)
+                self._run_requirements(params)
+            except (CosmologyInputError, CosmologyComputationError):
+                # Unphysical or numerically-pathological input (e.g. omega_cdm < 0, or a
+                # solver failure raised lazily from cosmo.get_fourier()/get_background()
+                # below): external engines run through pure_callback with concrete
+                # (non-Tracer) values, so cosmoprimo's usual "raise outside jax tracing,
+                # NaN inside" fallback (exception_or_nan) always raises here, even under
+                # jax.jit -- it can never see a real Tracer inside the callback. Mirror
+                # that same eager-raise / traced-NaN contract explicitly: re-raise unless
+                # the *enclosing* graph execution is jax-traced (node._is_tracing, set by
+                # base.py's _run_graph right before dispatching this node's pure_callback,
+                # since that is the only place able to observe the outer trace status).
+                if not getattr(self, '_is_tracing', False):
+                    raise
+                self._cosmo = self._fiducial  # valid; used only for correctly-shaped placeholders
+                self._run_requirements(params)
+                for spec_key in self._requirements:
+                    self._results[spec_key] = _nan_like(self._results[spec_key])
+                for param in self.derived_params:
+                    param.value = _nan_like(param.value)
+        else:
+            # JAX-native: tracers survive end-to-end (no pure_callback boundary), so
+            # cosmoprimo's own exception_or_nan already raises in eager / NaNs under
+            # jax.jit-grad-vmap tracing without any extra handling needed here.
+            self._cosmo = _build_cosmoprimo(self._fiducial, params)
+            self._run_requirements(params)
+
+    def _run_requirements(self, params):
+        """Populate ``self._results`` / ``self.derived_params`` from ``self._cosmo``."""
         cosmo = self._cosmo
         for spec_key, spec in self._requirements.items():
             method_key = spec_key[0]
@@ -542,9 +590,18 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 # (e.g. to muK^2) is left to the consumer, matching e.g. background.* above.
                 cl = cosmo.get_harmonic().lensed_cl(ellmax=static['ellmax'])
                 result = {name: cl[name] for name in ['tt', 'ee', 'bb', 'te']}
+            elif method_key == 'harmonic.unlensed_cl':
+                cl = cosmo.get_harmonic().unlensed_cl(ellmax=static['ellmax'])
+                result = {name: cl[name] for name in ['tt', 'ee', 'bb', 'te']}
             elif method_key == 'harmonic.lens_potential_cl':
                 cl = cosmo.get_harmonic().lens_potential_cl(ellmax=static['ellmax'])
                 result = {name: cl[name] for name in ['pp', 'tp', 'ep']}
+            elif method_key == 'fourier.sigma_rz':
+                # cosmoprimo's sigma_rz(r, z) returns shape (r, z); transpose to the (z, r)
+                # convention used elsewhere (e.g. 'fourier.pk' returns (z, k)).
+                result = cosmo.get_fourier().sigma_rz(spec['r'], spec['z'], of=static['of']).T
+            elif method_key in ('background.Omega_b', 'background.Omega_cdm', 'background.Omega_ncdm_tot'):
+                result = getattr(cosmo.get_background(), method_key.split('.')[1])(spec['z'])
             elif method_key == 'thermodynamics.rs_drag':
                 result = cosmo.get_thermodynamics().rs_drag
                 if 'z' in spec:

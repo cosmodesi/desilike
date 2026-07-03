@@ -93,6 +93,81 @@ class TestCosmoprimoCosmology:
         np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag,
                                     cosmo.get('thermodynamics.rs_drag'))
 
+    def test_external_engine_invalid_input_raises_eager_nans_under_jit(self):
+        """External engines (camb, class) run through pure_callback with concrete values, so
+        cosmoprimo's usual 'raise outside jax tracing, NaN inside' fallback (exception_or_nan)
+        can never see a real Tracer there and always raises, even under jax.jit. __call__
+        mirrors that same eager-raise / traced-NaN contract explicitly (via
+        node_state['is_tracing'], threaded in by base.py's _run_graph/_run_or_cache): an
+        unphysical point (e.g. omega_cdm < 0) still raises in plain eager use (matching the
+        JAX-native engine's behavior, see test below -- though here the underlying
+        CosmologyInputError comes back wrapped by pure_callback, e.g. as
+        jax.errors.JaxRuntimeError or ValueError depending on the JAX/backend version; assert
+        broadly on Exception rather than pin an exact wrapper type), but under jax.jit falls
+        back to the (valid) fiducial cosmology for shapes and NaNs every result instead of
+        crashing.
+
+        Reads results via return_derived=True rather than cosmo.get(...) after the call:
+        base.py's _run_graph resets a traced node's __dict__ back to its pre-call snapshot
+        once the trace finishes (to avoid leaking JAX Tracers into later eager calls), and
+        jax.pure_callback only actually *invokes* its Python callback at program execution
+        time -- which happens after that reset. So a post-call attribute read would observe
+        stale (pre-call) state, not the fresh computation; only the value threaded back
+        through the compiled pipeline's own return path is reliable."""
+        from desilike.base import compile, get_params
+        from desilike.parameter import Parameter
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        cosmo0 = CosmoprimoCosmology(engine='camb', fiducial='DESI')
+        vc = get_params(cosmo0)
+        vc.set(Parameter('Omega_m', value=0.0, derived=True))
+        cosmo = CosmoprimoCosmology(engine='camb', fiducial='DESI', params=vc)
+        pipe = compile(cosmo)
+        defaults = {p.name: float(p._value) for p in get_params(cosmo)}
+
+        # Sanity: a valid point gives a finite derived Omega_m.
+        _, deriveds = pipe(defaults, return_derived=True)
+        assert np.isfinite(float(deriveds['Omega_m']))
+
+        # Unphysical point, eager: raises (loud, useful for direct/debugging use). pure_callback
+        # wraps the original CosmologyInputError, even outside jax.jit.
+        bad_eager = {**defaults, 'omega_cdm': -0.05}
+        with pytest.raises(Exception):
+            pipe(bad_eager, return_derived=True)
+
+        # Same shape of unphysical point (distinct value: the failed eager call above already
+        # marked bad_eager as this node's "last params" before raising, since that bookkeeping
+        # happens before node() runs -- reusing the same dict here would hit that stale cache
+        # and skip re-execution instead of actually exercising the jit path), under jax.jit:
+        # the full graph is always built regardless of any prior gate, so this must degrade to
+        # NaN instead of crashing.
+        bad_jit = {**defaults, 'omega_cdm': -0.06}
+        pipe_rd = lambda p: pipe(p, return_derived=True)
+        _, deriveds_jit = jax.jit(pipe_rd)(bad_jit)
+        assert np.isnan(float(deriveds_jit['Omega_m']))
+
+    def test_native_engine_invalid_input_raises_eager_nans_under_jit(self):
+        """JAX-native engines (eisenstein_hu) need no special handling: tracers survive
+        end-to-end (no pure_callback boundary), so cosmoprimo's own exception_or_nan already
+        raises in eager and NaNs under jax.jit by itself. Regression guard that the
+        base.py/_run_requirements refactor for external engines left this path unaffected."""
+        from cosmoprimo import CosmologyInputError
+        from desilike.base import compile, get_params
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
+        k = np.linspace(0.01, 0.2, 5)
+        cosmo.add_requirements({'fourier.pk': [{'of': 'delta_cb', 'z': 0.5, 'k': k}]})
+        pipe = compile(cosmo)
+        defaults = {p.name: float(p._value) for p in get_params(cosmo)}
+        bad = {**defaults, 'omega_cdm': -0.05}
+
+        with pytest.raises(CosmologyInputError):
+            pipe(bad, return_derived=True)
+
+        jit_out = jax.jit(pipe)(bad)
+        assert jit_out is None  # __call__ returns None; no crash is the point of this test
+
 
 class TestACECosmology:
 

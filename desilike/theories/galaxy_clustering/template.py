@@ -281,6 +281,7 @@ class BAOSpectrum2Template(Spectrum2Template):
         self.DH_over_rd = qpar * self._DH_over_rd_fid
         self.DM_over_rd = qper * self._DM_over_rd_fid
         self.DV_over_rd = qpar ** self._eta * qper ** (1. - self._eta) * self._DV_over_rd_fid
+        self.F_AP = self.DM_over_rd / self.DH_over_rd
 
         # No amplitude-rescaling parameter: sigma8 stays at its fiducial value;
         # fsigma8 tracks the df-scaled growth rate.

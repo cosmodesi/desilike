@@ -86,6 +86,10 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
 
         self.covariance = None
         if isinstance(covariance, types.CovarianceMatrix):
+            if len(self.observables) == 1 and 'observables' not in covariance.observable.labels()[0]:
+                # User-provided covariance for a single, named observable: wrap it with the
+                # same 'observables' label as self.data so at.observable.match() can find it.
+                covariance = covariance.clone(observable=types.ObservableTree([covariance.observable], observables=[self.observables[0].name]))
             self.covariance = covariance.at.observable.match(self.data)
         elif covariance is not None:
             covariance = check_matrix(covariance, 'covariance')

@@ -43,7 +43,7 @@ from desilike.parameter import Parameter
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                   DampedBAOWigglesPTSpectrum2Poles,
                                                   DampedBAOWigglesTracerCorrelation2Poles)
-from desilike.observables import Correlation2PolesObservable
+from desilike.observables.galaxy_clustering import Correlation2PolesObservable
 from desilike.likelihoods import ObservablesGaussianLikelihood
 from desilike.samples import diagnostics
 import desilike.samplers as samplers

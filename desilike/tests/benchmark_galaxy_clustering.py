@@ -47,7 +47,7 @@ from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  FOLPSTracerSpectrum2Poles, FOLPSTracerSpectrum3Poles,
                                                  COMETPTSpectrum2Poles, COMETPTSpectrum3Poles,
                                                  COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
-from desilike.observables import Correlation2PolesObservable, Spectrum2PolesObservable, Spectrum3PolesObservable
+from desilike.observables.galaxy_clustering import Correlation2PolesObservable, Spectrum2PolesObservable, Spectrum3PolesObservable
 from desilike.likelihoods import ObservablesGaussianLikelihood
 
 

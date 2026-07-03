@@ -1016,6 +1016,11 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
                 proxy = dep.__class__.tree_unflatten(dep_aux, dep_children)
                 dep.__dict__.update(proxy.__dict__)
                 offset += n_children
+            # See the matching comment in _run_graph: node_state['is_tracing'] (not a plain
+            # node attribute) is what survives from trace time to this actual (deferred)
+            # callback invocation; expose it as a node attribute now, right before node()
+            # runs, so __call__ can read self._is_tracing.
+            node._is_tracing = node_state.get('is_tracing', False)
             call_result = node()
             node_state['dep_result'] = tuple(np.asarray(c) for c in jax.tree_util.tree_leaves(node.tree_flatten()[0]))
             node_state['call_result'] = call_result
@@ -1141,6 +1146,17 @@ def _build_graph_call_fn(pipeline):
                 node.__dict__.update(proxy.__dict__)
                 node_states[id(node)]['was_called'] = True
             elif node._is_external:
+                # Threaded through so the node's __call__ (running inside pure_callback,
+                # where values are always concrete) can tell whether the *enclosing* graph
+                # execution is jax-traced — pure_callback itself can never expose that.
+                # Written into the persistent node_state dict (read back by _run_or_cache
+                # right before it actually calls node()), NOT a plain node attribute:
+                # jax.pure_callback defers the actual callback invocation to program
+                # *execution* time, which happens after this trace-time loop (and the
+                # is_tracing-restore block below it) has already finished running, so a
+                # plain `node._is_tracing = ...` here would be wiped by the restore before
+                # the deferred callback ever got a chance to read it.
+                node_states[id(node)]['is_tracing'] = is_tracing
                 n_ch = ext_n_children[id(node)]
                 if ext_flat is not None:
                     # JAX sub-graph mode: unpack frozen External outputs.

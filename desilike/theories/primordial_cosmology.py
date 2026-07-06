@@ -520,8 +520,24 @@ class CosmoprimoCosmology(PrimordialCosmology):
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
-        params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
-                  for param in self.params}
+
+        # -------- IDE modifications start (Nisha) -------- #
+        # Since the xternal engines receive plain scalar inputs, this crashes with a None-type 
+        # for DS models where the sampling parameter is A_ds, which is a derived parameter.
+        # so modifying this code-snippet to skip unresolved None values from engine inputs.
+        params = {}
+        for param in self.params:
+            value = param.value
+            if value is None and getattr(param, '_call_fn', None) is not None:
+                value = param()
+            if self._is_external:
+                if value is None:
+                    continue
+                params[param.basename] = np.asarray(value).reshape(-1)[0].item()
+            else:
+                params[param.basename] = value
+        # -------- IDE modifications end (Nisha) -------- #
+        
         self._param_values = params
         if self._is_external:
             try:

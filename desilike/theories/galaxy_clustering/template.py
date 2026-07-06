@@ -593,6 +593,42 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         obj.k = aux['k']
         return obj
 
+# -------- IDE modifications start (Nisha) -------- #
+# -------- utilities for IDE models -------- #
+
+# setting the growth_mode for the IDE and the default models (ptt_pk and background)
+_GROWTH_MODES = ('auto', 'ptt_pk', 'background')
+_IDE_ENGINES = frozenset({'isitide', 'dsclass'})
+
+
+# checking for IDE engines (isitide and dsclassy)
+def _cosmo_engine_name(cosmo, default='class'):
+    """Best-effort Boltzmann engine string for a CosmoprimoCosmology-like object."""
+    engine = getattr(cosmo, '_engine', None)
+    if engine is not None:
+        return str(engine)
+    _args, kwargs = getattr(cosmo, '_init', ((), {}))
+    if 'engine' in kwargs:
+        return str(kwargs['engine'])
+    if _args:
+        return str(_args[0])
+    return str(default)
+
+
+# if using IDE engines, use 'background' growth mode to get the IDE growth rates
+# otherwise use 'ptt_pk' growth mode to get the default growth rates calculated from pdd and ptt
+# auto sets the growth mode to 'background' if using IDE engines otherwise it sets it to 'ptt_pk'
+def _resolve_growth_mode(growth_setting, engine):
+    """Resolve template growth prescription from user *growth_setting* and *engine*."""
+    growth_setting = str(growth_setting)
+    if growth_setting == 'auto':
+        return 'background' if engine in _IDE_ENGINES else 'ptt_pk'
+    if growth_setting not in ('ptt_pk', 'background'):
+        raise ValueError(f"growth setting must be one of {_GROWTH_MODES}; got {growth_setting!r}")
+    return growth_setting
+
+# -------- IDE modifications end (Nisha) -------- #
+
 
 class DirectSpectrum2Template(Spectrum2Template):
     r"""
@@ -656,12 +692,23 @@ class DirectSpectrum2Template(Spectrum2Template):
         """
         return CosmoprimoCosmology.propose_params(engine=engine, fiducial=fiducial)
 
-    def __init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
+    # -------- IDE modifications start (Nisha) -------- #
+
+    # setting growth mode in the template
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None,
+                 growth_mode='auto'):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
+        # setting the growth mode
+        # IDE models use 'background' while default is 'ptt_pk' aka calculated from pdd and ptt
+        self._growth_mode = str(growth_mode)
+        engine_name = _cosmo_engine_name(cosmo, default=engine)
+        self._growth_mode = _resolve_growth_mode(self._growth_mode, engine_name)
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
+    # setting the growth mode in the template
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None,
+                      growth_mode='auto'):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).
         from cosmoprimo import PowerSpectrumBAOFilter, constants
         if k is None:
@@ -672,18 +719,27 @@ class DirectSpectrum2Template(Spectrum2Template):
         self._only_now = bool(only_now)
         # Prepend k0 = 1e-3 so get_result(...)[0] gives pk at k0 for f0 = sqrt(ptt/pk)|_{k→0}.
         self._k_with_k0 = np.concatenate([[1e-3], self.k])
+        #  setting requirements needed from the cosmology engine
         reqs = {
             'fourier.pk': [
                 {'of': 'delta_cb', 'z': self.z, 'k': self._k_with_k0},
-                {'of': 'theta_cb', 'z': self.z, 'k': self._k_with_k0},
             ],
             'fourier.sigma8_z': [
                 {'of': 'delta_cb', 'z': self.z},
-                {'of': 'theta_cb', 'z': self.z},
             ],
             'background.efunc':                        [{'z': self.z}],
             'background.comoving_transverse_distance': [{'z': self.z}],
         }
+        # if using the default growth mode 'ptt_pk' add another requirement for ptt
+        if self._growth_mode == 'ptt_pk':
+            reqs['fourier.pk'].append({'of': 'theta_cb', 'z': self.z, 'k': self._k_with_k0})
+            reqs['fourier.sigma8_z'].append({'of': 'theta_cb', 'z': self.z})
+        # if using growth rate directly from the engine (for IDE models), no need to request ptt
+        # add a request for the growth rate directly
+        elif self._growth_mode == 'background':
+            reqs['background.growth_rate'] = [{'z': self.z}]
+        else:
+            raise ValueError(f"Invalid growth mode: {self._growth_mode}")
         if with_now:
             reqs['fourier.pk_now'] = [
                 {'of': 'delta_cb', 'engine': str(with_now), 'z': self.z, 'k': self.k},
@@ -710,7 +766,6 @@ class DirectSpectrum2Template(Spectrum2Template):
         from cosmoprimo import constants
         # All cosmoprimo work happened in CosmoprimoCosmology.__call__; retrieve JAX arrays.
         pk_full  = self.cosmo.get_fourier().pk(of='delta_cb', z=self.z, k=self._k_with_k0)
-        ptt_full = self.cosmo.get_fourier().pk(of='theta_cb', z=self.z, k=self._k_with_k0)
         self.pk_dd = pk_full[1:]
         self.pknow_dd = (self.cosmo.get_fourier().pk_now(of='delta_cb',
                               engine=self._with_now, z=self.z, k=self.k)
@@ -718,10 +773,20 @@ class DirectSpectrum2Template(Spectrum2Template):
         if self._only_now:
             self.pk_dd = self.pknow_dd
         self.sigma8  = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
-        self.fsigma8 = self.cosmo.get_fourier().sigma8_z(of='theta_cb', z=self.z)
-        self.f  = self.fsigma8 / self.sigma8
-        self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
-        self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
+        # for IDE models, request the growth rate f directly from the engine (and f=f0=fk since no scale dependence in IDE models)
+        # default growth mode 'ptt_pk' calculates f,f0,fk from pdd and ptt
+        if self._growth_mode == 'background':
+            f = self.cosmo.get_background().growth_rate(z=self.z)
+            self.f = f
+            self.f0 = f
+            self.fk = jnp.full_like(self.k, f)
+            self.fsigma8 = f * self.sigma8
+        else:
+            ptt_full = self.cosmo.get_fourier().pk(of='theta_cb', z=self.z, k=self._k_with_k0)
+            self.fsigma8 = self.cosmo.get_fourier().sigma8_z(of='theta_cb', z=self.z)
+            self.f  = self.fsigma8 / self.sigma8
+            self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
+            self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
         DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
         DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         self.qpar = DH / self._DH_fid
@@ -736,14 +801,17 @@ class DirectSpectrum2Template(Spectrum2Template):
     def tree_flatten(self):
         return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk,
                  self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid],
-                {'k': self.k})
+                {'k': self.k, 'growth_mode': self._growth_mode})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8, obj.sigma8_fid = children
         obj.k = aux['k']
+        obj._growth_mode = aux.get('growth_mode', 'ptt_pk')
         return obj
+
+    # -------- IDE modifications end (Nisha) -------- #
 
 
 # ── BAO phase shift template ──────────────────────────────────────────────────

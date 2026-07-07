@@ -117,6 +117,7 @@ class _BaseCandlLikelihood(Likelihood):
                 mask = mask & self.like.generate_crop_mask()
             self.like.crop_mask = mask
             self.like.crop_for_data_selection()
+            self._recompute_covariance_chol_dec()
         else:
             self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
 
@@ -165,6 +166,31 @@ class _BaseCandlLikelihood(Likelihood):
                 if lmax is not None and ell > lmax:
                     mask[bin_idx] = False
         return mask
+
+    def _recompute_covariance_chol_dec(self):
+        """Recompute ``self.like.covariance_chol_dec`` (and ``_logdet_cov``/``_norm_const``,
+        if used) from the just-cropped ``self.like.covariance``.
+
+        ``candl.Like``/``LensLike.__init__`` computes ``covariance_chol_dec`` once, from
+        whatever ``self.covariance`` looks like at that point in ``__init__`` -- *before*
+        the ``crop_for_data_selection()`` call our ``ell_cuts`` masking triggers above runs.
+        ``crop_for_data_selection()`` itself only crops ``covariance``/``_data_bandpowers``/
+        ``window_functions``, not the already-cached Cholesky factor, so without this,
+        ``covariance_chol_dec`` silently stays at its original (uncropped) shape while
+        everything else shrinks -- surfacing later as a shape mismatch inside candl's own
+        ``gaussian_logl`` (``jnp.linalg.solve(covariance_chol_dec, delta_bdp)``).
+        """
+        import candl.likelihood as candl_likelihood
+        like = self.like
+        if 'hartlap_correction' in like.data_set_dict:
+            like.covariance_chol_dec = candl_likelihood.cholesky_decomposition(
+                like.covariance, N_sims=like.data_set_dict['hartlap_correction']['N_sims'],
+                N_bins=like.N_bins_total)
+        else:
+            like.covariance_chol_dec = candl_likelihood.cholesky_decomposition(like.covariance)
+        if like.data_set_dict.get('likelihood_form') == 'gaussian' and getattr(like, 'add_logdet', False):
+            like._logdet_cov = 2. * jnp.sum(jnp.log(jnp.diag(like.covariance_chol_dec)))
+            like._norm_const = 0.5 * (like._logdet_cov + like.N_data * jnp.log(2. * jnp.pi))
 
     def __post_init__(self, *args, **kwargs):
         if self._ellmax_standard:

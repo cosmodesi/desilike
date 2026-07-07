@@ -1124,20 +1124,67 @@ class BAOTheory(Calculator):
         Measured distance combinations.
     qpar, qper, qiso, qap : JAX scalar
         AP ratios relative to fiducial.
+
+    Notes
+    -----
+    *rs_drag*, like all distances here, is in cosmoprimo's :math:`\mathrm{Mpc}/h` convention
+    (:math:`D(z)`, :math:`r_d` computed with a fixed factor of 100 rather than :math:`H_0`, so
+    that :math:`D(z)` is exactly :math:`h`-independent and :math:`r_d \equiv r_{d,\rm phys}\,h`).
+    Passing ``rs_drag`` lets :math:`r_d` be sampled directly in this convention instead of
+    computed by the cosmology's thermodynamics module. This is the standard trick for
+    background-only (BAO-alone) fits: with no BBN/CMB/thetastar-rdrag likelihood to break the
+    ``h``-``omega_b``-``r_d`` degeneracy, BAO distance ratios only constrain :math:`D(z)/r_d`,
+    and since :math:`D(z)` here is already :math:`h`-independent, :math:`r_d` (in this same
+    convention) *is* the one degenerate combination the data constrain — so ``h`` should be
+    fixed and this ``r_d`` sampled directly over its plausible range, rather than wasting
+    sampler effort on the unconstrained orthogonal direction. Pass a shared
+    :class:`~desilike.parameter.Parameter` instance (rather than ``True``) when multiple
+    :class:`BAOTheory` deps (e.g. one per DESI tracer bin) must share the same sampled ``r_d``.
     """
 
-    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(fiducial=fiducial)
         self.cosmo = cosmo
+        if rs_drag:
+            self.rs_drag = rs_drag if isinstance(rs_drag, Parameter) else type(self).propose_params(rs_drag=rs_drag, fiducial=fiducial)['rs_drag']
 
-    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+    @classmethod
+    def propose_params(cls, rs_drag=False, fiducial='DESI'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        rs_drag : bool, default=False
+            If ``True``, propose a free ``rs_drag`` [Mpc/h] parameter (see the class notes).
+            Ignored if ``rs_drag`` is already a :class:`~desilike.parameter.Parameter` instance.
+        fiducial : str or cosmoprimo.Cosmology, default='DESI'
+            Fiducial cosmology used to center the proposed prior/ref on the fiducial value.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        if not rs_drag or isinstance(rs_drag, Parameter):
+            return VariableCollection()
+        rd_fid = _get_fiducial(fiducial).rs_drag
+        # Same non-informative range cobaya uses for its 'hrdrag' proxy parameter
+        # (prior [10, 1000], ref scale 1): here rs_drag [Mpc/h] *is* that combination,
+        # since D(z) [Mpc/h] is h-independent by construction (see class notes).
+        return VariableCollection([Parameter(
+            'rs_drag', value=rd_fid, prior=dict(limits=[10., 1000.]),
+            ref=dict(dist='norm', loc=rd_fid, scale=1.), fd_eps=1., latex=r'r_\mathrm{d}')])
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
         from cosmoprimo import constants
-        self.cosmo.add_requirements({
+        self._override_rs_drag = bool(rs_drag)
+        requirements = {
             'background.efunc':                        [{'z': float(z)}],
             'background.comoving_transverse_distance': [{'z': float(z)}],
-            'thermodynamics.rs_drag':                  None,
-        })
+        }
+        if not self._override_rs_drag:
+            requirements['thermodynamics.rs_drag'] = None
+        self.cosmo.add_requirements(requirements)
         self.z = float(z)
         self._eta = float(eta)
         self._fiducial = _get_fiducial(fiducial)
@@ -1154,7 +1201,7 @@ class BAOTheory(Calculator):
         from cosmoprimo import constants
         efunc = self.cosmo.get_background().efunc(z=self.z)
         DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
-        rd = self.cosmo.get_thermodynamics().rs_drag
+        rd = self.rs_drag.value if self._override_rs_drag else self.cosmo.get_thermodynamics().rs_drag
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_rd = DH / rd

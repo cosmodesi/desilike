@@ -46,7 +46,13 @@ class Emcee(Kernel):
         if not EMCEE_INSTALLED:
             raise ImportError("The 'emcee' package is required but not installed.")
 
-        _, self._log_prob_fn = posterior
+        plain_log_prob_fn, with_derived_log_prob_fn = posterior
+        # emcee auto-detects "blobs" from whether log_prob_fn returns a tuple; the
+        # with-derived core always returns a (logpost, derived) tuple even when there
+        # are no derived params (derived is then a zero-width array), which desyncs
+        # from the blobs=None initial state below. Use the plain scalar-returning core
+        # in that case so emcee's blob detection matches what we actually pass around.
+        self._log_prob_fn = with_derived_log_prob_fn if context.get('nderived', 0) else plain_log_prob_fn
         ndim = context['ndim']
 
         if self.nwalkers is None:

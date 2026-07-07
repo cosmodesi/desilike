@@ -6,6 +6,7 @@ import numpy as np
 
 from desilike.likelihoods.base import ObservablesGaussianLikelihood
 from desilike.observables.galaxy_clustering.compressed import BAOCompressionObservable
+from desilike.parameter import Parameter
 
 
 _TRACER_FILES = {
@@ -100,6 +101,11 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
     cosmo : PrimordialCosmology, default=None
         Cosmology calculator shared across all tracer bins.
         Defaults to ``CosmoprimoCosmology(fiducial='DESI')``.
+    rs_drag : bool or Parameter, default=False
+        If ``True``, sample ``r_d`` directly as a free parameter shared across all tracer
+        bins, instead of computing it from ``cosmo``'s thermodynamics module (see
+        :class:`~desilike.theories.galaxy_clustering.template.BAOTheory`'s notes). Use this
+        for BAO-alone fits, where only the combination :math:`H_0 r_d` is constrained.
 
     References
     ----------
@@ -110,7 +116,7 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
     installer_section = 'DESIDR2BAOLikelihood'
     _all_zbins = list(_TRACER_FILES)
 
-    def __init__(self, zbins=None, data_dir=None, cosmo=None):
+    def __init__(self, zbins=None, data_dir=None, cosmo=None, rs_drag=False):
         if zbins is None:
             zbins = list(self._all_zbins)
         unknown_zbins = [zbin for zbin in zbins if zbin not in _TRACER_FILES]
@@ -124,6 +130,11 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(fiducial='DESI')
+
+        if rs_drag:
+            from desilike.theories.galaxy_clustering.template import BAOTheory
+            # One shared Parameter so every tracer bin's BAOTheory samples the same r_d.
+            rs_drag = rs_drag if isinstance(rs_drag, Parameter) else BAOTheory.propose_params(rs_drag=rs_drag)['rs_drag']
 
         # Build one BAOCompressionObservable per tracer bin (no per-obs covariance;
         # ObservablesGaussianLikelihood distributes the joint covariance to each).
@@ -139,7 +150,7 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
                 obs_name = f'{zbin}/{z_eff}' if len(z_groups) > 1 else zbin
                 obs = BAOCompressionObservable(
                     data=meas_values, parameters=param_names, name=obs_name,
-                    z=z_eff, cosmo=cosmo,
+                    z=z_eff, cosmo=cosmo, rs_drag=rs_drag,
                 )
                 observables.append(obs)
             covariance_blocks.append(cov_block)

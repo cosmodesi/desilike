@@ -46,7 +46,12 @@ class Zeus(Kernel):
         if not ZEUS_INSTALLED:
             raise ImportError("The 'zeus-mcmc' package is required but not installed.")
 
-        _, self._log_prob_fn = posterior
+        plain_log_prob_fn, with_derived_log_prob_fn = posterior
+        # zeus infers "blobs" from whether log_prob_fn returns a tuple; the with-derived
+        # core always returns a (logpost, derived) tuple even when there are no derived
+        # params (derived is then a zero-width array), which desyncs from the blobs0=None
+        # passed below. Use the plain scalar-returning core in that case.
+        self._log_prob_fn = with_derived_log_prob_fn if context.get('nderived', 0) else plain_log_prob_fn
         ndim = context['ndim']
 
         if self.nwalkers is None:
@@ -75,14 +80,16 @@ class Zeus(Kernel):
 
         samples = np.zeros((n_steps, self.nwalkers, self._ndim))
         log_post = np.zeros((n_steps, self.nwalkers))
-        derived_out = np.zeros((n_steps, self.nwalkers, nderived))
+        if nderived:
+            derived_out = np.zeros((n_steps, self.nwalkers, nderived))
         for step_idx, step_state in enumerate(self._sampler.sample(
                 position, log_prob0=logposterior,
-                blobs0=np.array(derived),
+                blobs0=np.array(derived) if nderived else None,
                 iterations=n_steps, progress=False)):
             coords, log_prob_step, blobs = step_state
             samples[step_idx, :, :] = coords
             log_post[step_idx, :] = log_prob_step
-            derived_out[step_idx, :, :] = np.array(blobs).reshape(self.nwalkers, nderived)
+            if nderived:
+                derived_out[step_idx, :, :] = np.array(blobs).reshape(self.nwalkers, nderived)
 
-        return samples, derived_out if nderived else None, {'logposterior': log_post}
+        return samples, (derived_out if nderived else None), {'logposterior': log_post}

@@ -65,7 +65,7 @@ def _get_default_chain_params(chains, params=None):
     """
     chains = _make_list(chains)
     if params is not None:
-        param_names = [p if isinstance(p, str) else p.name for p in _make_list(params)]
+        param_names = [str(param) for param in _make_list(params)]
         # Keep order from request; include if present in at least one chain
         result = []
         for name in param_names:
@@ -85,7 +85,10 @@ def _get_default_profiles_params(profiles, params=None, of=('best', 'profile')):
     ----------
     profiles : list of Profiles
     params : list of str, optional
-        Restrict to these names.
+        Restrict to these names.  When ``None``, defaults to non-derived names only
+        (mirroring :func:`_get_default_chain_params`), for profiles that carry a
+        ``.params`` :class:`~desilike.parameter.VariableCollection` with derived-ness
+        metadata; profiles without it (e.g. hand-built ones) are not filtered.
     of : sequence of str
         Slot names to search; e.g. ``('best', 'profile')``.
 
@@ -98,7 +101,7 @@ def _get_default_profiles_params(profiles, params=None, of=('best', 'profile')):
         return []
     of = _make_list(of)
     if params is not None:
-        param_names = [p if isinstance(p, str) else p.name for p in _make_list(params)]
+        param_names = [str(param) for param in _make_list(params)]
         result = []
         for name in param_names:
             for prof in profiles[::-1]:
@@ -126,7 +129,14 @@ def _get_default_profiles_params(profiles, params=None, of=('best', 'profile')):
             for prof in profiles
         ):
             result.append(name)
-    return result
+
+    def _is_derived(name):
+        for prof in profiles:
+            if prof.params is not None and name in prof.params:
+                return bool(prof.params[name].derived)
+        return False
+
+    return [name for name in result if not _is_derived(name)]
 
 
 def _param_label(name, chains=None, profiles=None):
@@ -136,12 +146,11 @@ def _param_label(name, chains=None, profiles=None):
     given name; falls back to the raw name string if none is found.
     """
     for chain in (chains or []):
-        if VariableCollection.__contains__(chain, name):
-            return VariableCollection.__getitem__(chain, name).latex(inline=True)
+        if name in chain:
+            return chain[name].latex(inline=True)
     for prof in (profiles or []):
-        if prof.best is not None and name in prof.best:
-            # Profiles don't store Variable objects; fall through
-            pass
+        if prof.params is not None and name in prof.params:
+            return prof.params[name].latex(inline=True)
     return '${}$'.format(name)
 
 
@@ -429,7 +438,7 @@ def add_1d_profile(profiles, param, ax=None, **kwargs):
         t = np.linspace(mean - nsigma * std, mean + nsigma * std, 200)
         return t, np.exp(-(t - mean) ** 2 / (2.0 * std ** 2))
 
-    name = param if isinstance(param, str) else param.name
+    name = str(param)
 
     pro = profiles.get('profile', None)
     if pro is not None and name in pro:
@@ -486,8 +495,8 @@ def add_2d_contour(profiles, param1, param2, ax=None, cl=(1, 2), color='C0', fil
     if ax is None:
         ax = plt.gca()
 
-    name1 = param1 if isinstance(param1, str) else param1.name
-    name2 = param2 if isinstance(param2, str) else param2.name
+    name1 = str(param1)
+    name2 = str(param2)
 
     def _pale_colors(base_color, nlevels, pale_factor=pale_factor):
         from matplotlib.colors import colorConverter
@@ -699,7 +708,10 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
 
     Parameters
     ----------
-    samples : MCSamples, Profiles, or list of either
+    samples : MCSamples, Profiles, Covariance, or list of either
+        A :class:`~desilike.samples.Covariance` is plotted as a Gaussian ellipse centred on
+        each parameter's current ``.value`` (i.e. ``covariance.params``); set that value first
+        (e.g. to a best fit) if that is the centre you want plotted.
     params : list of str, optional
     labels : str or list, optional
     g : getdist.plots.GetDistPlotter, optional
@@ -716,13 +728,21 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
     -------
     g : getdist.plots.GetDistPlotter
     """
-    from desilike.samples import MCSamples, Profiles
+    from desilike.samples import MCSamples, Profiles, Covariance
     from getdist import plots
 
     if g is None:
         g = plots.get_subplot_plotter()
 
-    samples     = _make_list(samples)
+    samples = _make_list(samples)
+    # A Covariance has no best-fit slot of its own: wrap it in a Profiles so the rest of this
+    # function (and plot_triangle_contours/add_2d_contour) can treat it like any other profile.
+    samples = [
+        Profiles(params=sample.params, covariance=sample,
+                best={param.name: np.array([param.value]) for param in sample.params})
+        if isinstance(sample, Covariance) else sample
+        for sample in samples
+    ]
     nsamples    = len(samples)
     labels      = _make_list(labels,         length=nsamples, default=None)
     contour_colors = _make_list(contour_colors, length=nsamples, default=None)
@@ -847,7 +867,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     fig : matplotlib.figure.Figure
     """
     profiles = _make_list(profiles)
-    name     = param if isinstance(param, str) else param.name
+    name     = str(param)
 
     if truth is None and kw_truth is not None:
         first_best = profiles[0].get('best', None)
@@ -920,7 +940,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     ax.set_xticks(xmain)
     ax.set_xticklabels(ids, rotation=40, ha='right', fontsize=ticksize)
     ax.grid(True, axis='y')
-    ax.set_ylabel('${}$'.format(name), fontsize=labelsize)
+    ax.set_ylabel(_param_label(name, profiles=profiles), fontsize=labelsize)
     ax.tick_params(labelsize=ticksize)
     if add_lgd:
         ax.legend(**{**{'ncol': maxpoints}, **kw_legend})
@@ -1103,7 +1123,7 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
     nprofiles  = len(profiles)
     labels     = _make_list(labels, length=nprofiles, default=None)
     colors     = _make_list(colors, length=nprofiles, default=None)
-    offsets    = [prof.best['logpdf'].max() for prof in profiles] * 2
+    offsets    = [prof.logpdf.max() for prof in profiles] * 2
     colors     = colors * 2
     linestyles = ['-'] * nprofiles + ['--'] * nprofiles
     return plot_profile(profiles + profiles_ref, params=params,

@@ -182,7 +182,7 @@ class MCSamples(Samples):
 
     @logposterior.setter
     def logposterior(self, item):
-        v = Variable(self._logposterior, derived=True)
+        v = Variable(self._logposterior, latex=r'\ln\mathcal{P}', derived=True)
         self.set(v, np.asarray(item))
 
     @property
@@ -194,7 +194,7 @@ class MCSamples(Samples):
 
     @logprior.setter
     def logprior(self, item):
-        v = Variable(self._logprior, derived=True)
+        v = Variable(self._logprior, latex=r'\ln\Pi', derived=True)
         self.set(v, np.asarray(item))
 
     @property

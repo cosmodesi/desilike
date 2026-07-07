@@ -839,6 +839,7 @@ class MCMCSampler(BaseSampler):
             pool=self.pool,
             nsamples_parallel=self._batch_nparallel,
             param_shapes={param.name: param.shape for param in self.varied_params},
+            nderived=self.nderived,
         )
 
     def set_rng(self, rng):

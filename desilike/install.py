@@ -13,7 +13,7 @@ class InstallError(Exception):
     """Error raised at installation."""
 
 
-def download(url, target, size=None):
+def download(url, target, size=None, max_retries=3, retry_wait=10):
     """
     Download file from input ``url``.
 
@@ -28,16 +28,35 @@ def download(url, target, size=None):
         If not provided, taken from header (if the file is larger than a couple of GBs,
         it may be wrong due to integer overflow).
         If a sensible file size is obtained, a progression bar is printed.
+    max_retries : int, default=3
+        Number of attempts made when the server returns a transient (5xx) error,
+        e.g. the Planck Legacy Archive occasionally answers with a plain-text
+        "Internal Error. Please try later" body instead of the requested file.
+    retry_wait : int, default=10
+        Seconds to wait between retry attempts.
     """
     # Adapted from https://stackoverflow.com/questions/15644964/python-progress-bar-and-downloads
     logger.info('Downloading {} to {}.'.format(url, target))
+    import time
     import requests
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     # See https://stackoverflow.com/questions/61991164/python-requests-missing-content-length-response
     if size is None:
         size = requests.head(url, headers={'Accept-Encoding': None}).headers.get('content-length')
-    r = requests.get(url, allow_redirects=True, stream=True)
+
+    for attempt in range(1, max_retries + 1):
+        r = requests.get(url, allow_redirects=True, stream=True)
+        if r.status_code < 500 or attempt == max_retries:
+            break
+        logger.warning('Attempt {:d}/{:d}: got HTTP {:d} downloading {}; retrying in {:d}s.'.format(
+            attempt, max_retries, r.status_code, url, retry_wait))
+        time.sleep(retry_wait)
+
+    try:
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        raise InstallError('Could not download {} (HTTP {:d}): {}'.format(url, r.status_code, r.text[:200])) from exc
 
     with open(target, 'wb') as file:
         if size is None or int(size) < 0:  # no content length header

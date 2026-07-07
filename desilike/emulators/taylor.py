@@ -132,9 +132,12 @@ class TaylorEmulator:
             Values of the *input* parameters at the expansion point.  Defaults
             to the graph's compile-time parameter values.
         jit : bool, optional
-            When ``True``, JIT-compile each graph evaluation via ``jax.jit``
-            (using the graph's cached :attr:`~desilike.base.CompiledGraph._jit_call_fn`).
-            Speeds up repeated evaluations during FD stencil computations.
+            When ``True``, JIT-compile the graph evaluations inside derivative
+            stencils via ``jax.jit`` (using the graph's cached
+            :attr:`~desilike.base.CompiledGraph._jit_call_fn`).  Speeds up
+            repeated evaluations during FD stencil computations.  The
+            zeroth-order (center) evaluation always runs eagerly, so that
+            at-center predictions are bit-identical to eager graph calls.
 
         Returns
         -------
@@ -154,13 +157,15 @@ class TaylorEmulator:
 
         # Primal evaluation at center on the original graph — gives the return value
         # (rv0, used only to classify how it relates to the tree children) and derived dict.
+        # Always eager (never _jit_call_fn): the zeroth-order coefficient is the value the
+        # emulator returns at the expansion center, and it must be bit-identical to an
+        # eager call of the original graph (jit and eager evaluations differ by ~1e-12).
         def _primal(g):
             fd_t = tuple(jnp.asarray(p0[n]) for n in g._fd_names)
             jax_t = tuple(jnp.asarray(p0[n]) for n in g._jax_names)
             input_saved = {p.name: p._value for p in g.params if g.params[p.name].varied}
-            call_fn = g._jit_call_fn if jit else g._call_fn
             try:
-                return call_fn(fd_t, jax_t)
+                return g._call_fn(fd_t, jax_t)
             finally:
                 for p in g.params:
                     if p.name in input_saved:
@@ -204,15 +209,28 @@ class TaylorEmulator:
         coeffs_derived = {n: [] for n in self._derived_names}
         coeffs_returned = [] if self._return_kind == 'value' else None
 
-        for mi in multi_indices:
-            order_arg = {n: k for n, k in zip(input_param_names, mi) if k > 0}
+        # All non-constant multi-indices go through one sequence-form differentiate()
+        # call: the chains share a single evaluation core and setup, and duplicate
+        # partials are computed once.  The constant term is the eager primal above.
+        order_dicts = [{n: k for n, k in zip(input_param_names, mi) if k > 0} for mi in multi_indices]
+        nonzero_order_dicts = [od for od in order_dicts if od]
+        derivs_children = derivs_derived = derivs_rv = ()
+        if nonzero_order_dicts:
+            d_fn = differentiate(child_graph, nonzero_order_dicts, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)
+            derivs_children, derivs_derived = d_fn(p0, return_derived=True)
+            if self._return_kind == 'value':
+                derivs_rv = differentiate(graph, nonzero_order_dicts, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)(p0)
+
+        nonzero_idx = 0
+        for mi, order_arg in zip(multi_indices, order_dicts):
             prefactor = 1.0 / math.prod(math.factorial(k) for k in mi)
 
             if order_arg:
-                d_fn = differentiate(child_graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)
-                deriv_children, deriv_derived = d_fn(p0, return_derived=True)
+                deriv_children = derivs_children[nonzero_idx]
+                deriv_derived = derivs_derived[nonzero_idx]
                 if self._return_kind == 'value':
-                    deriv_rv = differentiate(graph, order_arg, fd_acc=self._fd_acc, fd_eps=self._fd_eps, jit=jit)(p0)
+                    deriv_rv = derivs_rv[nonzero_idx]
+                nonzero_idx += 1
             else:
                 deriv_children = children0_t
                 deriv_derived = dict(derived0)

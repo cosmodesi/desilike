@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap
+from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap, differentiate, jacfwd, hessian
 from desilike.parameter import Parameter
 
 
@@ -1954,6 +1954,182 @@ def test_build_graph_auto_share_params():
     D = 0.3 ** 0.55 / 1.5
     expected = 2.0 * np.array(K) ** 0.96 * D ** 2
     assert jnp.allclose(result, jnp.array(expected), atol=1e-8)
+
+
+# ── differentiate / jacfwd / hessian ──────────────────────────────────────────
+
+DIFF_PARAMS0 = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+DIFF_NAMES = ['omega_m', 'z', 'A', 'ns']  # omega_m, z are FD (feed external Cosmology); A, ns are JAX
+
+
+def _analytic_logL_dict(params):
+    """jax-differentiable analytic reference of the toy pipeline's logL."""
+    growth_factor = params['omega_m'] ** 0.55 / (1.0 + params['z'])
+    theory = params['A'] * K ** params['ns'] * growth_factor ** 2
+    return -0.5 * jnp.sum(((theory - DATA) / 0.1) ** 2)
+
+
+def test_differentiate_jacobian_tree(pipeline):
+    """differentiate(graph, 1, params=...) returns {name: d/dname} like jax.jacfwd on a dict input."""
+    p0 = {name: jnp.asarray(value) for name, value in DIFF_PARAMS0.items()}
+    ref = jax.jacfwd(_analytic_logL_dict)(p0)
+    jac = jacfwd(pipeline, params=DIFF_NAMES)(DIFF_PARAMS0)
+    assert set(jac) == set(DIFF_NAMES)
+    for name in DIFF_NAMES:
+        got, want = float(jac[name]), float(ref[name])
+        assert abs(got - want) < 1e-3 * max(1.0, abs(want)), f"J[{name}]: got {got:.6f}, want {want:.6f}"
+    # consistency with the legacy single-partial dict form
+    for name in DIFF_NAMES:
+        single = differentiate(pipeline, {name: 1})(DIFF_PARAMS0)
+        assert abs(float(jac[name]) - float(single)) < 1e-8
+
+
+def test_differentiate_hessian_tree(pipeline):
+    """hessian(graph, params=...) returns the nested dict {n1: {n2: d²/dn1 dn2}} like jax.hessian on a dict input."""
+    p0 = {name: jnp.asarray(value) for name, value in DIFF_PARAMS0.items()}
+    ref = jax.hessian(_analytic_logL_dict)(p0)
+    hess = hessian(pipeline, params=DIFF_NAMES, fd_eps=1e-3)(DIFF_PARAMS0)
+    for name_1 in DIFF_NAMES:
+        for name_2 in DIFF_NAMES:
+            got, want = float(hess[name_1][name_2]), float(ref[name_1][name_2])
+            assert abs(got - want) < 1e-3 * max(1.0, abs(want)), f"H[{name_1},{name_2}]: got {got:.6f}, want {want:.6f}"
+    # symmetric entries are computed once (FD-involved pairs are aliased; JAX-JAX pairs agree to float precision)
+    for name_1 in DIFF_NAMES:
+        for name_2 in DIFF_NAMES:
+            assert abs(float(hess[name_1][name_2]) - float(hess[name_2][name_1])) < 1e-8
+    # scalar FD diagonal uses the same direct order-2 stencil as the legacy dict form
+    single = differentiate(pipeline, {'omega_m': 2}, fd_eps=1e-3)(DIFF_PARAMS0)
+    assert abs(float(hess['omega_m']['omega_m']) - float(single)) < 1e-8
+
+
+def test_differentiate_sequence(pipeline):
+    """A sequence of multi-index dicts yields a tuple of partials matching individual calls."""
+    orders = [{'A': 1}, {'omega_m': 1, 'A': 1}, {'omega_m': 2}, {'A': 1}, {}]
+    batch = differentiate(pipeline, orders)(DIFF_PARAMS0)
+    assert isinstance(batch, tuple) and len(batch) == len(orders)
+    for order_dict, entry in zip(orders[:-1], batch[:-1]):
+        single = differentiate(pipeline, order_dict)(DIFF_PARAMS0)
+        assert abs(float(entry) - float(single)) < 1e-8
+    # empty multi-index is the plain value
+    assert abs(float(batch[-1]) - float(pipeline(DIFF_PARAMS0))) < 1e-8
+    # duplicated multi-indices are computed once and aliased
+    assert batch[0] is batch[3]
+
+
+def test_differentiate_hessian_array_param():
+    """Full cross-element Hessian blocks for an array-valued FD parameter, mixed with a JAX parameter."""
+
+    class ExtCubic(Calculator):
+        """Non-JAX: val = x[0]² · x[1]."""
+        _is_external = True
+
+        def __init__(self, x):
+            self.x = x
+
+        def __call__(self):
+            x = np.asarray(self.x)
+            self.val = np.array(x[0] ** 2 * x[1])
+            return self.val
+
+        def tree_flatten(self):
+            return [self.val], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.val = children[0]
+            return obj
+
+    class JaxScale(Calculator):
+        """JAX-native: val = a · ext.val."""
+
+        def __init__(self, ext, a):
+            self.ext = ext
+            self.a = a
+
+        def __call__(self):
+            self.val = self.a * self.ext.val
+            return self.val
+
+        def tree_flatten(self):
+            return [self.val], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.val = children[0]
+            return obj
+
+    x = Parameter('x', value=np.array([1.5, 2.5]))
+    a = Parameter('a', value=2.0)
+    pipe = compile(JaxScale(ExtCubic(x), a))
+    x0, x1, a0 = 1.5, 2.5, 2.0  # f(a, x) = a x0² x1
+
+    jac = jacfwd(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    assert abs(float(jac['a']) - x0 ** 2 * x1) < 1e-6
+    assert np.allclose(np.asarray(jac['x']), a0 * np.array([2 * x0 * x1, x0 ** 2]), atol=1e-6)
+
+    hess = hessian(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    assert np.asarray(hess['x']['x']).shape == (2, 2)
+    expected_xx = a0 * np.array([[2 * x1, 2 * x0], [2 * x0, 0.0]])
+    assert np.allclose(np.asarray(hess['x']['x']), expected_xx, atol=1e-4), f"H[x,x] = {np.asarray(hess['x']['x'])}"
+    expected_ax = np.array([2 * x0 * x1, x0 ** 2])
+    assert np.allclose(np.asarray(hess['a']['x']), expected_ax, atol=1e-4)
+    assert np.allclose(np.asarray(hess['x']['a']), expected_ax, atol=1e-4)
+    assert abs(float(hess['a']['a'])) < 1e-6
+
+
+def test_differentiate_tree_return_derived():
+    """return_derived=True on the jacobian/hessian forms carries the same nested structure per derived param."""
+    K_loc = jnp.linspace(0.01, 0.3, 20)
+    sigma = 0.1
+    data = jnp.array(np.random.default_rng(17).normal(1.0, sigma, 20))
+
+    class TheoryWithDerived(GaussianLikelihood):
+        def __init__(self, A, ns, data, sigma=0.1):
+            self.A = A
+            self.ns = ns
+            self._sigma = sigma
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.eye(len(data)) / sigma ** 2
+            self.chi2 = Parameter('chi2', value=0.0, derived=True)
+
+        def __call__(self):
+            self.flattheory = self.A * K_loc ** self.ns
+            result = GaussianLikelihood.__call__(self)
+            residual = self.flatdata - self.flattheory
+            self.chi2.value = jnp.sum(residual ** 2) / self._sigma ** 2
+            return result
+
+    pipe = compile(TheoryWithDerived(A=Parameter('A', value=1.0), ns=Parameter('ns', value=0.96), data=data, sigma=sigma))
+
+    def chi2_fn(params):
+        residual = data - params['A'] * K_loc ** params['ns']
+        return jnp.sum(residual ** 2) / sigma ** 2
+
+    p0 = {'A': jnp.asarray(1.0), 'ns': jnp.asarray(0.96)}
+    d_val, d_derived = hessian(pipe, params=['A', 'ns'])(return_derived=True)
+    ref = jax.hessian(chi2_fn)(p0)
+    for name_1 in ('A', 'ns'):
+        for name_2 in ('A', 'ns'):
+            assert abs(float(d_derived['chi2'][name_1][name_2]) - float(ref[name_1][name_2])) < 1e-6
+            assert np.isfinite(float(d_val[name_1][name_2]))
+
+
+def test_differentiate_bad_arguments(pipeline):
+    with pytest.raises(ValueError):
+        differentiate(pipeline, 3, params=['A'])
+    with pytest.raises(ValueError):
+        differentiate(pipeline, {'A': 1}, params=['A'])
+    with pytest.raises(ValueError):
+        differentiate(pipeline, 1, params=['A', 'A'])
+    with pytest.raises(ValueError):
+        differentiate(pipeline, 1, params=['not_a_param'])
+    with pytest.raises(TypeError):
+        differentiate(pipeline, 'A')
+    # toy Parameters carry no prior, hence are fixed: the params=None default has nothing to select
+    with pytest.raises(ValueError):
+        differentiate(pipeline, 1)
 
 
 if __name__ == '__main__':

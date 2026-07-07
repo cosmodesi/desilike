@@ -32,6 +32,27 @@ from .template import DirectSpectrum2Template, _ap_k_mu
 from ._multitracer import propose_params_multitracer, assign_params
 
 
+def _import_folps():
+    """Import folps, guaranteeing the JAX backend.
+
+    folps selects its backend once, at first import, from the FOLPS_BACKEND environment
+    variable (module-level ``backend_manager`` / ``if backend == 'jax'`` conditionals in
+    ``folps.folps``), so the selection cannot be changed after the fact.  desilike sets
+    FOLPS_BACKEND='jax' at package import (see ``desilike/__init__.py``); this helper
+    re-asserts it and fails loudly if folps was already imported with another backend
+    (the numpy backend breaks JAX tracing with TracerArrayConversionError deep in folps).
+    """
+    import sys
+    os.environ['FOLPS_BACKEND'] = 'jax'
+    import folps
+    backend = getattr(sys.modules.get('folps.folps'), 'backend', None)
+    if backend != 'jax':
+        raise ImportError(f"folps is running with the {backend!r} backend but desilike requires 'jax': "
+                          "folps was first imported before desilike could set FOLPS_BACKEND='jax'. "
+                          "Import desilike before folps, or export FOLPS_BACKEND=jax.")
+    return folps
+
+
 # ── utilities ─────────────────────────────────────────────────────────────────
 
 def _velocileptors_default_params(prior_basis):
@@ -1752,12 +1773,11 @@ class FOLPSPTSpectrum2Poles(Calculator):
         self._A_full = bool(A_full)
         self._remove_DeltaP = bool(remove_DeltaP)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        os.environ.setdefault('FOLPS_BACKEND', 'jax')
-        import folps as folpsv2
+        folpsv2 = _import_folps()
         self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
 
     def __call__(self):
-        import folps as folpsv2
+        folpsv2 = _import_folps()
         cosmo_params = {'pkttlin': self.template.pk_dd * self.template.fk**2,
                         'f0': self.template.f0}
         folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
@@ -1828,8 +1848,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         emulated) — no access to ``self.template``.
         """
         # For emulator
-        os.environ.setdefault('FOLPS_BACKEND', 'jax')
-        import folps as folpsv2
+        folpsv2 = _import_folps()
         import folps.folps as _folps_module
         _folps_module.A_full_status = self._A_full
         _folps_module.use_TNS_model_status = self._remove_DeltaP
@@ -1847,7 +1866,6 @@ class FOLPSPTSpectrum2Poles(Calculator):
         ``self.table_now[1]`` is pk_lin_now; ``self.table[2] * self.f0`` is fk.
         """
         # For emulator
-        os.environ.setdefault('FOLPS_BACKEND', 'jax')
         k_pkl_pklnw_fk = jnp.array([self.table[0], self.table[1], self.table_now[1], self.table[2] * self.f0])
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
@@ -2092,7 +2110,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               precision=(8, 10, 10), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD', renormalized=True):
-    import folps as folpsv2
+    folpsv2 = _import_folps()
     # folpsv2.MatrixCalculator(A_full=True, use_TNS_model=False)
     # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
     f0 = jnp.asarray(f0)
@@ -2401,8 +2419,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       use_numba=False, z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                       mg_params_override=None, **kwargs):
-        # Non-node setup only.
-        os.environ.setdefault('FOLPS_BACKEND', 'jax')
+        # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
+        _import_folps()
         self._model = str(model)
         self._mg_variant = str(mg_variant) if mg_variant is not None else None
         self._beyond_eds = bool(beyond_eds)

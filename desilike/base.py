@@ -824,6 +824,22 @@ def _jacfwd_wrap(fn, name):
     return wrapped
 
 
+def _jacfwd_dict_wrap(fn, names):
+    """Lift *fn(p_dict) -> pytree* to one ``jax.jacfwd`` pass w.r.t. the dict of
+    parameters *names*, all in a single trace.
+
+    Follows ``jax.jacfwd`` pytree semantics on a dict input: each leaf of *fn*'s
+    output is replaced by ``{name: d leaf / d name}``, with the parameter's axes
+    appended after the leaf's own axes.  Nest k times for the k-th derivative;
+    nesting appends one ``{name: ...}`` level per pass, outermost level first
+    (``wrapped(p)[n1][n2]`` is ``d²/dn1 dn2`` with ``n1``'s axes before ``n2``'s,
+    matching ``jax.hessian`` on a dict input)."""
+    def wrapped(p_dict):
+        values = {name: jnp.asarray(p_dict[name]) for name in names}
+        return jax.jacfwd(lambda vals: fn({**p_dict, **vals}))(values)
+    return wrapped
+
+
 def _fd_parse_eps(fd_eps_val):
     """Parse an ``fd_eps`` value into ``(eps_below, eps_above, eps_avg)``.
 
@@ -1939,13 +1955,27 @@ def _run_compile_phases(root: Calculator) -> '_CompileContext':
 build = compile
 
 
-def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=False):
+def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=None, jit=False):
     """
     Build a derivative callable for a compiled graph.
 
-    Analogous to ``jax.jacfwd``: ``differentiate(graph, order)`` returns a
-    function; call that function on a *params* dict to evaluate the mixed
-    partial derivative at that point.
+    Analogous to ``jax.jacfwd`` / ``jax.hessian`` on a dict input:
+    ``differentiate(graph, order)`` returns a function; call that function on a
+    *params* dict to evaluate the derivative(s) at that point.
+
+    *order* selects what is computed:
+
+    - ``dict[str | Variable, int]``: a **single mixed partial**.
+      ``{'omega_m': 2, 'sigma8': 1}`` → d³/(dω_m² dσ₈).
+    - ``int`` (1 or 2), with the *params* argument selecting the parameters:
+      **all** partial derivatives of that total order, in one call.
+      ``order=1`` returns ``{name: d/dname}`` (like ``jax.jacfwd`` on a dict
+      input); ``order=2`` returns the Hessian as a nested dict
+      ``{name1: {name2: d²/dname1 dname2}}`` (like ``jax.hessian`` on a dict
+      input), with symmetric entries computed once.  See also the
+      :func:`jacfwd` and :func:`hessian` shorthands.
+    - sequence of dicts: a **batch of mixed partials** sharing setup and
+      evaluations; the returned function yields a tuple aligned with *order*.
 
     Uses JAX forward-mode AD for parameters that feed only JAX calculators and
     *direct* finite-difference stencils for parameters that feed
@@ -1960,9 +1990,11 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
     Parameters
     ----------
     graph : CompiledGraph
-    order : dict[str | Variable, int]
-        Maps each parameter to its derivative order.
-        ``{'omega_m': 2, 'sigma8': 1}`` → d³/(dω_m² dσ₈).
+    order : dict[str | Variable, int], int, or sequence of dict
+        See above.
+    params : sequence of str or Variable, optional
+        Only with an ``int`` *order*: the parameters to differentiate with
+        respect to.  Defaults to all varied, non-derived parameters of *graph*.
     fd_acc : int or dict[str | Variable, int], optional
         FD accuracy order; overrides ``param.fd_acc`` for each FD parameter
         in *order*.  A scalar value applies to all FD parameters; a dict
@@ -1977,12 +2009,15 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
     Returns
     -------
     callable
-        ``(params: dict = None, return_derived: bool = False, **kwargs) -> jax array``
+        ``(params: dict = None, return_derived: bool = False, **kwargs) -> derivatives``
 
-        When ``return_derived=False`` (default) returns the derivative of
-        ``graph``'s return value.  When ``return_derived=True`` returns a
-        tuple ``(d_return_val, d_derived_dict)`` — derivatives of the full
-        ``(return_val, derived_dict)`` pytree.
+        The derivative structure depends on the *order* form: a jax array
+        (dict form), a (nested) dict keyed by parameter name (int form), or a
+        tuple (sequence form).  When ``return_derived=True`` a tuple
+        ``(d_return_val, d_derived)`` is returned instead, where each part
+        carries that same structure (``d_derived`` is keyed by derived
+        parameter name, e.g. ``d_derived[dname][name1][name2]`` for the
+        Hessian form).
 
         *params* defaults to stored parameter values; *kwargs* are merged as
         overrides.  The returned function is compatible with ``jax.jit``.
@@ -1990,6 +2025,14 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
         ``jax.vmap``; for graphs with FD parameters the outer stencil loop
         runs in Python (vmap is used *internally* for array-valued FD
         parameters).
+
+    Notes
+    -----
+    For an array-valued parameter of shape ``S``, each derivative level appends
+    trailing axes: the Hessian entry ``[name1][name2]`` has trailing axes
+    ``S_name1 + S_name2``, including the full cross-element block for
+    ``[name][name]`` (matching ``jax.hessian``).  The legacy dict form
+    ``{'x': 2}`` instead computes element-wise (diagonal) derivatives only.
 
     Examples
     --------
@@ -2008,6 +2051,19 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
         cross = differentiate(graph, {'a': 1, 'x': 1})   # 'a' JAX, 'x' FD
         v = cross()
 
+    Gradient and Hessian over several parameters in one call::
+
+        jac = differentiate(graph, 1, params=['omega_m', 'sigma8'])
+        jac()['omega_m']                       # d/dω_m
+
+        hess = differentiate(graph, 2, params=['omega_m', 'sigma8'])
+        hess()['omega_m']['sigma8']            # d²/(dω_m dσ₈)
+
+    Batch of mixed partials sharing setup::
+
+        d_fn = differentiate(graph, [{'a': 1}, {'a': 1, 'b': 1}, {'b': 2}])
+        da, dab, dbb = d_fn(p0)
+
     Return value + derived params simultaneously::
 
         d_all = differentiate(graph, {'omega_m': 1})
@@ -2024,37 +2080,65 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
             return {(k.name if isinstance(k, Variable) else str(k)): v for k, v in value.items()}
         return {n: value for n in names}
 
-    # ── normalise order keys ───────────────────────────────────────────────────
-    order_dict = {(k.name if isinstance(k, Variable) else str(k)): v for k, v in order.items()}
+    def _to_name(key):
+        return key.name if isinstance(key, Variable) else str(key)
+
+    # ── normalise the *order* form ─────────────────────────────────────────────
+    if isinstance(order, dict):
+        form = 'single'
+        order_dicts = [{_to_name(key): int(k) for key, k in order.items()}]
+        names = list(order_dicts[0])
+    elif isinstance(order, (int, np.integer)):
+        form = 'tree'
+        total_order = int(order)
+        if total_order not in (1, 2):
+            raise ValueError(f'int order must be 1 (jacobian) or 2 (hessian), got {total_order}; '
+                             'pass explicit multi-index dicts for higher orders')
+        if params is None:
+            names = [p.name for p in graph.params if getattr(p, 'varied', True) and not p.derived]
+        else:
+            names = [_to_name(key) for key in params]
+        if not names:
+            raise ValueError('No varied parameter to differentiate with respect to; pass params=[...] explicitly')
+        if len(set(names)) != len(names):
+            raise ValueError(f'Duplicate parameter(s) in params: {names}')
+        order_dicts = None
+    elif isinstance(order, (list, tuple)):
+        form = 'sequence'
+        order_dicts = [{_to_name(key): int(k) for key, k in od.items()} for od in order]
+        names = sorted({name for od in order_dicts for name in od})
+    else:
+        raise TypeError(f'order must be a dict, an int, or a sequence of dicts, got {type(order)}')
+
+    if params is not None and form != 'tree':
+        raise ValueError('params is only accepted together with an int order')
 
     # ── validate ──────────────────────────────────────────────────────────────
     known = set(graph._fd_names) | set(graph._jax_names)
-    bad = set(order_dict) - known
+    bad = set(names) - known
     if bad:
         raise ValueError(f'Unknown parameter(s): {sorted(bad)}')
 
     # ── split by differentiation strategy ─────────────────────────────────────
-    fd_items  = [(n, k) for n, k in order_dict.items() if n in graph._fd_names  and k > 0]
-    jax_items = [(n, k) for n, k in order_dict.items() if n in graph._jax_names and k > 0]
+    fd_names_sel  = [n for n in names if n in graph._fd_names]
+    jax_names_sel = [n for n in names if n in graph._jax_names]
 
     # ── resolve fd_acc / fd_eps overrides for FD params ──────────────────────
-    fd_names_in_order = [n for n, _ in fd_items]
-    acc_ov = _resolve_per_param(fd_acc, fd_names_in_order)
-    eps_ov = _resolve_per_param(fd_eps, fd_names_in_order)
+    acc_ov = _resolve_per_param(fd_acc, fd_names_sel)
+    eps_ov = _resolve_per_param(fd_eps, fd_names_sel)
 
-    # ── precompute stencils ────────────────────────────────────────────────────
-    fd_specs = []
-    for name, k in fd_items:
+    def _fd_spec(name, k):
+        """Return ``(offsets, coeffs, eps, prior_limits)`` for the order-*k* stencil of FD param *name*."""
         param_obj = graph.params[name]
-        _eps = eps_ov.get(name, param_obj.fd_eps)
-        if _eps is None or not np.isfinite(_eps):
-            _eps = 1e-5
-        _acc = acc_ov.get(name, param_obj.fd_acc)
-        offsets, coeffs = _fd_stencil(k, _acc)
-        _prior_limits = param_obj.prior.limits if param_obj.prior is not None else None
-        fd_specs.append((name, offsets, coeffs, _eps, k, _prior_limits))
+        eps = eps_ov.get(name, param_obj.fd_eps)
+        if eps is None or (np.ndim(eps) == 0 and not np.isfinite(eps)):
+            eps = 1e-5
+        acc = acc_ov.get(name, param_obj.fd_acc)
+        offsets, coeffs = _fd_stencil(k, acc)
+        prior_limits = param_obj.prior.limits if param_obj.prior is not None else None
+        return offsets, coeffs, eps, prior_limits
 
-    # ── build the derivative function chain once ───────────────────────────────
+    # ── shared evaluation core ─────────────────────────────────────────────────
     # _return_derived is a one-element mutable box shared between _eval and
     # _derivative.  _eval reads it at trace time so that when return_derived=False
     # (the common case) the derivative chain only differentiates val, not
@@ -2071,16 +2155,154 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
             return val, derived_dict
         return val
 
-    fn = _eval
+    def _build_chain(order_dict):
+        """One mixed partial: JAX jacfwd nests inner, direct FD stencils outer."""
+        fn = _eval
+        for name, k in order_dict.items():
+            if name in graph._jax_names and k > 0:
+                for _ in range(k):
+                    fn = _jacfwd_wrap(fn, name)
+        for name, k in order_dict.items():
+            if name in graph._fd_names and k > 0:
+                offsets, coeffs, eps, prior_limits = _fd_spec(name, k)
+                fn = _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=prior_limits)
+        return fn
 
-    # JAX derivatives first (inner): nest jacfwd once per order unit.
-    for name, k in jax_items:
-        for _ in range(k):
-            fn = _jacfwd_wrap(fn, name)
+    # ── build the derivative function chain(s) once ────────────────────────────
+    if form in ('single', 'sequence'):
+        signatures = [tuple(od.items()) for od in order_dicts]
+        chains = {}
+        for signature, order_dict in zip(signatures, order_dicts):
+            if signature not in chains:
+                chains[signature] = _build_chain(order_dict)
 
-    # FD stencils outside (outer): direct order-k stencil, linear cost.
-    for name, offsets, coeffs, _eps, _k, _prior_limits in fd_specs:
-        fn = _fd_direct_wrap(fn, name, offsets, coeffs, _eps, _k, prior_limits=_prior_limits)
+        def _run(p0):
+            results = {signature: chain(p0) for signature, chain in chains.items()}
+            if form == 'single':
+                return results[signatures[0]]
+            entries = tuple(results[signature] for signature in signatures)
+            if _return_derived[0]:
+                return tuple(entry[0] for entry in entries), tuple(entry[1] for entry in entries)
+            return entries
+
+    else:  # form == 'tree': all partials of total order 1 (jacobian) or 2 (hessian)
+        param_ndims = {name: len(graph.params[name].shape or ()) for name in names}
+
+        def _permute_param_axes(entry, src_names, dst_names):
+            """Reorder the trailing parameter axis blocks of every leaf of *entry*
+            from *src_names* order to *dst_names* order (a permutation of it)."""
+            if list(src_names) == list(dst_names) or all(param_ndims[name] == 0 for name in src_names):
+                return entry
+            total_axes = sum(param_ndims[name] for name in src_names)
+            starts = {}
+            position = 0
+            for name in src_names:
+                starts[name] = position
+                position += param_ndims[name]
+
+            def _per_leaf(leaf):
+                lead = leaf.ndim - total_axes
+                perm = list(range(lead))
+                for name in dst_names:
+                    perm.extend(range(lead + starts[name], lead + starts[name] + param_ndims[name]))
+                return jnp.transpose(leaf, perm)
+
+            return jax.tree_util.tree_map(_per_leaf, entry)
+
+        def _extract(res, getter):
+            """Apply *getter* (indexing into the ``{name: ...}`` dicts grafted by
+            jacfwd) to both the return-value part and each derived entry of a
+            chain result."""
+            if _return_derived[0]:
+                d_val, d_derived = res
+                return getter(d_val), {dn: getter(d) for dn, d in d_derived.items()}
+            return getter(res)
+
+        # Pure-JAX block: one (nested) jacfwd pass over the dict of JAX params —
+        # a single trace yields the whole gradient / Hessian block at once.
+        jacfwd_inner = _jacfwd_dict_wrap(_eval, jax_names_sel) if jax_names_sel else None
+        chain_jax = None
+        if jax_names_sel:
+            chain_jax = jacfwd_inner if total_order == 1 else _jacfwd_dict_wrap(jacfwd_inner, jax_names_sel)
+
+        fd_chains = {}     # order 1: fd name -> chain
+        cross_chains = {}  # order 2: fd name -> FD stencil over the JAX gradient dict (all (jax, fd) cross terms at once)
+        fdfd_chains = {}   # order 2: (p, q) with p <= q in `names` order -> chain; axes appended (q, p)
+
+        if total_order == 1:
+            for name in fd_names_sel:
+                offsets, coeffs, eps, prior_limits = _fd_spec(name, 1)
+                fd_chains[name] = _fd_direct_wrap(_eval, name, offsets, coeffs, eps, 1, prior_limits=prior_limits)
+        else:
+            for name in fd_names_sel:
+                if jax_names_sel:
+                    offsets, coeffs, eps, prior_limits = _fd_spec(name, 1)
+                    cross_chains[name] = _fd_direct_wrap(jacfwd_inner, name, offsets, coeffs, eps, 1, prior_limits=prior_limits)
+            for idx_p, name_p in enumerate(fd_names_sel):
+                for name_q in fd_names_sel[idx_p:]:
+                    if name_p == name_q and not graph.params[name_p].shape:
+                        # Scalar diagonal: direct order-2 stencil (fewer evaluations).
+                        offsets, coeffs, eps, prior_limits = _fd_spec(name_p, 2)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 2, prior_limits=prior_limits)
+                    elif name_p == name_q:
+                        # Array diagonal: nested order-1 stencils give the full
+                        # cross-element block.  The inner stencil gets no prior
+                        # limits and the outer stencil's limits are shrunk by the
+                        # inner reach, so all nested points stay in bounds and the
+                        # inner base is never shifted (a shift there would distort
+                        # the outer stencil grid).
+                        offsets, coeffs, eps, prior_limits = _fd_spec(name_p, 1)
+                        inner = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 1, prior_limits=None)
+                        eps_below, eps_above, _ = _fd_parse_eps(eps)
+                        margin = (len(offsets) // 2) * max(eps_below, eps_above)
+                        outer_limits = None
+                        if prior_limits is not None:
+                            lo, hi = prior_limits
+                            outer_limits = (lo + margin if np.isfinite(lo) else lo,
+                                            hi - margin if np.isfinite(hi) else hi)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets, coeffs, eps, 1, prior_limits=outer_limits)
+                    else:
+                        offsets_q, coeffs_q, eps_q, limits_q = _fd_spec(name_q, 1)
+                        offsets_p, coeffs_p, eps_p, limits_p = _fd_spec(name_p, 1)
+                        inner = _fd_direct_wrap(_eval, name_q, offsets_q, coeffs_q, eps_q, 1, prior_limits=limits_q)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets_p, coeffs_p, eps_p, 1, prior_limits=limits_p)
+
+        def _run(p0):
+            entries = {}  # ordered name tuple (n1,) or (n1, n2) -> derivative entry, axes in tuple order
+            if total_order == 1:
+                if chain_jax is not None:
+                    res = chain_jax(p0)
+                    for name in jax_names_sel:
+                        entries[(name,)] = _extract(res, lambda t, a=name: t[a])
+                for name, chain in fd_chains.items():
+                    entries[(name,)] = chain(p0)
+            else:
+                if chain_jax is not None:
+                    res = chain_jax(p0)
+                    for name_1 in jax_names_sel:
+                        for name_2 in jax_names_sel:
+                            entries[(name_1, name_2)] = _extract(res, lambda t, a=name_1, b=name_2: t[a][b])
+                for name_q, chain in cross_chains.items():
+                    res = chain(p0)  # axes: (jax name, name_q)
+                    for name in jax_names_sel:
+                        entry = _extract(res, lambda t, a=name: t[a])
+                        entries[(name, name_q)] = entry
+                        entries[(name_q, name)] = _permute_param_axes(entry, [name, name_q], [name_q, name])
+                for (name_p, name_q), chain in fdfd_chains.items():
+                    entry = chain(p0)  # axes: (name_q, name_p)
+                    entries[(name_q, name_p)] = entry
+                    if name_p != name_q:
+                        entries[(name_p, name_q)] = _permute_param_axes(entry, [name_q, name_p], [name_p, name_q])
+
+            def _nest(getter):
+                if total_order == 1:
+                    return {name: getter(entries[(name,)]) for name in names}
+                return {name_1: {name_2: getter(entries[(name_1, name_2)]) for name_2 in names} for name_1 in names}
+
+            if _return_derived[0]:
+                derived_names = list(next(iter(entries.values()))[1])
+                return _nest(lambda entry: entry[0]), {dn: _nest(lambda entry, a=dn: entry[1][a]) for dn in derived_names}
+            return _nest(lambda entry: entry)
 
     # ── returned callable ──────────────────────────────────────────────────────
     def _derivative(params=None, return_derived=False, **kwargs):
@@ -2096,13 +2318,50 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None, jit=Fal
         p0.update(kwargs)
         _return_derived[0] = return_derived
         try:
-            return fn(p0)
+            return _run(p0)
         finally:
             for p in graph.params:
                 if p.name in input_saved:
                     p._value = input_saved[p.name]
 
     return _derivative
+
+
+def jacfwd(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=False):
+    """First derivatives of *graph* w.r.t. several parameters in one call.
+
+    Analogous to ``jax.jacfwd`` on a dict input: returns a function whose value
+    is ``{name: d graph / d name}``.  Shorthand for
+    ``differentiate(graph, 1, params=params, ...)``; see :func:`differentiate`
+    for the argument and return-value semantics.
+
+    Examples
+    --------
+    ::
+
+        jac = jacfwd(graph, params=['omega_m', 'sigma8'])
+        jac()['omega_m']            # d graph / dω_m at default params
+    """
+    return differentiate(graph, 1, params=params, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
+
+
+def hessian(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=False):
+    """Second derivatives (Hessian) of *graph* w.r.t. several parameters in one call.
+
+    Analogous to ``jax.hessian`` on a dict input: returns a function whose value
+    is the nested dict ``{name1: {name2: d² graph / dname1 dname2}}``, with
+    symmetric entries computed once.  Shorthand for
+    ``differentiate(graph, 2, params=params, ...)``; see :func:`differentiate`
+    for the argument and return-value semantics.
+
+    Examples
+    --------
+    ::
+
+        hess = hessian(graph, params=['omega_m', 'sigma8'])
+        hess()['omega_m']['sigma8']   # d² graph / (dω_m dσ₈) at default params
+    """
+    return differentiate(graph, 2, params=params, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
 
 
 @default_mpicomm

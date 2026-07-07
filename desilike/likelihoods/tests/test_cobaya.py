@@ -317,11 +317,11 @@ def test_matches_full_native_cobaya_pipeline(tmp_path):
     Two precision knobs matter and are **not** inherited automatically from cosmoprimo by
     cobaya's native ``camb`` theory (found by sweeping them until the gap closed):
 
-    * ``lmax``: cosmoprimo's ``Harmonic.ellmax_cl`` is fixed at the *fiducial* cosmology's
-      construction (the ``ellmax_cl=`` kwarg), not by the per-call
-      ``harmonic.lensed_cl(ellmax=...)`` argument (which only slices the precomputed table)
-      -- so cobaya's own ``lmax`` extra_arg must match the fiducial's ``ellmax_cl``, not the
-      (possibly smaller) likelihood-requested ellmax.
+    * ``lmax``: ``CosmoprimoCosmology`` computes Cl up to
+      ``max(likelihood-requested ellmax, fiducial's ellmax_cl)`` (the fiducial's explicit
+      ``ellmax_cl=`` kwarg acts as a floor; ``harmonic.lensed_cl(ellmax=...)`` then only
+      slices that table) -- so cobaya's own ``lmax`` extra_arg must match the fiducial's
+      (here larger) ``ellmax_cl``, not the likelihood-requested ellmax.
     * ``lens_potential_accuracy``: cosmoprimo always sets this to 1 internally for lensed Cl;
       cobaya's native theory defaults it differently unless set explicitly.
 

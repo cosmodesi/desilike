@@ -87,7 +87,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
         self._load_data(data_dir)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=self.ellmax, non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
         vc = self.propose_params()
         if params is not None:
@@ -328,9 +328,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
         self._load_data(data_file)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            cosmo = CosmoprimoCosmology(engine='camb',
-                                        fiducial=('DESI', dict(lensing=True, ellmax_cl=self._ellmax,
-                                                               non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
         vc = self.propose_params()
         if params is not None:

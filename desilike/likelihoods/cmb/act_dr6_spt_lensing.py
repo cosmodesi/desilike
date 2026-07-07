@@ -137,10 +137,7 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
 
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            cosmo = CosmoprimoCosmology(
-                engine='camb',
-                fiducial=('DESI', dict(lensing=True, ellmax_cl=self._ellmax, non_linear='mead')),
-            )
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
 
         variable_collection = self.propose_params()

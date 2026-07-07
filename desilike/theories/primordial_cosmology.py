@@ -107,7 +107,11 @@ class PrimordialCosmology(Calculator):
     def __init__(self, *args, params=None, fiducial=None, **kwargs):
         # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
         if params is None:
-            params = self.propose_params(*args, fiducial=fiducial, **kwargs)
+            # Forward fiducial only when given, so that an omitted fiducial falls through
+            # to propose_params' own default (e.g. 'DESI') instead of being clobbered by None.
+            if fiducial is not None:
+                kwargs['fiducial'] = fiducial
+            params = self.propose_params(*args, **kwargs)
         elif not isinstance(params, VariableCollection):
             params = VariableCollection(params)
         self.derived_params = params.select(derived=True)
@@ -356,13 +360,16 @@ def _get_fiducial(fiducial, calculator=None):
     return fiducial
 
 
-# Lensing-reconstruction accuracy settings, applied whenever a 'harmonic.lens_potential_cl'
-# requirement is registered: default engine precision under-resolves the lensing potential
-# (both the non-linear matter power feeding it and the ell reach/margin around it).
+# Engine settings derived from the registered 'harmonic.*' requirements (see __call__):
+# 'ellmax_cl' is always raised to the largest requested ellmax; any lensed-Cl /
+# lens-potential-Cl requirement turns on 'lensing' with a non-linear matter power model
+# (default engine settings under-resolve lensing otherwise); the lensing potential
+# additionally gets the reconstruction accuracy boost below (both the non-linear matter
+# power feeding it and the ell reach/margin around it).
 # 'non_linear'/'ellmax_cl' are cosmoprimo calculation parameters (set like any other
 # cosmological parameter); the rest are raw engine precision knobs forwarded via
 # cosmoprimo's ``extra_params``.
-_LENS_POTENTIAL_CL_CALC_PARAMS = {
+_LENSING_CALC_PARAMS = {
     'camb': dict(non_linear='mead2016'),
     'class': dict(non_linear='hmcode'),
 }
@@ -566,17 +573,22 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # below raise even though the requirement was registered via add_requirements().
         lens_potential_cl = any(spec_key[0] == 'harmonic.lens_potential_cl' for spec_key in self._requirements)
         lensing = lens_potential_cl or any(spec_key[0] == 'harmonic.lensed_cl' for spec_key in self._requirements)
-        # Lensing-reconstruction accuracy boost (see _LENS_POTENTIAL_CL_* above), applied
-        # only when the lensing potential itself (not just lensed Cl) is actually needed.
-        calc_params = extra_params = None
+        # Engine settings derived from the registered harmonic requirements (see
+        # _LENSING_CALC_PARAMS / _LENS_POTENTIAL_CL_* above): 'ellmax_cl' always covers the
+        # largest requested ellmax; lensed Cl also turn on the non-linear matter power; the
+        # lensing potential additionally gets the reconstruction accuracy boost.
+        calc_params, extra_params = {}, None
+        requested_ellmax = max([0] + [spec['static']['ellmax'] for spec_key, spec in self._requirements.items()
+                                      if spec_key[0].startswith('harmonic.') and 'ellmax' in spec['static']])
+        if lensing:
+            calc_params.update(_LENSING_CALC_PARAMS.get(self._engine, {}))
         if lens_potential_cl:
-            calc_params = dict(_LENS_POTENTIAL_CL_CALC_PARAMS.get(self._engine, {}))
             extra_params = _LENS_POTENTIAL_CL_EXTRA_PARAMS.get(self._engine)
-            min_ellmax_cl = _LENS_POTENTIAL_CL_MIN_ELLMAX_CL.get(self._engine)
-            if min_ellmax_cl is not None:
-                requested_ellmax = max([0] + [spec['static']['ellmax'] for spec_key, spec in self._requirements.items()
-                                              if spec_key[0].startswith('harmonic.') and 'ellmax' in spec['static']])
-                calc_params['ellmax_cl'] = max(min_ellmax_cl, requested_ellmax)
+            requested_ellmax = max(requested_ellmax, _LENS_POTENTIAL_CL_MIN_ELLMAX_CL.get(self._engine, 0))
+        if requested_ellmax:
+            # Only ever raise ellmax_cl: an explicit (larger) fiducial setting is an accuracy
+            # choice that must not be undercut by a smaller likelihood-requested ellmax.
+            calc_params['ellmax_cl'] = max(requested_ellmax, self._fiducial['ellmax_cl'])
         if self._is_external:
             try:
                 self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,

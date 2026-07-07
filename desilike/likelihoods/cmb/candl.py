@@ -127,8 +127,7 @@ class _BaseCandlLikelihood(Likelihood):
 
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            ellmax_cl = max(self._ellmax_standard, self._ellmax_potential)
-            cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=ellmax_cl, non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
         self._cosmo_params = dict(cosmo_params or {})
         self._cosmo_prior_names = [name for name in self.like.required_prior_parameters if name not in self.like.required_nuisance_parameters]
@@ -407,8 +406,9 @@ class _BaseClikCandlLikelihood(Likelihood):
         Path to the ``.clik`` directory.
     cosmo : PrimordialCosmology, default=None
         Cosmology calculator.  Defaults to
-        ``CosmoprimoCosmology(engine='camb', fiducial='DESI')`` with
-        lensing and ``ellmax_cl`` matched to the clik file's requirements.
+        ``CosmoprimoCosmology(engine='camb', fiducial='DESI')``; lensing,
+        ``ellmax_cl`` and the non-linear matter power are derived by the
+        cosmology from the registered requirements.
     params : Parameter, VariableCollection, dict, default=None
         Override the auto-discovered nuisance parameters.
     **kwargs
@@ -430,8 +430,7 @@ class _BaseClikCandlLikelihood(Likelihood):
 
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            ellmax_cl = max(self._ellmax_standard, self._ellmax_potential)
-            cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=ellmax_cl, non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
 
         vc = self.propose_params()

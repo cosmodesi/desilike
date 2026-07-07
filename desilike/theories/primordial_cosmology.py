@@ -356,17 +356,55 @@ def _get_fiducial(fiducial, calculator=None):
     return fiducial
 
 
-def _build_cosmoprimo(fiducial, params):
+# Lensing-reconstruction accuracy settings, applied whenever a 'harmonic.lens_potential_cl'
+# requirement is registered: default engine precision under-resolves the lensing potential
+# (both the non-linear matter power feeding it and the ell reach/margin around it).
+# 'non_linear'/'ellmax_cl' are cosmoprimo calculation parameters (set like any other
+# cosmological parameter); the rest are raw engine precision knobs forwarded via
+# cosmoprimo's ``extra_params``.
+_LENS_POTENTIAL_CL_CALC_PARAMS = {
+    'camb': dict(non_linear='mead2016'),
+    'class': dict(non_linear='hmcode'),
+}
+_LENS_POTENTIAL_CL_EXTRA_PARAMS = {
+    'camb': dict(lens_margin=1250, lens_potential_accuracy=4,
+                AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1),
+    'class': dict(nonlinear_min_k_max=20, accurate_lensing=1, delta_l_max=800),
+}
+# CAMB needs enough ell reach internally (beyond the requested ellmax) for lens_margin to
+# have room to work with; CLASS's 'delta_l_max' above already provides that margin relative
+# to whatever ellmax_cl already is, so it needs no equivalent floor here.
+_LENS_POTENTIAL_CL_MIN_ELLMAX_CL = {'camb': 4000}
+
+
+def _build_cosmoprimo(fiducial, params, lensing=False, calc_params=None, extra_params=None):
     """Clone *fiducial* with the given *params* dict (desilike names → values).
 
     Values are passed as-is so JAX tracers are preserved for JAX-native engines;
     external engines (camb, class) always receive plain floats.
+
+    *lensing* forwards cosmoprimo's ``lensing`` calculation parameter (default
+    ``False``): without it, external engines (camb, class) never compute lensed
+    Cl/lens-potential Cl, so ``get_harmonic().lensed_cl()`` /
+    ``.lens_potential_cl()`` raise even though the requirement was registered.
+
+    *calc_params* / *extra_params* carry the lensing-reconstruction accuracy overrides
+    (see ``_LENS_POTENTIAL_CL_*`` above); *extra_params* is merged on top of any
+    precision params the fiducial's engine already carries, rather than replacing them.
     """
     kw = {_CONVERSIONS.get(name, name): value for name, value in params.items()}
     # ``h`` and ``theta_MC_100`` are mutually exclusive inputs to cosmoprimo; when both
     # are present ``h`` takes precedence (see primordial_cosmology.yaml).
     if 'h' in kw and 'theta_MC_100' in kw:
         kw.pop('theta_MC_100')
+    if lensing:
+        kw['lensing'] = True
+    if calc_params:
+        kw.update(calc_params)
+    if extra_params:
+        merged_extra_params = dict(getattr(getattr(fiducial, 'engine', None), '_extra_params', None) or {})
+        merged_extra_params.update(extra_params)
+        return fiducial.clone(base='input', extra_params=merged_extra_params, **kw)
     return fiducial.clone(base='input', **kw)
 
 
@@ -523,9 +561,26 @@ class CosmoprimoCosmology(PrimordialCosmology):
         params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
                   for param in self.params}
         self._param_values = params
+        # Lensed Cl / lens-potential Cl are opt-in on external engines (camb, class): without
+        # requesting 'lensing' at build time, get_harmonic().lensed_cl()/.lens_potential_cl()
+        # below raise even though the requirement was registered via add_requirements().
+        lens_potential_cl = any(spec_key[0] == 'harmonic.lens_potential_cl' for spec_key in self._requirements)
+        lensing = lens_potential_cl or any(spec_key[0] == 'harmonic.lensed_cl' for spec_key in self._requirements)
+        # Lensing-reconstruction accuracy boost (see _LENS_POTENTIAL_CL_* above), applied
+        # only when the lensing potential itself (not just lensed Cl) is actually needed.
+        calc_params = extra_params = None
+        if lens_potential_cl:
+            calc_params = dict(_LENS_POTENTIAL_CL_CALC_PARAMS.get(self._engine, {}))
+            extra_params = _LENS_POTENTIAL_CL_EXTRA_PARAMS.get(self._engine)
+            min_ellmax_cl = _LENS_POTENTIAL_CL_MIN_ELLMAX_CL.get(self._engine)
+            if min_ellmax_cl is not None:
+                requested_ellmax = max([0] + [spec['static']['ellmax'] for spec_key, spec in self._requirements.items()
+                                              if spec_key[0].startswith('harmonic.') and 'ellmax' in spec['static']])
+                calc_params['ellmax_cl'] = max(min_ellmax_cl, requested_ellmax)
         if self._is_external:
             try:
-                self._cosmo = _build_cosmoprimo(self._fiducial, params)
+                self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
+                                                calc_params=calc_params, extra_params=extra_params)
                 self._run_requirements(params)
             except (CosmologyInputError, CosmologyComputationError):
                 # Unphysical or numerically-pathological input (e.g. omega_cdm < 0, or a
@@ -540,7 +595,12 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 # since that is the only place able to observe the outer trace status).
                 if not getattr(self, '_is_tracing', False):
                     raise
-                self._cosmo = self._fiducial  # valid; used only for correctly-shaped placeholders
+                # valid; used only for correctly-shaped placeholders below, so must still
+                # support 'lensing'/accuracy overrides or _run_requirements' lensed_cl/
+                # lens_potential_cl call raises instead of the NaN fallback taking effect.
+                self._cosmo = (_build_cosmoprimo(self._fiducial, {}, lensing=lensing,
+                                                 calc_params=calc_params, extra_params=extra_params)
+                               if lensing else self._fiducial)
                 self._run_requirements(params)
                 for spec_key in self._requirements:
                     self._results[spec_key] = _nan_like(self._results[spec_key])
@@ -550,7 +610,8 @@ class CosmoprimoCosmology(PrimordialCosmology):
             # JAX-native: tracers survive end-to-end (no pure_callback boundary), so
             # cosmoprimo's own exception_or_nan already raises in eager / NaNs under
             # jax.jit-grad-vmap tracing without any extra handling needed here.
-            self._cosmo = _build_cosmoprimo(self._fiducial, params)
+            self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
+                                            calc_params=calc_params, extra_params=extra_params)
             self._run_requirements(params)
 
     def _run_requirements(self, params):

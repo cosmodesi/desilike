@@ -1120,8 +1120,8 @@ class BAOTheory(Calculator):
 
     Attributes
     ----------
-    DH_over_rd, DM_over_rd, DH_over_DM, DV_over_rd : JAX scalar
-        Measured distance combinations.
+    DH_over_rd, DM_over_rd, DH_over_DM, DV_over_rd, F_AP : JAX scalar
+        Measured distance combinations (:math:`F_{\rm AP} = D_M/D_H`).
     qpar, qper, qiso, qap : JAX scalar
         AP ratios relative to fiducial.
 
@@ -1208,6 +1208,7 @@ class BAOTheory(Calculator):
         self.DM_over_rd = DM / rd
         self.DH_over_DM = DH / DM
         self.DV_over_rd = DV / rd
+        self.F_AP = DM / DH
         self.qpar = self.DH_over_rd / self._DH_over_rd_fid
         self.qper = self.DM_over_rd / self._DM_over_rd_fid
         self.qiso = self.DV_over_rd / self._DV_over_rd_fid
@@ -1215,13 +1216,13 @@ class BAOTheory(Calculator):
         return self
 
     def tree_flatten(self):
-        return ([self.DH_over_rd, self.DM_over_rd, self.DH_over_DM, self.DV_over_rd,
+        return ([self.DH_over_rd, self.DM_over_rd, self.DH_over_DM, self.DV_over_rd, self.F_AP,
                  self.qpar, self.qper, self.qiso, self.qap], {'z': self.z})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd,
+        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd, obj.F_AP,
          obj.qpar, obj.qper, obj.qiso, obj.qap) = children
         obj.z = aux['z']
         return obj

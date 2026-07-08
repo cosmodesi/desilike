@@ -32,6 +32,12 @@ from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheor
 def _format_compression_data(data, covariance, parameters):
     """Return (data, flatdata, parameters, covariance) from flexible inputs.
 
+    A parameter may be measured several times (e.g. two correlated F_AP measurements):
+    repeated names are stored as one multi-value leaf, and the returned *parameters*
+    list is per data row (names repeated), so the theory prediction is repeated too.
+    Repeated names must be consecutive, so that the flat data order (hence the
+    covariance row order) is preserved.
+
     Parameters
     ----------
     data : None, array-like, or lsstypes.ObservableLike
@@ -40,18 +46,20 @@ def _format_compression_data(data, covariance, parameters):
     covariance : None, array-like, or lsstypes.CovarianceMatrix
         Covariance matrix.  1-D input is treated as a diagonal.
     parameters : list of str or None
-        Parameter names.  Required when *data* is not an lsstypes object.
+        Parameter names, one per data row.  Required when *data* is not an lsstypes object.
 
     Returns
     -------
     data : lsstypes.ObservableTree
     flatdata : numpy array, shape (n,)
-    parameters : list of str
+    parameters : list of str, one per data row
     covariance : lsstypes.CovarianceMatrix or None
     """
     if isinstance(data, types.ObservableLike):
         obs = data
-        parameters = list(obs.parameters)
+        parameters = []
+        for name in obs.parameters:
+            parameters += [name] * obs.get(parameters=name).size
         flatdata = obs.value()
     else:
         if parameters is None:
@@ -61,8 +69,17 @@ def _format_compression_data(data, covariance, parameters):
             flatdata = np.zeros(len(parameters), dtype='f8')
         else:
             flatdata = np.asarray(data, dtype='f8').ravel()
-        leaves = [types.ObservableLeaf(value=np.atleast_1d(v)) for v in flatdata]
-        obs = types.ObservableTree(leaves, parameters=parameters)
+        if len(flatdata) != len(parameters):
+            raise ValueError(f'data size {len(flatdata)} does not match number of parameters {len(parameters)}')
+        labels, groups = [], []
+        for name, value in zip(parameters, flatdata):
+            if labels and name == labels[-1]:
+                groups[-1].append(value)
+            else:
+                labels.append(name)
+                groups.append([value])
+        leaves = [types.ObservableLeaf(value=np.asarray(group, dtype='f8')) for group in groups]
+        obs = types.ObservableTree(leaves, parameters=labels)
 
     cov = None
     if covariance is not None:
@@ -94,7 +111,9 @@ class BaseCompressionObservable(Calculator):
     covariance : None, array-like, or lsstypes.CovarianceMatrix, default=None
         Covariance matrix passed to the likelihood.
     parameters : list of str, default=None
-        Names of theory attributes to compare to data.
+        Names of theory attributes to compare to data, one per data row.
+        A name may be repeated (consecutively) to compare several correlated
+        measurements to the same theory prediction.
         Required when *data* is not an lsstypes object.
     name : str, default='compressed'
         Observable name used to match covariance matrices in multi-observable likelihoods.

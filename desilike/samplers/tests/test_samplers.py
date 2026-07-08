@@ -25,7 +25,11 @@ SAMPLER = dict(
     emcee=lambda: samplers.Emcee(nwalkers=8),
     zeus=lambda: samplers.Zeus(nwalkers=8),
     mhmcmc=lambda: samplers.MH(),
-    hmc=lambda: samplers.BlackjaxHMC(),
+    # num_integration_steps must keep the trajectory away from a full oscillation period:
+    # after mass-matrix adaptation the space is ~unit Gaussian (period 2*pi) and the default
+    # 60 steps x adapted step size ~0.85 lands near an integer number of periods, so the
+    # trajectory nearly returns to its start and one direction stops mixing (tau ~ 2400).
+    hmc=lambda: samplers.BlackjaxHMC(num_integration_steps=10),
     nuts=lambda: samplers.BlackjaxNUTS(),
     mclmc=lambda: samplers.BlackjaxMCLMC(),
     numpyro_nuts=lambda: samplers.NumpyroNUTS(),

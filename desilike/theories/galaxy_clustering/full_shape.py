@@ -3178,7 +3178,8 @@ class COMETTracerSpectrum2Poles(Calculator):
             if pt is None:
                 pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            self.pt.update(**({} if z is None else {'z': z}), k=k, ells=ells, tracers=tracers, model=model)
+            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo).items() if value is not None}
+            self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model)
 
     def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
         if self._direct:
@@ -3524,7 +3525,8 @@ class COMETTracerSpectrum3Poles(Calculator):
             if pt is None:
                 pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            self.pt.update(**({} if z is None else {'z': z}), k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
+            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo).items() if value is not None}
+            self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
     def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
         if self._direct:

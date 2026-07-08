@@ -86,6 +86,14 @@ class FunctionWrapper:
     def __setstate__(self, state):
         self.__dict__ = state
 
+    def __copy__(self):
+        return FunctionWrapper(self.function, self.name)
+
+    def __deepcopy__(self, memo):
+        # In-process copies (e.g. per-batch kernel copies in BaseSampler.run) must stay
+        # callable; only MPI pickling (__getstate__) strips the function to its name.
+        return FunctionWrapper(self.function, self.name)
+
 
 class _stop_wait_message:
     def __repr__(self):

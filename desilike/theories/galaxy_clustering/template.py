@@ -234,6 +234,7 @@ class BAOSpectrum2Template(Spectrum2Template):
 
         # Fiducial BAO distance ratios
         rd = self._fiducial.rs_drag
+        self._rs_drag_fid = float(rd)
         DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(z))
         DM_fid = self._fiducial.comoving_transverse_distance(z)
         DV_fid = DH_fid**eta * DM_fid**(1. - eta) * z**(1. / 3.)
@@ -370,6 +371,7 @@ class FixedSpectrum2Template(Spectrum2Template):
         self.z = float(z)
 
         _cosmo = self._fiducial._cosmo
+        self._rs_drag_fid = float(_cosmo.rs_drag)
 
         fo = _cosmo.get_fourier()
         sigma8 = fo.sigma8_z(z, of='delta_cb')
@@ -816,7 +818,7 @@ class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
     def __call__(self):
         super().__call__()  # sets pk_dd, pknow_dd, f, f0, fk, DH_over_rd, etc.
         baoshift = self.baoshift.value
-        kshift = self._phiinf / (1. + (self._kstar / self.k) ** self._epsilon) / self._fiducial.rs_drag
+        kshift = self._phiinf / (1. + (self._kstar / self.k) ** self._epsilon) / self._rs_drag_fid
         k_shifted = jnp.clip(self.k + (baoshift - 1.) * kshift, self._k_fine[0], self._k_fine[-1])
         wiggles = jnp.interp(jnp.log10(k_shifted), jnp.log10(self._k_fine), self._wiggles_fine)
         self.pk_dd = self._pknow_dd_fid + wiggles
@@ -1275,9 +1277,139 @@ class BAOPhaseShiftTheory(BAOTheory):
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd,
+        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd, obj.F_AP,
          obj.qpar, obj.qper, obj.qiso, obj.qap,
          obj.N_eff, obj.baoshift) = children
+        obj.z = aux['z']
+        return obj
+
+
+class ShapeFitTheory(BAOTheory):
+    r"""Extract ShapeFit parameters from a cosmology provider, on top of the BAO distance ratios.
+
+    Following https://arxiv.org/abs/2106.07641 (eq. 3.11), at each call, on top of the
+    :class:`BAOTheory` observables, computes from the registered cosmology:
+
+    .. math::
+
+        m = \left.\frac{d \ln P^{\rm now}(k)}{d \ln k}\right|_{k = k_p s}, \quad
+        A_p = \frac{1}{s^3} P^{\rm now}(k_p s), \quad
+        s = \frac{r_d}{r_{d,\rm fid}}
+
+    where :math:`P^{\rm now}` is the no-wiggle linear power spectrum (divided by the
+    primordial power spectrum times :math:`k` when ``n_varied``, which changes the
+    definition of :math:`m`), and the ratios to the fiducial:
+
+    .. math::
+
+        dm = m - m_{\rm fid}, \quad dn = n_s - n_{s,\rm fid}, \quad
+        df = \frac{f \sqrt{A_p}}{(f \sqrt{A_p})_{\rm fid}}
+
+    with :math:`f = \sigma_{8,\theta_{cb}} / \sigma_{8,\delta_{cb}}` the growth rate.
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+    eta : float, default=1./3.
+        Exponent defining the DV combination.
+    kp : float, default=0.03
+        Pivot wavenumber [h/Mpc] of the ShapeFit parameterization.
+    n_varied : bool, default=False
+        Use the second-order ShapeFit parameter ``n``; this changes the definition of ``m``.
+    with_now : str, default='peakaverage'
+        Engine for the no-wiggle power spectrum.
+    fiducial : str or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology used to normalise the ratios.
+    cosmo : PrimordialCosmology, optional
+        Cosmology provider; a :class:`CosmoprimoCosmology` is created if not given.
+
+    Attributes
+    ----------
+    m, n, f_sqrt_Ap : JAX scalar
+        ShapeFit slope, primordial index and power-spectrum amplitude parameters.
+    dm, dn, df : JAX scalar
+        Ratios / differences relative to the fiducial cosmology.
+    Plus all :class:`BAOTheory` attributes (``qpar``, ``qper``, ``qiso``, ``qap``, ...).
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641, https://arxiv.org/pdf/2212.04522.pdf
+    """
+
+    def __init__(self, z=1., eta=1./3., kp=0.03, n_varied=False, with_now='peakaverage', fiducial='DESI', cosmo=None):
+        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+
+    def __post_init__(self, z=1., eta=1./3., kp=0.03, n_varied=False, with_now='peakaverage', fiducial='DESI', cosmo=None):
+        from cosmoprimo import PowerSpectrumBAOFilter
+        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        self._kp = float(kp)
+        self._n_varied = bool(n_varied)
+        # k grid on which the no-wiggle power spectrum is requested: wide enough to bracket
+        # the shifted pivot kp * s for any plausible rd / rd_fid ratio
+        self._k_pivot_grid = np.geomspace(self._kp / 3., self._kp * 3., 100)
+        requirements = {
+            'fourier.pk_now': [{'of': 'delta_cb', 'engine': str(with_now), 'z': self.z, 'k': self._k_pivot_grid}],
+            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}, {'of': 'theta_cb', 'z': self.z}],
+            'params.n_s': None,
+        }
+        if self._n_varied:
+            requirements['primordial.pk'] = [{'k': self._k_pivot_grid}]
+        self.cosmo.add_requirements(requirements)
+        self._with_now = str(with_now)
+        # Fiducial quantities
+        fo = self._fiducial.get_fourier()
+        pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk)
+        bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=self._with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
+        pknow_fid = bao_filter.smooth_pk_interpolator().to_1d(z=self.z)(self._k_pivot_grid)
+        prim_fid = self._fiducial.get_primordial().pk_interpolator()(self._k_pivot_grid) * self._k_pivot_grid if self._n_varied else None
+        self._m_fid = float(self._log_slope(pknow_fid, pk_prim=prim_fid, kp=self._kp))
+        self._n_fid = float(self._fiducial.n_s)
+        sigma8_fid = fo.sigma8_z(self.z, of='delta_cb')
+        fsigma8_fid = fo.sigma8_z(self.z, of='theta_cb')
+        Ap_fid = jnp.exp(jnp.interp(np.log(self._kp), np.log(self._k_pivot_grid), np.log(pknow_fid)))
+        self._f_sqrt_Ap_fid = float(fsigma8_fid / sigma8_fid * Ap_fid ** 0.5)
+        self._rd_fid = float(self._fiducial.rs_drag)
+
+    def _log_slope(self, pknow, pk_prim=None, kp=None):
+        """Log-slope of *pknow* (divided by the primordial ``pk * k`` when ``n_varied``) at *kp*."""
+        log_pknow = jnp.log(pknow)
+        if pk_prim is not None:
+            log_pknow = log_pknow - jnp.log(pk_prim)
+        dk = 1e-2
+        logk_pivots = jnp.log(kp) + jnp.array([np.log1p(-dk), np.log1p(dk)])
+        log_pknow_pivots = jnp.interp(logk_pivots, np.log(self._k_pivot_grid), log_pknow)
+        return (log_pknow_pivots[1] - log_pknow_pivots[0]) / (logk_pivots[1] - logk_pivots[0])
+
+    def __call__(self):
+        super().__call__()
+        rd = self.cosmo.get_thermodynamics().rs_drag
+        s = rd / self._rd_fid
+        kp = self._kp * s
+        pknow = self.cosmo.get('fourier.pk_now', of='delta_cb', engine=self._with_now, z=self.z, k=self._k_pivot_grid)
+        pk_prim = self.cosmo.get('primordial.pk', k=self._k_pivot_grid) * self._k_pivot_grid if self._n_varied else None
+        self.m = self._log_slope(pknow, pk_prim=pk_prim, kp=kp)
+        self.n = self.cosmo.get('params.n_s')
+        self.dm = self.m - self._m_fid
+        self.dn = self.n - self._n_fid
+        sigma8 = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
+        fsigma8 = self.cosmo.get('fourier.sigma8_z', of='theta_cb', z=self.z)
+        # Eq. 3.11 of https://arxiv.org/abs/2106.07641
+        Ap = jnp.exp(jnp.interp(jnp.log(kp), np.log(self._k_pivot_grid), jnp.log(pknow))) / s ** 3
+        self.f_sqrt_Ap = fsigma8 / sigma8 * Ap ** 0.5
+        self.df = self.f_sqrt_Ap / self._f_sqrt_Ap_fid
+        return self
+
+    def tree_flatten(self):
+        leaves, aux = super().tree_flatten()
+        return leaves + [self.m, self.n, self.dm, self.dn, self.df, self.f_sqrt_Ap], aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd, obj.F_AP,
+         obj.qpar, obj.qper, obj.qiso, obj.qap,
+         obj.m, obj.n, obj.dm, obj.dn, obj.df, obj.f_sqrt_Ap) = children
         obj.z = aux['z']
         return obj
 

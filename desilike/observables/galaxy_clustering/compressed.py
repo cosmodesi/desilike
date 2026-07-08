@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import lsstypes as types
 
 from ...base import Calculator
-from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, TurnOverTheory
+from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, ShapeFitTheory, TurnOverTheory
 
 
 def _format_compression_data(data, covariance, parameters):
@@ -221,6 +221,56 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
     def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', theory=None, **kwargs):
         if theory is None:
             theory = BAOPhaseShiftTheory(**kwargs)
+        elif kwargs:
+            theory.update(**kwargs)
+        super().__init__(theory=theory,
+                         data=data, covariance=covariance, parameters=parameters, name=name)
+
+
+class ShapeFitCompressionObservable(BaseCompressionObservable):
+    r"""Compare ShapeFit measurements to theory predictions.
+
+    Wraps :class:`ShapeFitTheory`.  Valid parameter names are the same as
+    :class:`BAOCompressionObservable` plus ``'dm'``, ``'dn'``, ``'df'``,
+    ``'m'``, ``'n'`` and ``'f_sqrt_Ap'``.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
+
+    Parameters
+    ----------
+    data : None, array-like, or lsstypes.ObservableLike, default=None
+        Measured values.
+    covariance : None, array-like, or lsstypes.CovarianceMatrix, default=None
+        Covariance matrix.
+    parameters : list of str, default=None
+        Parameter names; required when *data* is not an lsstypes object.
+    name : str, default='shapefit'
+        Observable name.
+    theory : ShapeFitTheory, optional
+        Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
+        forwarded to ``theory.update()``.  If absent, a new
+        :class:`ShapeFitTheory` is constructed from *kwargs*.
+    z : float, default=1.
+        Effective redshift.
+    eta : float, default=1./3.
+        DV exponent.
+    kp : float, default=0.03
+        Pivot wavenumber [h/Mpc] of the ShapeFit parameterization.
+    n_varied : bool, default=False
+        Use the second-order ShapeFit parameter ``n``.
+    with_now : str, default='peakaverage'
+        Engine for the no-wiggle power spectrum.
+    fiducial : str or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology.
+    cosmo : PrimordialCosmology, optional
+        Cosmology provider.
+    """
+
+    def __init__(self, data=None, covariance=None, parameters=None, name='shapefit', theory=None, **kwargs):
+        if theory is None:
+            theory = ShapeFitTheory(**kwargs)
         elif kwargs:
             theory.update(**kwargs)
         super().__init__(theory=theory,

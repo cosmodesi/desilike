@@ -358,7 +358,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
         """
         k = self.template.k            # numpy, set in template.__post_init__
         pknow = self.template._pknow_dd_fid  # numpy, set in template.__post_init__
-        q = self.template._fiducial.rs_drag  # float
+        q = self.template._rs_drag_fid  # float, set in template.__post_init__
         j0 = special.jn(0, q * k)
         if self.mode:
             sk = np.exp(-0.5 * (k * self.smoothing_radius) ** 2)
@@ -605,7 +605,7 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
     def __post_init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None, **kwargs):
         # Non-node setup: build the broadband basis matrix keyed on each param's basename.
         _ells = tuple(ells)
-        kp_val = float(kp) if kp is not None else 2. * np.pi / self.pt.template._fiducial.rs_drag
+        kp_val = float(kp) if kp is not None else 2. * np.pi / self.pt.template._rs_drag_fid
         kernel = None if 'power' in broadband else broadband[:3]  # 'pcs2' -> 'pcs'
         if kernel is not None:
             pk_now_at = lambda ki: float(np.interp(ki, self.pt.template.k, self.pt.template._pknow_dd_fid))

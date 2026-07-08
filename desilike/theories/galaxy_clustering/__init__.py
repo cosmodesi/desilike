@@ -1,4 +1,5 @@
-from .template import Spectrum2Template, CosmoprimoCosmology, BAOSpectrum2Template, FixedSpectrum2Template, ShapeFitSpectrum2Template, DirectSpectrum2Template
+from .template import (Spectrum2Template, CosmoprimoCosmology, BAOSpectrum2Template, BAOPhaseShiftSpectrum2Template, FixedSpectrum2Template, ShapeFitSpectrum2Template, DirectSpectrum2Template,
+                       TurnOverSpectrum2Template, TurnOverTheory, ShapeFitTheory)
 from .bao import (DampedBAOWigglesPTSpectrum2Poles, ResummedBAOWigglesPTSpectrum2Poles,
                   DampedBAOWigglesTracerSpectrum2Poles, ResummedBAOWigglesTracerSpectrum2Poles,
                   SpectrumToCorrelation,

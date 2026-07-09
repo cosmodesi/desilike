@@ -3149,6 +3149,12 @@ class COMETPTSpectrum2Poles(Calculator):
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
         self.h = self.cosmo['h']
+        # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
+        # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
+        # None when unset / numpy path -- comet clips them either way, see comet PTEmu).
+        range_nan_factor = getattr(md, '_range_nan_factor', None)
+        if range_nan_factor is not None:
+            valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: PTEmu clipped its GP inputs internally (finite
         # evaluation); mask the outputs to NaN so the sample is rejected instead.
         self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
@@ -3369,6 +3375,12 @@ class COMETTracerSpectrum2Poles(Calculator):
                         ell_for_recon=[0, 2, 4, 6])
         # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
+        # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
+        # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
+        # None when unset / numpy path -- comet clips them either way, see comet PTEmu).
+        range_nan_factor = getattr(md, '_range_nan_factor', None)
+        if range_nan_factor is not None:
+            valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
         self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
                                                               for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]
@@ -3578,6 +3590,12 @@ class COMETPTSpectrum3Poles(Calculator):
         self.table = xp.stack(
             [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
         self.h = self.cosmo['h']
+        # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
+        # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
+        # None when unset / numpy path -- comet clips them either way, see comet PTEmu).
+        range_nan_factor = getattr(md, '_range_nan_factor', None)
+        if range_nan_factor is not None:
+            valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
         self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
                                                               for value in (self.table, self.qpar, self.qper, self.AsD, self.f)]
@@ -3731,6 +3749,12 @@ class COMETTracerSpectrum3Poles(Calculator):
         # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
         # xp.squeeze handles both shapes uniformly.
         self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)
+        # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
+        # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
+        # None when unset / numpy path -- comet clips them either way, see comet PTEmu).
+        range_nan_factor = getattr(md, '_range_nan_factor', None)
+        if range_nan_factor is not None:
+            valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
         self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
                                                               for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]

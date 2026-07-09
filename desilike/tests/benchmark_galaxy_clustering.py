@@ -204,12 +204,10 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     n2 = len(ells) * len(k)
 
     # COMET's GP emulator is only trained/valid over a finite cosmological hypercube;
-    # _apply_cosmo_range_comet_emulator() already narrows omega_cdm/omega_b/n_s/logA to
-    # it but (as of writing) leaves 'h' at CosmoprimoCosmology's generic (0.1, 10.0)
-    # prior -- low h (≲0.5) makes comet's spline interpolation (interp1d/cubic2) produce
-    # NaN (verified directly), which a profiler exploring the full prior box (e.g. Minuit)
-    # can and does hit. Narrow it here, on a cosmo built upfront and threaded through (a
-    # post-hoc get_params(theory).select('h').update(...) does *not* propagate -- the
+    # out-of-range samples yield NaN outputs (see _comet_params_validity), which a profiler
+    # exploring the full prior box (e.g. Minuit) can and does hit. Narrow omega_b here for
+    # benchmark stability, on a cosmo built upfront and threaded through (a post-hoc
+    # get_params(theory).select('h').update(...) does *not* propagate -- the
     # Posterior/likelihood machinery ends up reading a different copy of the parameter).
     cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
     params = get_params(cosmo)

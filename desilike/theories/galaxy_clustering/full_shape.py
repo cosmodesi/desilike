@@ -18,6 +18,8 @@ TNSTracerCorrelation2Poles
 """
 
 import os
+import warnings
+
 import numpy as np
 from scipy import constants
 import jax
@@ -2913,33 +2915,45 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         return obj
 
 
-def _apply_cosmo_range_comet_emulator(cosmo, model='VDG_infty', limits=None):
-    if limits is None:
-        # Read ranges directly from the emulator FITS file (cached after first load).
-        md = _load_comet_model(model)
-        # _CONVERSION_COMET maps comet name → desilike cosmo param name.
-        # 'Mnu' → 'm_ncdm_tot' but the free parameter in CosmoprimoCosmology is 'm_ncdm'.
-        _comet_to_desilike = dict(_CONVERSION_COMET, Mnu='m_ncdm')
-        limits = {}
-        for comet_name, (lo, hi) in md.params_ranges.items():
-            desilike_name = _comet_to_desilike.get(comet_name)
-            if desilike_name is None:
-                continue  # s12, f are derived — not free cosmo params
-            if comet_name == 'As':
-                # comet As is in 1e-9 units; desilike A_s is in SI (×1e-9)
-                lo_si, hi_si = lo * 1e-9, hi * 1e-9
-                limits[desilike_name] = (lo_si, hi_si)
-                limits['logA'] = np.log(lo_si * 1e10), np.log(hi_si * 1e10)
-            else:
-                limits[desilike_name] = (lo, hi)
+def _comet_params_validity(params, params_ranges, xp=jnp):
+    """Return a scalar validity flag: every comet-space parameter with a declared training
+    range (``PTEmu.params_ranges``) lies within it.  PTEmu clips its GP inputs internally, so
+    evaluation always stays finite; callers mask their outputs to NaN when invalid, so that
+    out-of-range samples are rejected instead of silently evaluated at the clipped point
+    (mirroring ACECosmology's out-of-training-range guard)."""
+    valid = xp.asarray(True)
+    for name, (low, high) in params_ranges.items():
+        if name in params:
+            valid = valid & (params[name] >= low) & (params[name] <= high)
+    return valid
 
+
+def _comet_warn_prior_ranges(cosmo, params_ranges):
+    """Warn when a varied cosmological parameter's prior extends beyond the comet emulator
+    training range: such samples yield NaN outputs (effective prior truncation)."""
+    # _CONVERSION_COMET maps comet name → desilike cosmo param name.
+    # 'Mnu' → 'm_ncdm_tot' but the free parameter in CosmoprimoCosmology is 'm_ncdm'.
+    _comet_to_desilike = dict(_CONVERSION_COMET, Mnu='m_ncdm')
+    limits = {}
+    for comet_name, (low, high) in params_ranges.items():
+        desilike_name = _comet_to_desilike.get(comet_name)
+        if desilike_name is None:
+            continue  # s12, f are derived GP coordinates -- not free cosmo params
+        if comet_name == 'As':
+            # comet As is in 1e-9 units; desilike A_s is in SI (×1e-9)
+            limits[desilike_name] = (low * 1e-9, high * 1e-9)
+            limits['logA'] = (np.log(low * 10.), np.log(high * 10.))
+        else:
+            limits[desilike_name] = (low, high)
     params = get_params(cosmo)
-    for basename, (lo, hi) in limits.items():
-        if param := params.get(basename, None):
-            prior = param.prior
-            new_lo = max(prior.limits[0], lo)
-            new_hi = min(prior.limits[1], hi)
-            param.update(prior=dict(dist=prior.dist, limits=(new_lo, new_hi), **prior.attrs))
+    for basename, (low, high) in limits.items():
+        param = params.get(basename, None)
+        if param is None or param.fixed:
+            continue
+        prior_limits = getattr(param.prior, 'limits', None)
+        if prior_limits is not None and (prior_limits[0] < low or prior_limits[1] > high):
+            warnings.warn(f'parameter {basename!r} prior range {tuple(prior_limits)} extends beyond the comet emulator '
+                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
 
 
 _CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 'As': 'A_s', 'Mnu': 'm_ncdm_tot',
@@ -3092,7 +3106,6 @@ class COMETPTSpectrum2Poles(Calculator):
             ells = (0, 2, 4)
         self.ells = tuple(ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
         self._backend = backend
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
@@ -3101,6 +3114,7 @@ class COMETPTSpectrum2Poles(Calculator):
         self._model = model
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+        _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
 
     def __call__(self):
         _use_jax = (self._backend == 'jax')
@@ -3110,6 +3124,7 @@ class COMETPTSpectrum2Poles(Calculator):
         params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
+        valid = _comet_params_validity(params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
@@ -3134,6 +3149,10 @@ class COMETPTSpectrum2Poles(Calculator):
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
         self.h = self.cosmo['h']
+        # Out-of-training-range guard: PTEmu clipped its GP inputs internally (finite
+        # evaluation); mask the outputs to NaN so the sample is rejected instead.
+        self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.table, self.qpar, self.qper, self.AsD, self.f)]
         if _use_jax:
             md.clear_jax_state()
 
@@ -3276,7 +3295,6 @@ class COMETTracerSpectrum2Poles(Calculator):
             if len(avir_vc):
                 assign_params(self, avir_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
@@ -3302,6 +3320,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             self._use_mpc = False
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+            _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
         else:
             self.k = self.pt.k
             self.ells = self.pt.ells
@@ -3330,6 +3349,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         cosmo_params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
+        valid = _comet_params_validity(cosmo_params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
         AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
@@ -3349,6 +3369,9 @@ class COMETTracerSpectrum2Poles(Calculator):
                         ell_for_recon=[0, 2, 4, 6])
         # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
+        # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
+        self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]
         if _use_jax:
             md.clear_jax_state()
         return self.poles
@@ -3508,7 +3531,6 @@ class COMETPTSpectrum3Poles(Calculator):
             ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
         self._backend = backend
         if backend == 'numpy':
             self._is_external = True
@@ -3521,6 +3543,7 @@ class COMETPTSpectrum3Poles(Calculator):
             raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+        _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
         self.quad_deg = tuple(quad_deg)
         self.mu12_transform = mu12_transform
 
@@ -3535,6 +3558,7 @@ class COMETPTSpectrum3Poles(Calculator):
         # docstring): EFT counterterms are only activated for 'EFT'/'VDG_infty_ctr' models,
         # which this estimator doesn't support, so self.cnloB has no effect here yet.
         md = self._md
+        valid = _comet_params_validity(params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
@@ -3554,6 +3578,9 @@ class COMETPTSpectrum3Poles(Calculator):
         self.table = xp.stack(
             [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
         self.h = self.cosmo['h']
+        # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
+        self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.table, self.qpar, self.qper, self.AsD, self.f)]
         if _use_jax:
             md.clear_jax_state()
 
@@ -3623,7 +3650,6 @@ class COMETTracerSpectrum3Poles(Calculator):
             ], tracers)
             assign_params(self, cnloB_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
@@ -3651,6 +3677,7 @@ class COMETTracerSpectrum3Poles(Calculator):
                 raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+            _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
             self.quad_deg = tuple(quad_deg)
             self.mu12_transform = mu12_transform
         else:
@@ -3680,6 +3707,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
         md = self._md
+        valid = _comet_params_validity(cosmo_params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
         AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
@@ -3703,6 +3731,9 @@ class COMETTracerSpectrum3Poles(Calculator):
         # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
         # xp.squeeze handles both shapes uniformly.
         self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)
+        # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
+        self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]
         if _use_jax:
             md.clear_jax_state()
         return self.poles

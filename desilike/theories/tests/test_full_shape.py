@@ -703,6 +703,29 @@ class TestCOMET:
             _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
 
+    def test_out_of_training_range(self):
+        """Parameters outside comet's training ranges yield NaN poles (both the PT-split and
+        pt=False direct paths) instead of narrowed priors: the priors are left untouched, and
+        a compile-time warning flags the effective prior truncation."""
+        import warnings as _warnings
+        from desilike.base import get_params
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+
+        k = np.linspace(0.02, 0.3, 20)
+        for pt in [None, False]:
+            with _warnings.catch_warnings(record=True) as caught:
+                _warnings.simplefilter('always')
+                theory = COMETTracerSpectrum2Poles(k=k, pt=pt)
+                run = _compile(theory)
+                base = run()
+            assert any('training range' in str(warning.message) for warning in caught), f'no truncation warning (pt={pt})'
+            # priors are no longer narrowed to the emulator training ranges
+            prior_limits = get_params(theory)['n_s'].prior.limits
+            assert prior_limits[1] > 1.03, prior_limits
+            assert np.isfinite(base).all()
+            result = run(n_s=1.08)  # outside comet's ns training range (0.9, 1.03)
+            assert np.isnan(np.asarray(result)).all(), f'expected all-NaN poles (pt={pt}): {result}'
+
     def test_tracer_spectrum(self):
         """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles

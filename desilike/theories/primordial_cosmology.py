@@ -778,6 +778,50 @@ _PACKAGED_DEFAULT_ENGINE = {'background': 'ACE_mnuw0wacdm_ln10As_basis', 'fourie
 _PACKAGED_COSMO_PARAMS = frozenset(['h', 'theta_MC_100', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio',
                                     'm_ncdm', 'N_eff', 'N_ur', 'w0_fld', 'wa_fld', 'Omega_k'])
 
+# Free-text parameter tokens found in Capse-style nn_setup.json 'parameters' descriptions
+# (normalized to lowercase with spaces and trailing periods stripped), mapped to desilike
+# parameter names; used by _find_capse_metadata below.
+_CONVERSION_CAPSE = {'ln10^10as': 'logA', 'ln10as': 'logA', 'loga': 'logA',
+                     'ns': 'n_s', 'h0': 'H0',
+                     'omega_b': 'omega_b', 'ombh2': 'omega_b', 'ωb': 'omega_b', 'wb': 'omega_b',
+                     'omega_c': 'omega_cdm', 'omch2': 'omega_cdm', 'ωc': 'omega_cdm', 'wc': 'omega_cdm',
+                     'tau': 'tau_reio', 'τ': 'tau_reio',
+                     'mnu': 'm_ncdm', 'mν': 'm_ncdm',
+                     'w0': 'w0_fld', 'wa': 'wa_fld'}
+
+
+def _find_capse_metadata(emulator_dir):
+    """Introspect a Capse-style Cl emulator directory: per-spectrum network subdirectories
+    ('TT', 'TE', 'EE', and optionally 'BB', 'PP'), each holding nn_setup.json / weights.npy /
+    inminmax.npy / outminmax.npy / postprocessing.py, as produced by the CosmologicalEmulators
+    training pipeline (e.g. the local 'capse_mnuw0wacdm_250001' set).  Network inputs are read
+    from an explicit desilike-style 'input' list in nn_setup.json's emulator_description when
+    present, else parsed from its free-text 'parameters' description via _CONVERSION_CAPSE;
+    training ranges come from inminmax.npy and the maximum multipole from the outminmax.npy
+    row count (outputs cover ell = 2..ellmax).  Cl conventions are assumed identical to the
+    packaged 'camb_lcdm' set: Dl in muK^2 (TT/TE/EE), ell^2 (ell+1)^2 / (2 pi) Cl^phiphi (PP)."""
+    import json
+    spectra = [name for name in ['TT', 'TE', 'EE', 'BB', 'PP'] if (emulator_dir / name / 'nn_setup.json').is_file()]
+    with open(emulator_dir / spectra[0] / 'nn_setup.json') as file:
+        description = json.load(file).get('emulator_description', {})
+    inputs = description.get('input', None)
+    if inputs is None:
+        inputs = []
+        for token in str(description.get('parameters', '')).split(','):
+            normalized = token.strip().strip('.').replace(' ', '').lower()
+            if normalized not in _CONVERSION_CAPSE:
+                raise ValueError(f"cannot map parameter token {token.strip()!r} of Capse-style emulator {emulator_dir} to a desilike name; "
+                                 f"recognized tokens: {sorted(_CONVERSION_CAPSE)}; alternatively, provide an explicit 'input' list "
+                                 "(desilike parameter names) in nn_setup.json's emulator_description")
+            inputs.append(_CONVERSION_CAPSE[normalized])
+    in_minmax = np.load(emulator_dir / spectra[0] / 'inminmax.npy')
+    if len(inputs) != len(in_minmax):
+        raise ValueError(f'Capse-style emulator {emulator_dir}: {len(inputs)} parameter names for {len(in_minmax)} network inputs')
+    ranges = {name: (float(low), float(high)) for name, (low, high) in zip(inputs, in_minmax)}
+    ellmax = np.load(emulator_dir / spectra[0] / 'outminmax.npy').shape[0] + 1
+    outputs = ['harmonic.lensed_cl'] + (['harmonic.lens_potential_cl'] if 'PP' in spectra else [])
+    return dict(kind='jaxcapse', inputs=list(inputs), outputs=outputs, ranges=ranges, ellmax=int(ellmax), spectra=spectra)
+
 
 def _interp_loglog(k_query, k_knots, pk_knots):
     """Cubic spline interpolation in log10(k) space."""
@@ -799,7 +843,11 @@ class ACECosmology(PrimordialCosmology):
     selected through *engine*:
 
     * a directory name under *base_dir* (custom emulators, one subdirectory per network, each
-      with an ``nn_setup.json`` declaring desilike-style ``input`` / ``output`` metadata), or
+      with an ``nn_setup.json`` declaring desilike-style ``input`` / ``output`` metadata),
+    * a Capse-style Cl emulator directory under *base_dir* (per-spectrum ``TT / TE / EE
+      [/ BB] [/ PP]`` network subdirectories, e.g. ``'capse_mnuw0wacdm_250001'``): inputs,
+      training ranges and ellmax are introspected from the networks' own metadata
+      (see :func:`_find_capse_metadata`), or
     * the name of a packaged trained emulator shipped by jaxace / jaxmapse / jaxcapse
       (downloaded on demand from Zenodo); see ``_PACKAGED_EMULATORS`` for the registry.
 
@@ -868,7 +916,9 @@ class ACECosmology(PrimordialCosmology):
             outputs = description.get('output')
             return list(inputs), list(outputs)
 
-        self._input_outputs = {}
+        # Per-emulator metadata: {'inputs', 'outputs', 'kind' (None for desilike-style custom
+        # directories), and for packaged / Capse-style emulators 'ranges', 'ellmax', 'spectra'}.
+        self._emulator_metadata = {}
         seen_emulator_dirs = set()
         for section in _SECTIONS:
             engine_name = engine.get(section, None)
@@ -879,16 +929,19 @@ class ACECosmology(PrimordialCosmology):
                 if emulator_dir in seen_emulator_dirs:
                     continue
                 seen_emulator_dirs.add(emulator_dir)
-                # Iterate on all (leaf) emulators in emulator_dir
-                for leaf_dir in sorted(path for path in emulator_dir.iterdir() if path.is_dir()):
-                    inputs, outputs = _find_inputs_outputs(leaf_dir)
-                    self._input_outputs[str(leaf_dir)] = (inputs, outputs)
+                if (emulator_dir / 'TT' / 'nn_setup.json').is_file():
+                    # Capse-style Cl emulator directory (per-spectrum network subdirs).
+                    self._emulator_metadata[str(emulator_dir)] = _find_capse_metadata(emulator_dir)
+                else:
+                    # Iterate on all (leaf) emulators in emulator_dir
+                    for leaf_dir in sorted(path for path in emulator_dir.iterdir() if path.is_dir()):
+                        inputs, outputs = _find_inputs_outputs(leaf_dir)
+                        self._emulator_metadata[str(leaf_dir)] = dict(kind=None, inputs=inputs, outputs=outputs)
             elif engine_name in _PACKAGED_EMULATORS:
-                packaged = _PACKAGED_EMULATORS[engine_name]
-                self._input_outputs[engine_name] = (list(packaged['inputs']), list(packaged['outputs']))
+                self._emulator_metadata[engine_name] = dict(_PACKAGED_EMULATORS[engine_name])
         # Packaged jaxace (ACE) emulator, if any: beyond its own matched requirements, it also
         # provides f_z for fourier.pk of='theta_cb' (see _load_emulators_for_new_requirements).
-        self._ace_emulator_key = next((key for key in self._input_outputs if _PACKAGED_EMULATORS.get(key, {}).get('kind') == 'jaxace'), None)
+        self._ace_emulator_key = next((key for key, metadata in self._emulator_metadata.items() if metadata.get('kind') == 'jaxace'), None)
         self._loaded_emulators = {}
         self._method_emulator_matching = {}
         # Load emulators for requirements already registered before __post_init__ (e.g. derived params).
@@ -903,27 +956,32 @@ class ACECosmology(PrimordialCosmology):
 
     def add_requirements(self, requirements):
         super().add_requirements(requirements)
-        if hasattr(self, '_input_outputs'):
+        if hasattr(self, '_emulator_metadata'):
             self._load_emulators_for_new_requirements()
 
     def _load_emulator(self, emulator_key):
-        packaged = _PACKAGED_EMULATORS.get(emulator_key, None)
-        if packaged is not None:
-            if packaged['kind'] == 'jaxace':
-                import jaxace
-                return jaxace.get_emulator(emulator_key)
-            if packaged['kind'] == 'jaxmapse':
-                import jaxmapse
-                return jaxmapse.load_pk_emulator_from_artifact(emulator_key)
-            # jaxcapse: dict of per-spectrum MLPs ('TT', 'TE', 'EE', 'PP'), auto-loaded at
-            # import unless JAXCAPSE_NO_AUTO_DOWNLOAD is set, in which case entries are None.
+        metadata = self._emulator_metadata[emulator_key]
+        kind = metadata.get('kind', None)
+        if kind == 'jaxace':
+            import jaxace
+            return jaxace.get_emulator(emulator_key)
+        if kind == 'jaxmapse':
+            import jaxmapse
+            return jaxmapse.load_pk_emulator_from_artifact(emulator_key)
+        if kind == 'jaxcapse':
             import jaxcapse
+            if 'spectra' in metadata:
+                # Local Capse-style directory: emulator_key is the directory path,
+                # holding one network subdirectory per spectrum.
+                return {name: jaxcapse.load_emulator(str(Path(emulator_key) / name)) for name in metadata['spectra']}
+            # Packaged set: dict of per-spectrum MLPs ('TT', 'TE', 'EE', 'PP'), auto-loaded at
+            # import unless JAXCAPSE_NO_AUTO_DOWNLOAD is set, in which case entries are None.
             emulators = jaxcapse.trained_emulators.get(emulator_key, {})
             if not emulators or any(mlp is None for mlp in emulators.values()):
                 emulators = jaxcapse.reload_emulators(emulator_key)[emulator_key]
             return emulators
-        # Custom emulator directory: emulator_key is the directory path.
-        inputs, outputs = self._input_outputs[emulator_key]
+        # Custom desilike-style emulator directory: emulator_key is the directory path.
+        outputs = metadata['outputs']
         if any(output.startswith('fourier.pk') for output in outputs):
             import jaxmapse
             emulator = jaxmapse.load_emulator(emulator_key)
@@ -936,19 +994,19 @@ class ACECosmology(PrimordialCosmology):
         return emulator
 
     def _warn_uncovered_params(self, emulator_key, method_key):
-        """Warn when a varied cosmological parameter is not an input of a matched packaged emulator."""
-        packaged = _PACKAGED_EMULATORS.get(emulator_key, None)
-        if packaged is None:
+        """Warn when a varied cosmological parameter is not an input of a matched packaged / Capse-style emulator."""
+        metadata = self._emulator_metadata[emulator_key]
+        if metadata.get('kind', None) is None:
             return
-        covered = set(packaged['inputs'])
+        covered = set(metadata['inputs'])
         if 'H0' in covered:
             covered |= {'h', 'theta_MC_100'}
         relevant = set(_PACKAGED_COSMO_PARAMS)
-        if packaged['kind'] != 'jaxcapse':
+        if metadata['kind'] != 'jaxcapse':
             relevant.discard('tau_reio')  # tau_reio only affects the CMB spectra
         for param in self.params:
             if not param.fixed and param.basename in relevant and param.basename not in covered:
-                warnings.warn(f'parameter {param.basename!r} is varied but is not an input of packaged emulator {emulator_key!r}: '
+                warnings.warn(f'parameter {param.basename!r} is varied but is not an input of emulator {emulator_key!r}: '
                               f'{method_key} will not respond to it')
 
     def _load_emulators_for_new_requirements(self):
@@ -958,8 +1016,8 @@ class ACECosmology(PrimordialCosmology):
                 method_key = f'{method_key}.' + '.'.join(spec['static']['of'])
             if method_key not in self._method_emulator_matching:
                 found = False
-                for emulator_key, (inputs, outputs) in self._input_outputs.items():
-                    if method_key in outputs:
+                for emulator_key, metadata in self._emulator_metadata.items():
+                    if method_key in metadata['outputs']:
                         if emulator_key not in self._loaded_emulators:
                             self._loaded_emulators[emulator_key] = self._load_emulator(emulator_key)
                         self._method_emulator_matching[method_key] = emulator_key
@@ -970,16 +1028,16 @@ class ACECosmology(PrimordialCosmology):
                     if method_key.split('.')[0] not in ('background', 'params', 'primordial'):
                         raise NotImplementedError(f"could not find {method_key} in emulators' products")
                     continue
-            # Per-spec validation for packaged emulators (runs also when the method was already
-            # matched, since e.g. a new spec may request a larger ellmax for the same method).
+            # Per-spec validation for packaged / Capse-style emulators (runs also when the method
+            # was already matched, since e.g. a new spec may request a larger ellmax for the same method).
             emulator_key = self._method_emulator_matching[method_key]
-            packaged = _PACKAGED_EMULATORS.get(emulator_key, None)
-            if packaged is None:
+            metadata = self._emulator_metadata[emulator_key]
+            if metadata.get('kind', None) is None:
                 continue
-            if packaged['kind'] == 'jaxcapse' and spec['static'].get('ellmax', 0) > packaged['ellmax']:
+            if metadata['kind'] == 'jaxcapse' and spec['static'].get('ellmax', 0) > metadata['ellmax']:
                 raise ValueError(f"requested ellmax={spec['static']['ellmax']} for {method_key} exceeds "
-                                 f"packaged emulator {emulator_key!r} training range (ellmax={packaged['ellmax']})")
-            if packaged['kind'] == 'jaxmapse' and method_key == 'fourier.pk.theta_cb.theta_cb':
+                                 f"emulator {emulator_key!r} training range (ellmax={metadata['ellmax']})")
+            if metadata['kind'] == 'jaxmapse' and method_key == 'fourier.pk.theta_cb.theta_cb':
                 # pk_tt = f_z^2 pk_cb needs f_z from the packaged jaxace emulator; load it now.
                 if self._ace_emulator_key is None:
                     raise ValueError("fourier.pk with of='theta_cb' requires a packaged jaxace emulator "
@@ -989,13 +1047,13 @@ class ACECosmology(PrimordialCosmology):
         self._rebuild_param_clip_ranges()
 
     def _rebuild_param_clip_ranges(self):
-        """Intersect the training ranges of all loaded packaged emulators, keyed by desilike
-        parameter name.  __call__ clips its inputs to these ranges before evaluation and masks
-        every result to NaN when any parameter falls outside (graceful rejection instead of a
-        non-finite crash in downstream spline / linear solves)."""
+        """Intersect the training ranges of all loaded packaged / Capse-style emulators, keyed by
+        desilike parameter name.  __call__ clips its inputs to these ranges before evaluation and
+        masks every result to NaN when any parameter falls outside (graceful rejection instead of
+        a non-finite crash in downstream spline / linear solves)."""
         self._param_clip_ranges = {}
         for emulator_key in self._loaded_emulators:
-            for name, (low, high) in _PACKAGED_EMULATORS.get(emulator_key, {}).get('ranges', {}).items():
+            for name, (low, high) in self._emulator_metadata[emulator_key].get('ranges', {}).items():
                 if name in self._param_clip_ranges:
                     prev_low, prev_high = self._param_clip_ranges[name]
                     self._param_clip_ranges[name] = (max(low, prev_low), min(high, prev_high))
@@ -1076,7 +1134,7 @@ class ACECosmology(PrimordialCosmology):
             """Run the packaged jaxace (ACE) network on the z grid; returns outputs of shape
             (nz, 7), in order (sigma8, sigma8_z, rs_drag [Mpc], H_z, r_z, D_z, f_z)."""
             emulator = self._loaded_emulators[self._ace_emulator_key]
-            input_names = self._input_outputs[self._ace_emulator_key][0]
+            input_names = self._emulator_metadata[self._ace_emulator_key]['inputs']
             z = jnp.atleast_1d(jnp.asarray(z))
             emulator_input = jnp.stack([z if name == 'z' else jnp.full(z.shape, get_param(name)) for name in input_names], axis=-1)
             return emulator.run_emulator(emulator_input)
@@ -1088,8 +1146,8 @@ class ACECosmology(PrimordialCosmology):
             _kw_coords = {coord: spec[coord] for coord in _COORDS if coord in spec}
             emulator_key = self._method_emulator_matching.get(method_key, None)
             emulator = self._loaded_emulators[emulator_key] if emulator_key is not None else None
-            input_names = self._input_outputs[emulator_key][0] if emulator_key is not None else None
-            packaged = _PACKAGED_EMULATORS.get(emulator_key, None)
+            input_names = self._emulator_metadata[emulator_key]['inputs'] if emulator_key is not None else None
+            kind = self._emulator_metadata[emulator_key].get('kind', None) if emulator_key is not None else None
             if emulator is None:
                 if method_key == 'background.efunc':
                     result = jaxace_cosmo.E_z(**_kw_coords)
@@ -1122,7 +1180,7 @@ class ACECosmology(PrimordialCosmology):
                     result = get_param(name)
                 else:
                     raise NotImplementedError(f'no background formula for {method_key!r}')
-            elif packaged is not None and packaged['kind'] == 'jaxace':
+            elif kind == 'jaxace':
                 ace_output = run_ace(spec['z'] if 'z' in spec else 0.)
                 if method_key.startswith('fourier.sigma8_z'):
                     # sigma8_z is total-matter; of='delta_cb' is served with the same value
@@ -1134,7 +1192,7 @@ class ACECosmology(PrimordialCosmology):
                     # thermodynamics.rs_drag: z-independent; ACE output in Mpc, convert to Mpc/h.
                     rs_drag = ace_output[:, 2] * get_param('h')
                     result = rs_drag if 'z' in spec else rs_drag[0]
-            elif packaged is not None and packaged['kind'] == 'jaxmapse':
+            elif kind == 'jaxmapse':
                 # Linear pk; the packaged networks are trained in Mpc units (k_grid in 1/Mpc,
                 # pk in Mpc^3), converted below to desilike's k in h/Mpc, pk in (Mpc/h)^3.
                 emulator_params = jnp.array([get_param(name) for name in input_names])
@@ -1166,26 +1224,27 @@ class ACECosmology(PrimordialCosmology):
                     result = bao.smooth_pk_interpolator()(spec['k']).T
                 else:
                     result = _interp_loglog(spec['k'], k_grid / h, (pk * h**3).T).T
-            elif packaged is not None and packaged['kind'] == 'jaxcapse':
+            elif kind == 'jaxcapse':
                 emulator_params = jnp.array([get_param(name) for name in input_names])
                 ellmax = spec['static']['ellmax']
                 ells = jnp.arange(2, ellmax + 1)
                 if method_key == 'harmonic.lens_potential_cl':
-                    # Network outputs ell^2 (ell + 1)^2 / (2 pi) Cl^phiphi for ell = 2..5000;
+                    # Network outputs ell^2 (ell + 1)^2 / (2 pi) Cl^phiphi for ell = 2..ellmax;
                     # convert to raw Cl^phiphi (CosmoprimoCosmology convention).
                     cl_pp = emulator['PP'].get_Cl(emulator_params)[:ellmax - 1] * (2 * jnp.pi) / (ells * (ells + 1))**2
                     result = {'pp': jnp.concatenate([jnp.zeros(2), cl_pp]), 'tp': jnp.zeros(ellmax + 1), 'ep': jnp.zeros(ellmax + 1)}
                 else:
                     # harmonic.lensed_cl.  Networks output Dl = ell (ell + 1) / (2 pi) Cl in muK^2
-                    # for ell = 2..5000; convert to raw dimensionless Cl.
+                    # for ell = 2..ellmax; convert to raw dimensionless Cl.  'bb' is emulated when
+                    # the set provides a BB network, zeros otherwise.
                     try:
                         T_cmb = get_param('T_cmb')
                     except KeyError:
                         T_cmb = 2.7255
                     to_cl = (2 * jnp.pi) / (ells * (ells + 1)) / (T_cmb * 1e6)**2
                     cl = {name: jnp.concatenate([jnp.zeros(2), emulator[name.upper()].get_Cl(emulator_params)[:ellmax - 1] * to_cl])
-                          for name in ['tt', 'ee', 'te']}
-                    result = {'tt': cl['tt'], 'ee': cl['ee'], 'bb': jnp.zeros(ellmax + 1), 'te': cl['te']}
+                          for name in ['tt', 'ee', 'te'] + (['bb'] if 'BB' in emulator else [])}
+                    result = {'tt': cl['tt'], 'ee': cl['ee'], 'bb': cl.get('bb', jnp.zeros(ellmax + 1)), 'te': cl['te']}
             elif method_key.startswith('fourier.pk'):
                 emulator_params = jnp.array([get_param(name) for name in input_names if name != 'z'])
                 z = spec['z']

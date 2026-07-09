@@ -285,6 +285,83 @@ class TestACECosmology:
         with pytest.raises(ValueError, match='ellmax'):
             cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': 6000}]})
 
+    def test_capse_local_dir(self, tmp_path):
+        """A Capse-style Cl emulator directory under base_dir (per-spectrum TT/TE/EE/PP network
+        subdirs, free-text metadata) is auto-introspected and gives results identical to the
+        packaged jaxcapse path, here using the very same cached camb_lcdm networks."""
+        import shutil
+        from desilike.base import compile
+        from desilike.theories.primordial_cosmology import ACECosmology
+
+        cached_dir = Path.home() / '.jaxcapse_data' / 'emulators'
+        if not (cached_dir / 'TT' / 'nn_setup.json').is_file():
+            pytest.skip('cached camb_lcdm networks not available')
+        local_dir = tmp_path / 'capse_local'
+        for name in ['TT', 'TE', 'EE', 'PP']:
+            shutil.copytree(cached_dir / name, local_dir / name, ignore=shutil.ignore_patterns('__pycache__'))
+
+        ellmax = 500
+        results = {}
+        for label, engine, base_dir in [('packaged', 'ace', None),
+                                        ('local', {'harmonic': 'capse_local', 'background': 'ACE_mnuw0wacdm_ln10As_basis'}, tmp_path)]:
+            cosmo = ACECosmology(engine=engine, base_dir=base_dir, fiducial='DESI')
+            cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': ellmax}],
+                                    'harmonic.lens_potential_cl': [{'ellmax': ellmax}]})
+            compile(cosmo)()
+            results[label] = (cosmo.get_harmonic().lensed_cl(ellmax=ellmax), cosmo.get_harmonic().lens_potential_cl(ellmax=ellmax), cosmo)
+
+        for name in ['tt', 'ee', 'bb', 'te']:
+            np.testing.assert_array_equal(np.asarray(results['local'][0][name]), np.asarray(results['packaged'][0][name]))
+        np.testing.assert_array_equal(np.asarray(results['local'][1]['pp']), np.asarray(results['packaged'][1]['pp']))
+
+        # introspected metadata: parsed inputs, training ranges (drive the NaN guard) and ellmax
+        local_cosmo = results['local'][2]
+        metadata = local_cosmo._emulator_metadata[str(local_dir)]
+        assert metadata['inputs'] == ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio']
+        assert metadata['ellmax'] == 5000
+        assert np.isclose(local_cosmo._param_clip_ranges['tau_reio'][0], 0.02, atol=1e-3)
+        with pytest.raises(ValueError, match='ellmax'):
+            local_cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': 6000}]})
+
+    def test_capse_w0wa_dir(self):
+        """The local capse_mnuw0wacdm_250001 w0waCDM Cl emulator (Dl muK^2 / phiphi conventions
+        assumed identical to camb_lcdm, verified against CAMB): matches a camb w0waCDM run at
+        a shifted (w0, wa, mnu-in-range) point, and responds to w0."""
+        from desilike.base import compile, get_params
+        from desilike.theories.primordial_cosmology import ACECosmology
+
+        # The artifact sits next to the desilike checkout (on NERSC it lives under the
+        # default base_dir, Installer().install_dir / 'ace-emulators').
+        base_dir = self.emulator_base_dir.parent
+        emulator_dir = base_dir / 'capse_mnuw0wacdm_250001'
+        if not (emulator_dir / 'TT' / 'nn_setup.json').is_file():
+            pytest.skip('capse_mnuw0wacdm_250001 not available')
+
+        ellmax = 2500
+        cosmo = ACECosmology(engine={'harmonic': 'capse_mnuw0wacdm_250001', 'background': 'ACE_mnuw0wacdm_ln10As_basis'},
+                             base_dir=base_dir, fiducial='DESI')
+        cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': ellmax}]})
+        pipe = compile(cosmo)
+        metadata = cosmo._emulator_metadata[str(emulator_dir)]
+        assert metadata['inputs'] == ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'tau_reio', 'm_ncdm', 'w0_fld', 'wa_fld']
+        assert metadata['ellmax'] == 2999
+
+        defaults = {param.name: param._value for param in get_params(cosmo)}
+        point = {**defaults, 'w0_fld': -0.9, 'wa_fld': -0.3}
+        pipe(point)
+        cl_tt = np.asarray(cosmo.get_harmonic().lensed_cl(ellmax=ellmax)['tt'])
+
+        import cosmoprimo.fiducial
+        fiducial = cosmoprimo.fiducial.DESI(engine='camb')
+        cosmo_camb = fiducial.clone(lensing=True, ellmax_cl=ellmax + 500, non_linear='mead', w0_fld=-0.9, wa_fld=-0.3)
+        cl_ref = cosmo_camb.get_harmonic().lensed_cl(ellmax=ellmax)
+        np.testing.assert_allclose(cl_tt[30:], cl_ref['tt'][30:], rtol=1e-2)
+
+        # w0 sensitivity: shifting w0 changes the emulated Cl (atol=0: raw Cl are ~1e-10)
+        pipe(defaults)
+        cl_tt_fiducial = np.asarray(cosmo.get_harmonic().lensed_cl(ellmax=ellmax)['tt'])
+        assert not np.allclose(cl_tt[2:], cl_tt_fiducial[2:], rtol=1e-4, atol=0.)
+
     def test_packaged_out_of_range(self):
         """Parameters outside the packaged emulators' training ranges yield NaN results
         (eager and jit) instead of a non-finite crash in downstream spline solves, and a

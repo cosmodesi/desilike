@@ -2636,20 +2636,156 @@ class FKPTJAXTracerSpectrum3Poles(FOLPSTracerSpectrum3Poles):
                          tracers=tracers, params=params, **kwargs)
 
 
+class JAXEffortPTSpectrum2Poles(Calculator):
+    r"""
+    Bias-independent PT component tables from a JAXEffort emulator.
+
+    Evaluates, per multipole, the stacked ``(P11, Ploop, Pct, stochastic)`` component table
+    on the emulator k grid -- the cosmology-dependent, bias-independent part of the JAXEffort
+    prediction.  :class:`JAXEffortTracerSpectrum2Poles` contracts this table with the
+    emulator's ``bias_combination`` coefficient vector, exactly reproducing the monolithic
+    ``MultipoleEmulators.get_Pl``.
+
+    Cosmological parameters are supplied via a :class:`~desilike.theories.primordial_cosmology.PrimordialCosmology`
+    dependency (``cosmo``), accessed as ``cosmo['h']``, ``cosmo['omega_cdm']``, etc.
+
+    Parameters
+    ----------
+    cosmo : PrimordialCosmology or None, default=None
+        Cosmology calculator.  When ``None`` a default :class:`~desilike.theories.primordial_cosmology.ACECosmology`
+        with ``engine='ace'`` (packaged jaxace / jaxmapse emulators) is created internally.
+    k : array, default=None
+        Output wavenumbers [h/Mpc], inherited by the tracer calculator.
+        Defaults to ``np.linspace(0.01, 0.2, 101)``.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    z : float, default=0.5
+        Effective redshift.
+    model : str, default='velocileptors_rept_mnuw0wacdm'
+        JAXEffort trained-emulator key.
+    with_amplitude : bool, default=False
+        Register ``fourier.sigma8_z`` and expose the amplitude ratio
+        ``A = sigma8_z / sigma8_z_fid`` (set by :class:`JAXEffortTracerSpectrum2Poles`
+        for the physical bias basis).
+
+    Attributes set by ``__call__``
+    --------------------------------
+    table : jnp.ndarray, shape (n_ells, n_k_emulator, n_components)
+        Stacked PT component tables.
+    f, qpar, qper, A : floats
+        Growth rate, AP distortion ratios, amplitude ratio (1 when ``with_amplitude=False``).
+
+    Reference
+    ---------
+    https://github.com/CosmologicalEmulators/jaxeffort
+    """
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/CosmologicalEmulators/jaxeffort')
+
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed (empty) :class:`~desilike.parameter.VariableCollection`: this
+        calculator owns no parameters; cosmological parameters come from the ``cosmo`` dependency."""
+        return propose_params_multitracer([], tracers)
+
+    def __init__(self, z=0.5, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI',
+                 model='velocileptors_rept_mnuw0wacdm', with_amplitude=False, params=None, **kwargs):
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        if ells is None:
+            ells = (0, 2, 4)
+        self.ells = tuple(ells)
+        self.z = float(z)
+        if cosmo is None:
+            cosmo = ACECosmology(engine='ace', fiducial=fiducial)
+        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+
+    def __post_init__(self, z=0.5, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI',
+                      model='velocileptors_rept_mnuw0wacdm', with_amplitude=False, params=None, **kwargs):
+        self._model = str(model)
+        self._with_amplitude = bool(with_amplitude)
+        requirements = {
+            'background.efunc':                        [{'z': self.z}],
+            'background.comoving_transverse_distance': [{'z': self.z}],
+            'background.growth_factor':                [{'z': self.z}],
+            'background.growth_rate':                  [{'z': self.z}],
+            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
+        }
+        if self._with_amplitude:
+            # Amplitude ratio for the physical (sigma8-normalized) bias basis.
+            requirements['fourier.sigma8_z'] = [{'of': 'delta_cb', 'z': self.z}]
+        self.cosmo.add_requirements(requirements)
+        import jaxeffort
+        self._emulators = [jaxeffort.trained_emulators[self._model][str(ell)] for ell in self.ells]
+        self._kgrid = np.asarray(self._emulators[0].P11.k_grid)
+        # Fiducial distances for AP (fixed); same distance formulas as in __call__
+        fiducial = _get_fiducial(fiducial, calculator=self.cosmo)
+        ba = fiducial.get_background()
+        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
+        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
+        self._f_fid = ba.growth_rate(self.z)
+        if self._with_amplitude:
+            self._sigma8_z_fid = float(fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z))
+
+    def __call__(self):
+        # Read cosmological parameters from the cosmology dep.
+        ba = self.cosmo.get_background()
+        theta = jnp.array([self.z, self.cosmo['logA'], self.cosmo['n_s'], self.cosmo['H0'], self.cosmo['omega_b'],
+                           self.cosmo['omega_cdm'], self.cosmo['m_ncdm_tot'], self.cosmo['w0_fld'], self.cosmo['wa_fld']])
+        D = ba.growth_factor(self.z)
+        self.f = ba.growth_rate(self.z)
+        # Alcock-Paczynski distortion (qpar = D_H / D_H_fid, qper = D_M / D_M_fid).
+        DH = constants.c / 1e3 / (100. * ba.efunc(self.z))
+        DM = ba.comoving_transverse_distance(self.z)
+        self.qpar = DH / self._DH_fid
+        self.qper = DM / self._DM_fid
+        # Amplitude ratio for the physical bias basis: sigma8_z / sigma8_z_fid.
+        self.A = (self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z) / self._sigma8_z_fid
+                  if self._with_amplitude else jnp.asarray(1.))
+        # Per-multipole stacked component tables (P11, Ploop, Pct, stochastic) on the emulator
+        # k grid, shape (n_ells, n_k_emulator, n_components); the tracer calculator contracts the
+        # last axis with bias_combination(biases), reproducing MultipoleEmulators.get_Pl exactly.
+        self.table = jnp.stack([jnp.hstack(emu.get_multipole_components(theta, D) + (emu.stoch_model(emu.P11.k_grid),))
+                                for emu in self._emulators])
+        return self.table
+
+    def tree_flatten(self):
+        children = [self.table, self.f, self.qpar, self.qper, self.A]
+        aux = {'z': self.z, 'k': self.k, 'ells': self.ells}
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.table, obj.f, obj.qpar, obj.qper, obj.A = children
+        obj.z = aux['z']
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
 class JAXEffortTracerSpectrum2Poles(Calculator):
     r"""
     Tracer power-spectrum multipoles from a JAXEffort emulator.
 
-    Cosmological parameters are supplied via a :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
-    dependency (``cosmo``), accessed as ``cosmo['h']``, ``cosmo['omega_cdm']``, etc.
-    Growth ``D(z)``, ``f(z)`` and Alcock-Paczynski distortion are computed from a JAXEffort
-    ``w0waCDMCosmology`` object built from those parameters.
+    Combines the bias-independent component tables of a :class:`JAXEffortPTSpectrum2Poles`
+    dependency (``pt``) with the emulator's ``bias_combination`` coefficient vector, then
+    applies the Alcock-Paczynski distortion and projects onto multipoles.
 
     Parameters
     ----------
-    cosmo : CosmoprimoCosmology or None, default=None
-        Cosmology calculator.  When ``None`` a default :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
-        with ``engine='eisenstein_hu'`` is created internally.
+    pt : JAXEffortPTSpectrum2Poles, default=None
+        PT calculator.  When ``None`` a default one is created; ``z``, ``k``, ``ells``,
+        ``cosmo``, ``fiducial`` and ``model`` are forwarded to it.
+    cosmo : PrimordialCosmology or None, default=None
+        Cosmology calculator, forwarded to ``pt``.  When ``None`` the PT creates a default
+        :class:`~desilike.theories.primordial_cosmology.ACECosmology` with ``engine='ace'``.
     k : array, default=None
         Output wavenumbers [h/Mpc].  Defaults to ``np.linspace(0.01, 0.2, 101)``.
     ells : tuple of int, default=(0, 2, 4)
@@ -2662,7 +2798,8 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         JAXEffort trained-emulator key.
     prior_basis : str, default='standard'
         ``'physical'``: sigma8-normalized Lagrangian bias (same as :class:`REPTVelocileptorsTracerSpectrum2Poles`);
-        parameters ``b1, b2, bs, ...`` with physical priors.
+        parameters ``b1, b2, bs, ...`` with physical priors, normalized by the amplitude ratio
+        ``A = sigma8_z / sigma8_z_fid`` from the PT.
         ``'standard'``: standard velocileptors REPT basis.
     fsat, sigv, nbar : floats
         Physical-basis stochastic settings; forwarded to :func:`_velocileptors_physical_to_standard`.
@@ -2677,10 +2814,11 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
 
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='standard'):
-        """Return a proposed :class:`~desilike.parameter.VariableCollection` for the bias parameters.
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for the bias parameters
+        (the velocileptors defaults, shared with :class:`REPTVelocileptorsTracerSpectrum2Poles`).
 
-        Cosmological parameters come from the :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
-        dependency and are not included here.
+        Cosmological parameters come from the ``pt`` dependency's cosmology calculator
+        and are not included here.
 
         Parameters
         ----------
@@ -2691,52 +2829,32 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         -------
         VariableCollection
         """
-        if prior_basis == 'physical':
-            return propose_params_multitracer(_velocileptors_default_params('physical'), tracers)
-        return propose_params_multitracer([
-            Parameter('b1', value=2., prior=dict(limits=[0., 4.]),
-                      ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1'),
-            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=2.),
-                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
-            Parameter('bs', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
-            Parameter('b3', value=0., fixed=True, latex='b_3'),
-            Parameter('alpha0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_0'),
-            Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_2'),
-            Parameter('alpha4', value=0., fixed=True, latex=r'\alpha_4'),
-            Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6'),
-            Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
-            Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
-            Parameter('sn4', value=0., fixed=True, latex='s_{n,4}'),
-        ], tracers)
+        return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
 
-    def __init__(self,  k=None, ells=(0, 2, 4), z=0.5, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
-        # ── cosmology dep (provides logA, n_s, h, omega_b, omega_cdm, m_ncdm, w0_fld, wa_fld) ──
-        if k is None:
-            k = np.linspace(0.01, 0.2, 101)
-        self.k = np.asarray(k, dtype='f8')
-        self.ells = tuple(ells)
-        self.z = float(z)
+    def __init__(self, k=None, ells=None, z=None, pt=None, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
         self._prior_basis = str(prior_basis)
         self._model = str(model)
-        if cosmo is None:
-            cosmo = ACECosmology(fiducial=fiducial)
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        # ── PT dep (owns the cosmology dep and the bias-independent component tables) ──
+        if pt is None:
+            pt = JAXEffortPTSpectrum2Poles(tracers=tracers, model=model)
+        self.pt = pt
+        # z and cosmo only when given, so that omitted values fall through to the PT's own
+        # defaults (z=0.5, ACECosmology(engine='ace')) instead of being clobbered by None.
+        pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo).items() if value is not None}
+        self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model,
+                       with_amplitude='physical' in self._prior_basis)
         # ── velocileptors bias ──
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
 
-    def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8, prior_basis='standard',
+    def __post_init__(self, k=None, ells=None, z=None, pt=None, cosmo=None, mu=8, prior_basis='standard',
                       fsat=None, sigv=None, nbar=1e-4,
                       model='velocileptors_rept_mnuw0wacdm', fiducial='DESI', **kwargs):
-        self.cosmo.add_requirements({
-            'background.efunc':                        [{'z': self.z}],
-            'background.comoving_transverse_distance': [{'z': self.z}],
-            'background.growth_factor':                [{'z': self.z}],
-            'background.growth_rate':                  [{'z': self.z}],
-            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
-        })
+        self.k = self.pt.k
+        self.ells = self.pt.ells
+        self.z = self.pt.z
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -2746,30 +2864,13 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         # Legendre coefficients (highest power first, for jnp.polyval) per multipole.
         self._legendre_coeffs = [np.asarray(special.legendre(ell).c) for ell in self.ells]
         import jaxeffort
-        self._emulators = [jaxeffort.trained_emulators[self._model][str(ell)] for ell in self.ells]
-        self._kgrid = np.asarray(self._emulators[0].P11.k_grid)
-        # Fiducial distances for AP (fixed); same distance formulas as in __call__
-        fiducial = _get_fiducial(fiducial, calculator=self.cosmo)
-        ba = fiducial.get_background()
-        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
-        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
-        self._AsD_fid = (jnp.exp(fiducial['logA']) * 10**(-10))**0.5 * ba.growth_factor(self.z)
-        self._f_fid = ba.growth_rate(self.z)
+        # Static per-multipole bias-combination callables and emulator k grid (cosmology-independent).
+        self._bias_combinations = [jaxeffort.trained_emulators[self._model][str(ell)].bias_combination for ell in self.ells]
+        self._kgrid = np.asarray(jaxeffort.trained_emulators[self._model][str(self.ells[0])].P11.k_grid)
 
     def __call__(self):
-        import jaxeffort
-        # Read cosmological parameters from the CosmoprimoCosmology dep.
-        ba = self.cosmo.get_background()
-        theta = jnp.array([self.z, self.cosmo['logA'], self.cosmo['n_s'], self.cosmo['H0'], self.cosmo['omega_b'],
-                           self.cosmo['omega_cdm'], self.cosmo['m_ncdm_tot'], self.cosmo['w0_fld'], self.cosmo['wa_fld']])
-        D, f = ba.growth_factor(self.z), ba.growth_rate(self.z)
-        AsD = D * (jnp.exp(self.cosmo['logA']) * 10**(-10))**0.5
-        # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
-        ba = self.cosmo.get_background()
-        DH = constants.c / 1e3 / (100. * ba.efunc(self.z))
-        DM = ba.comoving_transverse_distance(self.z)
-        qpar = DH / self._DH_fid
-        qper = DM / self._DM_fid
+        f = self.pt.f
+        qpar, qper = self.pt.qpar, self.pt.qper
         A_AP = 1. / (qper**2 * qpar)
 
         if self._prior_basis in ['physical', 'physical_aap']:
@@ -2777,7 +2878,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
                 self.b1.value, self.b2.value, self.bs.value, self.b3.value,
                 self.alpha0.value, self.alpha2.value, self.alpha4.value, self.alpha6.value,
                 self.sn0.value, self.sn2.value, self.sn4.value,
-                f, self._fsat, self._sigv, self._nbar, A=AsD / self._AsD_fid,
+                f, self._fsat, self._sigv, self._nbar, A=self.pt.A,
                 A_AP=A_AP if 'aap' in self._prior_basis else 1., rept='rept' in self._model)
         else:
             b1, b2 = self.b1.value, self.b2.value
@@ -2788,7 +2889,10 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
                 bs, b3 = bs - (2. / 7.) * (b1 - 1.), 3. * b3 + (b1 - 1.)
             biases = jnp.array([b1, b2, bs, b3, a0, a2, a4, a6, sn0, sn2, sn4])
 
-        poles = [emu.get_Pl(theta, biases, D) for emu in self._emulators]  # each on self._kgrid
+        # Contract each multipole's component table with its bias coefficient vector:
+        # exactly MultipoleEmulators.get_Pl's stacked_array @ bias_combination(biases).
+        poles = [table @ bias_combination(biases)
+                 for table, bias_combination in zip(self.pt.table, self._bias_combinations)]  # each on self._kgrid
 
         jac, kap, muap = _ap_k_mu(self.k[:, None], self._to_poles.mu, qpar, qper)  # (n_k, n_mu)
         pkmu = jnp.zeros_like(kap)

@@ -1843,7 +1843,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj._to_poles.ells = aux['ells']
         return obj
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
@@ -1856,7 +1856,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         _folps_module.use_TNS_model_status = self._remove_DeltaP
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping)
+        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method)
         return self._to_poles(pkmu)
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **options):
@@ -1906,7 +1906,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
     damping : str, default='lor'
-        Damping for Finger-of-God effect.
+        Damping kernel for the Finger-of-God effect: 'exp', 'lor' or 'vdg'.
+    damping_method : str, default=None
+        What the FoG damping multiplies:
+
+        - ``None`` (default): only the loop-order bracket (loops + TNS A/D + GTNS); the
+          tree-level Kaiser term is left undamped (original FOLPSD convention).
+        - ``'tree'``: the tree-level Kaiser term too, GTNS kept (COMET VDG-like convention).
+        - ``'tree-gtns'``: as ``'tree'``, with the GTNS term removed from the damped bracket
+          (double-counting-free: the tree-level damping resums it non-perturbatively).
     """
 
     @classmethod
@@ -1959,7 +1967,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor',
+                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
                  tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
@@ -1978,11 +1986,14 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                      fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor',
+                      fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
                       tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
+        if damping_method not in (None, 'tree', 'tree-gtns'):
+            raise ValueError(f"damping_method must be None, 'tree' or 'tree-gtns', got {damping_method!r}")
+        self._damping_method = damping_method
         self._nbar = float(nbar)
         # Physical stochastic settings: pass fsat/sigv directly (e.g. the output of
         # get_physical_stochastic_settings); defaults are the generic settings.
@@ -2042,7 +2053,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
                                sn0, sn2, 1., self.X_FoG.value]
 
-        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping)
+        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method)
         return self.poles
 
     def tree_flatten(self):
@@ -2527,7 +2538,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.f0 = self._table_state.f0
         self.fk = self._table_state.fk
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
 
         Matches :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles`'s signature
@@ -2536,6 +2547,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         hardcoded as in FOLPS). Reads only from attributes set by ``__call__`` (or
         ``tree_unflatten`` when emulated).
         """
+        if damping_method is not None:
+            raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (only the FOLPS pt)")
         from fkptjax.pipelines import poles_from_tables
 
         return poles_from_tables(
@@ -2611,13 +2624,13 @@ class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
     """
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor',
+                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
                  tracers=None, params=None, **kwargs):
         if pt is None:
             pt = FKPTJAXPTSpectrum2Poles(**kwargs)
             kwargs = {}
         super().__init__(k=k, pt=pt, ells=ells, template=template, prior_basis=prior_basis,
-                         fsat=fsat, sigv=sigv, nbar=nbar, mu=mu, damping=damping,
+                         fsat=fsat, sigv=sigv, nbar=nbar, mu=mu, damping=damping, damping_method=damping_method,
                          tracers=tracers, params=params, **kwargs)
 
 

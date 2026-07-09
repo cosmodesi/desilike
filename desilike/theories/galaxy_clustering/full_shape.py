@@ -2286,9 +2286,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         bias_scheme = 'folps'
         kNL = 0.3
 
+        # FOLPS bispectrum bias order is (b1, b2, bs, c1, c2, Bshot, Pshot, X_FoG):
+        # snb0 (bispectrum shot noise) fills the Bshot slot, sn0 (power spectrum shot noise) the Pshot slot
         if self._prior_basis == 'standard':
             pars = [self.b1.value, self.b2.value, self.bs.value, self.c1.value, self.c2.value,
-                    self.sn0.value, self.snb0.value, self.X_FoG.value]
+                    self.snb0.value, self.sn0.value, self.X_FoG.value]
 
         elif self._prior_basis in ['physical', 'physical_aap']:  # physical basis with AP rescaling
             if 'aap' not in self._prior_basis: A_AP = 1.
@@ -2300,7 +2302,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             c1 = self.c1.value / kNL**2 / (A**2 * A_AP)
             c2 = self.c2.value / kNL**2 / (A**2 * A_AP)
             pars = [b1E, b2E, bsE, c1, c2,
-                    self.sn0.value / A_AP / self._nbar, self.snb0.value / A_AP / self._nbar, self.X_FoG.value]
+                    self.snb0.value / A_AP / self._nbar, self.sn0.value / A_AP / self._nbar, self.X_FoG.value]
 
         else:  # 'tcm_chudaykin_aap'
             bias_scheme = 'classpt'
@@ -2310,7 +2312,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             c1 = self.c1.value / kNL**2 / (A**2 * A_AP)
             c2 = self.c2.value / kNL**2 / (A**2 * A_AP)
             pars = [1. + b1L, b2L, bsL, c1, c2,
-                    self.sn0.value / self._nbar, self.snb0.value / self._nbar, self.X_FoG.value]
+                    self.snb0.value / self._nbar, self.sn0.value / self._nbar, self.X_FoG.value]
 
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
         self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme, **self._options)

@@ -495,6 +495,11 @@ class _BaseClikCandlLikelihood(Likelihood):
         params_dict = {name: param.value for name, param in self.params.items()}
         params_dict['Dl'] = self._build_Dl()
         self.logpdf = self.like.log_like(params_dict)
+        # Non-finite Dl (e.g. the NaN masking of out-of-training-range emulator results in
+        # ACECosmology) must reject the sample: clipy's tabulated low-ell likelihoods clamp
+        # NaN in table lookups and would otherwise return finite garbage.
+        finite = jnp.all(jnp.array([jnp.all(jnp.isfinite(Dl)) for Dl in params_dict['Dl'].values()]))
+        self.logpdf = jnp.where(finite, self.logpdf, -jnp.inf)
         return self.logpdf
 
     @classmethod

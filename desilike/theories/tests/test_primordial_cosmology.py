@@ -215,6 +215,146 @@ class TestACECosmology:
         np.testing.assert_allclose(cosmo.get_background().comoving_transverse_distance(z=0.1),
                                     cosmo.get('background.comoving_transverse_distance', z=0.1))
 
+    def test_packaged(self):
+        """engine='ace' serves DirectSpectrum2Template's and the CMB likelihoods' requirements
+        from the packaged jaxace / jaxmapse / jaxcapse trained emulators, matching cosmoprimo
+        (class for pk / sigma8_z / rs_drag, camb for the Cl) at the DESI fiducial."""
+        from desilike.base import compile
+        from desilike.theories.primordial_cosmology import ACECosmology
+
+        ellmax = 2508
+        z_test = 1.
+        k = np.geomspace(1e-3, 1., 30)
+        # engine='ace' includes the derived sigma8_m and rs_drag parameters by default.
+        cosmo = ACECosmology(engine='ace', fiducial='DESI')
+        cosmo.add_requirements({
+            'fourier.pk': [{'of': 'delta_cb', 'z': z_test, 'k': k}, {'of': 'theta_cb', 'z': z_test, 'k': k}],
+            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': z_test}, {'of': 'theta_cb', 'z': z_test}],
+            'background.efunc': [{'z': z_test}],
+            'background.comoving_transverse_distance': [{'z': z_test}],
+            'harmonic.lensed_cl': [{'ellmax': ellmax}],
+            'harmonic.lens_potential_cl': [{'ellmax': ellmax}],
+        })
+        compile(cosmo)()
+
+        import cosmoprimo
+        fiducial = cosmoprimo.fiducial.DESI(engine='class')
+        fo = fiducial.get_fourier()
+
+        # derived params (default with engine='ace'): rs_drag in Mpc/h, sigma8_m at z = 0
+        rs_drag = float(cosmo.derived_params['rs_drag'].value)
+        assert np.isclose(rs_drag, fiducial.get_thermodynamics().rs_drag, rtol=2e-4)
+        sigma8_m = float(cosmo.derived_params['sigma8_m'].value)
+        assert np.isclose(sigma8_m, fo.sigma8_z(0., of='delta_m'), rtol=1e-3)
+
+        # fourier: sigma8_z is total-matter (0.5% off delta_cb), fsigma8 = f_z * sigma8_z
+        sigma8 = cosmo.get_fourier().sigma8_z(of='delta_cb', z=z_test)
+        fsigma8 = cosmo.get_fourier().sigma8_z(of='theta_cb', z=z_test)
+        assert np.isclose(float(sigma8), fo.sigma8_z(z_test, of='delta_m'), rtol=1e-3)
+        assert np.isclose(float(sigma8), fo.sigma8_z(z_test, of='delta_cb'), rtol=1e-2)
+        assert np.isclose(float(fsigma8), fo.sigma8_z(z_test, of='theta_cb'), rtol=1e-2)
+
+        # fourier: linear pk (delta_cb), and pk_tt = f_z^2 pk_dd with f_z = fsigma8 / sigma8
+        pk_dd = np.asarray(cosmo.get_fourier().pk(of='delta_cb', z=z_test, k=k))
+        pk_tt = np.asarray(cosmo.get_fourier().pk(of='theta_cb', z=z_test, k=k))
+        np.testing.assert_allclose(pk_dd, fo.pk_interpolator(of='delta_cb')(k, z=z_test), rtol=5e-3)
+        np.testing.assert_allclose(pk_tt / pk_dd, float(fsigma8 / sigma8)**2, rtol=1e-6)
+
+        # background (analytic jaxace, unchanged by this feature; sanity only)
+        assert np.isclose(float(cosmo.get_background().efunc(z=z_test)), fiducial.efunc(z_test), rtol=1e-3)
+        assert np.isclose(float(cosmo.get_background().comoving_transverse_distance(z=z_test)),
+                          fiducial.comoving_transverse_distance(z_test), rtol=1e-3)
+
+        # harmonic: raw dimensionless Cl, matching CosmoprimoCosmology's convention (camb)
+        cosmo_camb = fiducial.clone(engine='camb', lensing=True, ellmax_cl=ellmax + 500, non_linear='mead')
+        cl_ref = cosmo_camb.get_harmonic().lensed_cl(ellmax=ellmax)
+        clpp_ref = cosmo_camb.get_harmonic().lens_potential_cl(ellmax=ellmax)
+        cl = cosmo.get_harmonic().lensed_cl(ellmax=ellmax)
+        clpp = cosmo.get_harmonic().lens_potential_cl(ellmax=ellmax)
+        ells = np.arange(ellmax + 1)
+        for name in ['tt', 'ee']:
+            np.testing.assert_allclose(np.asarray(cl[name])[30:], cl_ref[name][30:], rtol=6e-3)
+        # te crosses zero: compare at the Dl level with an absolute tolerance
+        scale = ells * (ells + 1) * (fiducial['T_cmb'] * 1e6)**2 / (2 * np.pi)
+        np.testing.assert_allclose(np.asarray(cl['te'])[30:] * scale[30:], cl_ref['te'][30:] * scale[30:],
+                                   atol=2e-3 * np.max(np.abs(cl_ref['te'][30:] * scale[30:])))
+        np.testing.assert_allclose(np.asarray(cl['bb']), 0.)
+        np.testing.assert_allclose(np.asarray(clpp['pp'])[30:1000], clpp_ref['pp'][30:1000], rtol=2e-2)
+
+        # requesting more than the emulator's training range must raise
+        with pytest.raises(ValueError, match='ellmax'):
+            cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': 6000}]})
+
+    def test_packaged_out_of_range(self):
+        """Parameters outside the packaged emulators' training ranges yield NaN results
+        (eager and jit) instead of a non-finite crash in downstream spline solves, and a
+        warning flags priors wider than the training range at compile time."""
+        import warnings as _warnings
+        import jax
+        from desilike.base import compile, get_params
+        from desilike.theories.primordial_cosmology import ACECosmology
+
+        k = np.geomspace(1e-3, 1., 20)
+        z_test = 1.
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            cosmo = ACECosmology(engine='ace', fiducial='DESI')
+            cosmo.add_requirements({
+                'fourier.pk': [{'of': 'delta_cb', 'z': z_test, 'k': k}],
+                'fourier.pk_now': [{'of': 'delta_cb', 'engine': 'peakaverage', 'z': z_test, 'k': k}],
+                'harmonic.lensed_cl': [{'ellmax': 100}],
+            })
+            pipe = compile(cosmo)
+        # h prior [0.1, 10] etc. extend beyond the training ranges: warned at compile.
+        assert any('training range' in str(warning.message) for warning in caught)
+
+        defaults = {param.name: param._value for param in get_params(cosmo)}
+
+        def run(params):
+            pipe(params)
+            return (cosmo.get('fourier.pk', of='delta_cb', z=z_test, k=k),
+                    cosmo.get('fourier.pk_now', of='delta_cb', engine='peakaverage', z=z_test, k=k),
+                    cosmo.get('harmonic.lensed_cl', ellmax=100)['tt'])
+
+        results = run(defaults)
+        assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
+        results = run({**defaults, 'h': 3.})  # far outside the ACE training range: NaN, no crash
+        assert all(np.all(np.isnan(np.asarray(result))) for result in results)
+
+        # jit path, through a downstream consumer (results must be read off a pipeline output,
+        # not off cosmo._results, which lives inside the compiled pipe's own trace)
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template
+        template = DirectSpectrum2Template(z=z_test, fiducial='DESI', cosmo=ACECosmology(engine='ace', fiducial='DESI'))
+        pipe_template = jax.jit(compile(template))
+        defaults = {param.name: param._value for param in get_params(template)}
+        assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
+        assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
+
+    def test_packaged_direct_template(self):
+        """DirectSpectrum2Template(cosmo=ACECosmology(engine='ace')) compiles and runs as pure
+        JAX: qpar = qper = 1 and f consistent between fk, f0 and fsigma8 / sigma8 at the
+        fiducial, with finite gradients with respect to cosmological parameters."""
+        import jax
+        from desilike.base import compile, get_params
+        from desilike.theories.primordial_cosmology import ACECosmology
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template
+
+        cosmo = ACECosmology(engine='ace', fiducial='DESI')
+        template = DirectSpectrum2Template(z=0.8, fiducial='DESI', cosmo=cosmo)
+        pipe = compile(template)
+        defaults = {param.name: param._value for param in get_params(template)}
+        pipe(defaults)
+        assert np.isclose(float(template.qpar), 1., atol=5e-3)
+        assert np.isclose(float(template.qper), 1., atol=5e-3)
+        f = float(template.fsigma8 / template.sigma8)
+        np.testing.assert_allclose(np.asarray(template.fk), f, rtol=1e-6)
+        assert np.isclose(float(template.f0), f, rtol=1e-6)
+        assert np.all(np.isfinite(np.asarray(template.pk_dd)))
+
+        # differentiability: d(sum pk_dd)/d(logA) is finite and positive
+        grad = jax.grad(lambda p: jax.numpy.sum(pipe(p)))(defaults)
+        assert np.isfinite(float(grad['logA'])) and float(grad['logA']) > 0.
+
     def test_fiducial_from_calculator(self):
         """_get_fiducial(name, calculator=cosmo) re-runs cosmo's own pipeline at the named
         fiducial's parameter values (cosmoprimo-recognized ones only, e.g. h, omega_cdm, ...),

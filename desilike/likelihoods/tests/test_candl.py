@@ -255,6 +255,48 @@ def test_planck_pr3_lowl_ee_sroll2(tmp_path, monkeypatch):
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
 
 
+def test_planck_pr3_lowl_ee_sroll2_ace(tmp_path, monkeypatch):
+    """Same Planck PR3 low-ell EE (Sroll2) likelihood served by ACECosmology(engine='ace'),
+    i.e. the packaged jaxcapse 'camb_lcdm' Cl emulator: the compiled logpdf must be finite,
+    match the camb-based CosmoprimoCosmology one at fiducial parameters, respond to
+    tau_reio, and reject (-inf) parameters outside the emulator training ranges."""
+    from desilike.install import Installer
+    from desilike.likelihoods.cmb.candl import PlanckPR3LowlEESroll2Likelihood
+    from desilike.theories.primordial_cosmology import ACECosmology
+
+    monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))
+
+    PlanckPR3LowlEESroll2Likelihood.install(Installer())
+
+    cosmo_camb = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=30, non_linear='mead')))
+    like_camb = PlanckPR3LowlEESroll2Likelihood(cosmo=cosmo_camb)
+    pipe_camb = compile(like_camb)
+    defaults_camb = {p.name: p._value for p in get_params(like_camb)}
+    logpdf_camb = float(pipe_camb(defaults_camb))
+
+    cosmo_ace = ACECosmology(engine='ace', fiducial='DESI')
+    like_ace = PlanckPR3LowlEESroll2Likelihood(cosmo=cosmo_ace)
+    pipe_ace = compile(like_ace)
+    defaults_ace = {p.name: p._value for p in get_params(like_ace)}
+    logpdf_ace = float(pipe_ace(defaults_ace))
+
+    assert np.isfinite(logpdf_ace), f'logpdf not finite: {logpdf_ace}'
+    assert np.isclose(logpdf_ace, logpdf_camb, atol=0.5), f'ACE {logpdf_ace} vs camb {logpdf_camb}'
+
+    # tau_reio dependence, by finite difference: clipy's simall is a floor-indexed table
+    # lookup, piecewise-constant in Cl, so jax.grad is exactly 0 by construction (as in the
+    # original clik) -- gradient-based use must rely on desilike's finite-difference machinery.
+    eps = 1e-3
+    fd_tau = (float(pipe_ace({**defaults_ace, 'tau_reio': defaults_ace['tau_reio'] + eps}))
+              - float(pipe_ace({**defaults_ace, 'tau_reio': defaults_ace['tau_reio'] - eps}))) / (2. * eps)
+    assert np.isfinite(fd_tau) and abs(fd_tau) > 1., f'no tau_reio response: {fd_tau}'
+
+    # out-of-training-range parameters: NaN-masked Cl must reject the sample (-inf), not
+    # feed finite garbage through clipy's NaN-clamping table lookup
+    assert float(pipe_ace({**defaults_ace, 'h': 0.95})) == -np.inf
+
+
 if __name__ == '__main__':
 
     import os

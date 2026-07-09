@@ -675,10 +675,11 @@ class TestCOMET:
         parameters (h, omega_cdm, omega_b, n_s), not just bias -- regression test for
         comet's background/growth machinery (AP via compute_ap_params, the s12/f
         derived via compute_s12_f) under jit. Includes h=0.3, an extreme-but-finite
-        value that pushes Om0 = (omega_cdm+omega_b+omega_nu)/h**2 above 1 (so
-        Ode0 = 1-Om0 < 0) -- comet/growth.py's growth_factor_lambda used to return NaN
-        there (Ode0<=0 breaks its closed form); see comet/ranges.py and
-        growth_factor_lambda()'s docstring for the fix."""
+        value that pushes Om0 above 1 (Ode0 < 0): comet's growth Ode0 floor keeps the
+        derived s12/f finite *and in range* there (f(z=1) ~ 1.03 < 1.05), so the result
+        stays finite. h=3.0 instead drives f(z=1) ~ 0.3 below its GP training range
+        (0.5, 1.05): comet's jax path then taints the outputs with NaN (instead of
+        silently evaluating at the clipped point), while every raw parameter is in range."""
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles
         comet_tol = dict(rtol=2e-3, atol=1e-6)
         cosmo_overrides = [('h', 0.7), ('h', 0.3), ('omega_cdm', 0.13), ('omega_b', 0.0235), ('n_s', 0.98)]
@@ -692,6 +693,7 @@ class TestCOMET:
             assert np.isfinite(result).all(), f'COMETTracerSpectrum2Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run, base, f'COMETTracerSpectrum2Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
+        assert np.isnan(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected NaN (derived f below its training range)'
 
         k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
         theory3 = COMETTracerSpectrum3Poles(k=k3)
@@ -702,6 +704,7 @@ class TestCOMET:
             assert np.isfinite(result3).all(), f'COMETTracerSpectrum3Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
+        assert np.isnan(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected NaN (derived f below its training range)'
 
     def test_out_of_training_range(self):
         """Parameters outside comet's training ranges yield NaN poles (both the PT-split and

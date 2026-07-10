@@ -8,7 +8,12 @@ params:
       limits: [-10., 10.]
     delta: 1.
     latex: f_{\mathrm{NL}}^{\mathrm{loc}}
-  tnl_loc:
+  # SY-EXCESS, NOT the full tauNL: tnl_exc_loc = tauNL_loc - (6/5 fnl_loc)^2.
+  #   (relation to the (5/6)^2 convention: tnl_exc_loc = (36/25) * rNL, rNL = (25/36)tauNL - fNL^2.)
+  # tnl_exc_loc >= 0 IS the Suyama-Yamaguchi bound. Default fixed=0 -> single-field/SY-saturated,
+  # which leaves the standard Delta_b^2 in the Kaiser term untouched. The true local trispectrum
+  # amplitude is tauNL_loc = tnl_exc_loc + (6/5 fnl_loc)^2 (compute as a derived parameter).
+  tnl_exc_loc:
     value: 0.
     fixed: True
     prior:
@@ -16,7 +21,7 @@ params:
     ref:
       limits: [-1000., 1000.]
     delta: 100.
-    latex: \tau_{\mathrm{NL}}^{\mathrm{loc}}
+    latex: \Delta\tau_{\mathrm{NL}}^{\mathrm{loc}}
   bphi:
     prior:
       limits: [-10, 10]

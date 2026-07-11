@@ -967,7 +967,12 @@ class ACECosmology(PrimordialCosmology):
             return jaxace.get_emulator(emulator_key)
         if kind == 'jaxmapse':
             import jaxmapse
-            return jaxmapse.load_pk_emulator_from_artifact(emulator_key)
+            # Dict of per-component TransferFunctionEmulators, keyed like of= (mirrors the
+            # jaxcapse per-spectrum dict below); pre/postprocessing resolve from the files
+            # shipped inside each artifact component directory.
+            root = Path(jaxmapse.artifact_path(emulator_key))
+            return {'delta_m': jaxmapse.load_emulator(str(root / 'Pk_lin_mm')),
+                    'delta_cb': jaxmapse.load_emulator(str(root / 'Pk_lin_cb'))}
         if kind == 'jaxcapse':
             import jaxcapse
             if 'spectra' in metadata:
@@ -1199,10 +1204,9 @@ class ACECosmology(PrimordialCosmology):
                 z = spec['z']
                 growth = jaxace_cosmo.D_z(z)
                 of = spec['static']['of'][0]
-                if of == 'delta_m':
-                    pk, k_grid = emulator.get_linear_pmm(emulator_params, z, growth), emulator.linear_pmm.k_grid
-                else:
-                    pk, k_grid = emulator.get_linear_pkcb(emulator_params, z, growth), emulator.linear_pkcb.k_grid
+                # theta_cb is served from the delta_cb network (times f_z^2 below)
+                component = emulator['delta_m' if of == 'delta_m' else 'delta_cb']
+                pk, k_grid = component.get_Pk(emulator_params, z, growth), component.k_grid
                 if of.startswith('theta'):
                     # pk_tt = f_z^2 pk_cb (scale-independent growth), with f_z from the packaged
                     # jaxace emulator so that sigma8_z(theta_cb) = f_z * sigma8_z(delta_cb) exactly.

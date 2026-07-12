@@ -1780,6 +1780,13 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
     def __call__(self):
         folpsv2 = _import_folps()
+        import folps.folps as _folps_module
+        # calculate_loop_table / P22type read the module-global A_full_status (set by whichever
+        # MatrixCalculator was constructed last in the process), not the matrices passed in:
+        # re-assert this instance's settings so pts with different A_full can coexist
+        # (e.g. spectrum2 with A_full=True next to a spectrum3 pt with A_full=False).
+        _folps_module.A_full_status = self._A_full
+        _folps_module.use_TNS_model_status = self._remove_DeltaP
         cosmo_params = {'pkttlin': self.template.pk_dd * self.template.fk**2,
                         'f0': self.template.f0}
         folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
@@ -2270,7 +2277,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
         if pt is None:
-            pt = FOLPSPTSpectrum2Poles()
+            pt = FOLPSPTSpectrum2Poles(**kwargs)
         self.pt = pt
         if template is not None:
             self.pt.update(template=template)

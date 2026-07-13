@@ -54,7 +54,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
     def propose_params(cls):
         params = [
             Parameter('A_planck', value=1., prior=dict(dist='norm', loc=1., scale=0.0025),
-                      ref=dict(dist='norm', loc=1., scale=0.002), latex=r'y_\mathrm{cal}'),
+                      ref=dict(dist='norm', loc=1., scale=0.002), latex=r'y_{\mathrm{cal}}'),
             Parameter('cal0', value=1., fixed=True, latex='c_{100}'),
             Parameter('cal2', value=1., fixed=True, latex='c_{217}'),
             Parameter('amp_100', value=0., fixed=True, latex=r'A^{\mathrm{power}}_{100}'),
@@ -311,7 +311,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
     def propose_params(cls):
         return VariableCollection([
             Parameter('A_planck', value=1., prior=dict(dist='norm', loc=1., scale=0.0025),
-                      ref=dict(dist='norm', loc=1., scale=0.002), latex=r'y_\mathrm{cal}'),
+                      ref=dict(dist='norm', loc=1., scale=0.002), latex=r'y_{\mathrm{cal}}'),
             Parameter('calTE', value=1., prior=dict(dist='norm', loc=1., scale=0.01),
                       ref=dict(dist='norm', loc=1., scale=0.01), latex='c_{TE}'),
             Parameter('calEE', value=1., prior=dict(dist='norm', loc=1., scale=0.01),

@@ -516,7 +516,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
         params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
                              prior=dict(limits=[0.01, 0.99]),
                              ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.0012),
-                             fd_eps=0.007, latex=r'\omega_\mathrm{cdm}'))
+                             fd_eps=0.007, latex=r'\omega_{\mathrm{cdm}}'))
         params.set(Parameter('omega_b', value=fiducial['omega_b'],
                              prior=dict(limits=[0.005, 0.1]),
                              ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.00015),
@@ -536,11 +536,11 @@ class CosmoprimoCosmology(PrimordialCosmology):
         params.set(Parameter('m_ncdm', value=fiducial['m_ncdm_tot'], fixed=True,
                              prior=dict(limits=[0., 5.]),
                              ref=dict(dist='norm', loc=fiducial['m_ncdm_tot'], scale=0.12, limits=[0., 10.]),
-                             fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
+                             fd_eps=(0.31, 0.15, 0.15), latex=r'm_{\mathrm{ncdm}}'))
         params.set(Parameter('N_eff', value=fiducial['N_eff'], fixed=True,
                              prior=dict(limits=[0.01, 10.]),
                              ref=dict(dist='norm', loc=fiducial['N_eff'], scale=0.16),
-                             fd_eps=0.2, latex=r'N_\mathrm{eff}'))
+                             fd_eps=0.2, latex=r'N_{\mathrm{eff}}'))
         params.set(Parameter('w0_fld', value=fiducial['w0_fld'], fixed=True,
                              prior=dict(limits=[-3., 1.]),
                              ref=dict(dist='norm', loc=fiducial['w0_fld'], scale=0.08),
@@ -894,7 +894,7 @@ class ACECosmology(PrimordialCosmology):
         engine_names = list(engine.values()) if isinstance(engine, dict) else [engine]
         if 'ace' in engine_names or any(_PACKAGED_EMULATORS.get(name, {}).get('kind') == 'jaxace' for name in engine_names):
             params.set(Parameter('sigma8_m', value=0., derived=True, latex=r'\sigma_8'))
-            params.set(Parameter('rs_drag', value=0., derived=True, latex=r'r_\mathrm{drag}'))
+            params.set(Parameter('rs_drag', value=0., derived=True, latex=r'r_{\mathrm{drag}}'))
         return params
 
     def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', **kwargs):

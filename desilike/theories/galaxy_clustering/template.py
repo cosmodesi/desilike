@@ -100,15 +100,15 @@ def _ap_auto_params(apmode):
     _ap_ref = dict(dist='norm', loc=1., scale=0.05)
     _ap_fd = 0.008
     if apmode == 'qparqper':
-        return [Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\parallel'),
-                Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\perp')]
+        return [Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\parallel}'),
+                Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\perp}')]
     if apmode == 'qisoqap':
-        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{iso}'),
-                Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{ap}')]
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{iso}}'),
+                Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{ap}}')]
     if apmode == 'qiso':
-        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{iso}')]
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{iso}}')]
     if apmode == 'qap':
-        return [Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{ap}')]
+        return [Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{ap}}')]
     raise ValueError(f"apmode must be one of 'qparqper', 'qisoqap', 'qiso', 'qap'; got {apmode!r}")
 
 
@@ -784,7 +784,7 @@ class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
         return super().propose_params(apmode=apmode) + VariableCollection([
             Parameter('baoshift', value=1., prior=dict(limits=[0., 2.]),
                       ref=dict(dist='norm', loc=1., scale=0.1),
-                      fd_eps=0.01, latex=r'\phi_\mathrm{BAO}'),
+                      fd_eps=0.01, latex=r'\phi_{\mathrm{BAO}}'),
         ])
 
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
@@ -904,9 +904,9 @@ class TurnOverSpectrum2Template(Spectrum2Template):
                 Parameter('n', value=0.9, prior=dict(limits=[0., 3.]),
                           ref=dict(dist='norm', loc=0.9, scale=0.1), fd_eps=0.05, latex=r'n'),
                 Parameter('qto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
-                          latex=r'q_\mathrm{TO}'),
+                          latex=r'q_{\mathrm{TO}}'),
                 Parameter('dpto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
-                          latex=r'\delta P_\mathrm{TO}'),
+                          latex=r'\delta P_{\mathrm{TO}}'),
             ], tracers=None)
 
     def __init__(self, k=None, z=1., fiducial='DESI', apmode='qap', eta=1. / 3., params=None):
@@ -1052,10 +1052,10 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
         return VariableCollection([
             Parameter('qbao', value=1., prior=dict(limits=[0.5, 1.5]),
                       ref=dict(dist='norm', loc=1., scale=0.01),
-                      fd_eps=0.005, latex=r'q_\mathrm{BAO}'),
+                      fd_eps=0.005, latex=r'q_{\mathrm{BAO}}'),
             Parameter('sigmabao', value=0., fixed=True, prior=dict(limits=[0., 30.]),
                       ref=dict(dist='norm', loc=0., scale=10.),
-                      fd_eps=1., latex=r'\Sigma_\mathrm{BAO}'),
+                      fd_eps=1., latex=r'\Sigma_{\mathrm{BAO}}'),
         ])
 
     def __init__(self, k=None, z=1., fiducial='DESI', engine='class',
@@ -1175,7 +1175,7 @@ class BAOTheory(Calculator):
         # since D(z) [Mpc/h] is h-independent by construction (see class notes).
         return VariableCollection([Parameter(
             'rs_drag', value=rd_fid, prior=dict(limits=[10., 1000.]),
-            ref=dict(dist='norm', loc=rd_fid, scale=1.), fd_eps=1., latex=r'r_\mathrm{d}')])
+            ref=dict(dist='norm', loc=rd_fid, scale=1.), fd_eps=1., latex=r'r_{\mathrm{d}}')])
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
         from cosmoprimo import constants

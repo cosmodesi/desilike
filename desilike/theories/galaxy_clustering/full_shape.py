@@ -61,17 +61,17 @@ def _velocileptors_default_params(prior_basis):
     """Return the 11 default auto_params for LPT/REPT Velocileptors tracer classes."""
     if prior_basis == 'physical':
         return [
-            Parameter('b1', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'"),
-            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
-            Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-            Parameter('b3', value=0., fixed=True, latex=r"b_3'"),
-            Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
-            Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
-            Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
-            Parameter('alpha6', value=0., fixed=True, latex=r"\alpha_6'"),
-            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-            Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
-            Parameter('sn4', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'"),
+            Parameter('b1', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+            Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+            Parameter('b3', value=0., fixed=True, latex='b_3'),
+            Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+            Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+            Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+            Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6'),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+            Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+            Parameter('sn4', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}'),
         ]
     return [
         Parameter('b1', value=1., prior=dict(limits=[-1., 10.]), ref=dict(limits=[0.4, 0.6]), latex='b_1'),
@@ -330,8 +330,8 @@ class KaiserPTSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=8, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        self.sigmapar = Parameter('sigmapar', value=0., fixed=True, latex=r'\Sigma_\parallel')
-        self.sigmaper = Parameter('sigmaper', value=0., fixed=True, latex=r'\Sigma_\perp')
+        self.sigmapar = Parameter('sigmapar', value=0., fixed=True, latex=r'\Sigma_{\parallel}')
+        self.sigmaper = Parameter('sigmaper', value=0., fixed=True, latex=r'\Sigma_{\perp}')
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1943,19 +1943,19 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
-                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
                 Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=20.),
-                          ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
                 Parameter('b3', value=0., prior=dict(dist='norm', loc=0., scale=1.),
-                          ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_3'"),
-                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
-                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
-                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
-                Parameter('ct', value=0., fixed=True, latex=r"c_t'"),
-                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r"X_\mathrm{FoG}'"),
-                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-                Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='b_3'),
+                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+                Parameter('ct', value=0., fixed=True, latex='c_t'),
+                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r'X_{\mathrm{FoG}}'),
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
             ]
         else:
             auto_params = [
@@ -1967,7 +1967,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
                 Parameter('alpha4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
                 Parameter('ct', value=0., fixed=True, latex='c_t'),
-                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r'X_\mathrm{FoG}'),
+                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r'X_{\mathrm{FoG}}'),
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
             ]
@@ -2242,15 +2242,15 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
-                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
                 Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=20.),
-                          ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-                Parameter('c1', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
-                Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_2'"),
-                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
-                Parameter('snb0', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
-                Parameter('X_FoG', value=0., fixed=True, latex=r"X'_\mathrm{FoG}"),
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+                Parameter('c1', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
+                Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('snb0', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
+                Parameter('X_FoG', value=0., fixed=True, latex=r'X_{\mathrm{FoG}}'),
             ]
         else:
             auto_params = [
@@ -2259,9 +2259,9 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('bs', value=0., prior=None, ref=dict(limits=[-1., 1.]), latex='b_s'),
                 Parameter('c1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
                 Parameter('c2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
-                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}"),
-                Parameter('snb0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}"),
-                Parameter('X_FoG', value=0., fixed=True, latex=r'X_\mathrm{FoG}'),
+                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('snb0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
+                Parameter('X_FoG', value=0., fixed=True, latex=r'X_{\mathrm{FoG}}'),
             ]
         return propose_params_multitracer(auto_params, tracers)  # no cross (bispectra not implemented)
 
@@ -3233,14 +3233,14 @@ class COMETTracerSpectrum2Poles(Calculator):
                     Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
                     Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                     Parameter('bk2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
-                    Parameter('btd', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
+                    Parameter('btd', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
                 ]
             else:
                 params += [
                     Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
                     Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                     Parameter('bk2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
-                    Parameter('btd', value=0.0, fixed=True, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
+                    Parameter('btd', value=0.0, fixed=True, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
                 ]
         else:
             raise NotImplementedError(prior_basis)
@@ -3298,7 +3298,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             raise NotImplementedError(counterterm_basis)
         if 'VDG' in model:
             avir = Parameter('avir', value=0.0, prior=dict(limits=[0.0, 20.0]),
-                             ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=r'a_\mathrm{vir}')
+                             ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=R'a_{\mathrm{vir}}')
             params += [avir]
         return propose_params_multitracer(params, tracers)
 

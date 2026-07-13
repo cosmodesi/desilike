@@ -59,7 +59,7 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
     @classmethod
     def propose_params(cls):
         return VariableCollection([
-            Parameter('Alens', value=1., latex=r'A_\mathrm{lens}'),
+            Parameter('Alens', value=1., latex=r'A_{\mathrm{lens}}'),
         ])
 
     def __init__(self, variant='actplanck_baseline', lens_only=False, cosmo=None, data_dir=None, params=None):

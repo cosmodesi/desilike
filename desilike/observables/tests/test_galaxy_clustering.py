@@ -407,6 +407,22 @@ def test_spectrum2poles_lsstypes():
     assert np.isfinite(float(likelihood.logpdf))
 
 
+def test_spectrum2poles_plot_unequal_multipole_bins():
+    """Spectrum residual panels use the coordinates of their own multipole."""
+    import lsstypes as types
+    from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
+
+    data = _make_spectrum2_lsstypes(size=8).at(ells=2).select(k=(0., 0.12))
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+    theory = _make_spectrum_theory(next(iter(data)).coords('k'), ells=data.ells)
+    observable = Spectrum2PolesObservable(data=data, theory=theory, covariance=covariance)
+    observable.flattheory = np.zeros(data.size)
+
+    fig = observable.plot()
+    for ax, pole in zip(fig.axes[1:], data):
+        np.testing.assert_array_equal(ax.lines[0].get_xdata(), pole.coords('k'))
+
+
 def test_spectrum3poles_lsstypes():
     """Spectrum3PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
@@ -473,6 +489,23 @@ def test_correlation2poles_lsstypes():
     pipe = compile(likelihood)
     pipe({p.name: float(p.value) for p in pipe.params})
     assert np.isfinite(float(likelihood.logpdf))
+
+
+def test_correlation2poles_plot_unequal_multipole_bins():
+    """Correlation residual panels use the coordinates of their own multipole."""
+    import lsstypes as types
+    from desilike.observables.galaxy_clustering import Correlation2PolesObservable
+
+    data, _ = _make_correlation2_lsstypes()
+    data = data.at(ells=2).select(s=(0., 150.))
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+    theory = _make_correlation_theory(next(iter(data)).coords('s'), ells=data.ells)
+    observable = Correlation2PolesObservable(data=data, theory=theory, covariance=covariance)
+    observable.flattheory = np.zeros(data.size)
+
+    fig = observable.plot()
+    for ax, pole in zip(fig.axes[1:], data):
+        np.testing.assert_array_equal(ax.lines[0].get_xdata(), pole.coords('s'))
 
 
 def test_gaussian_likelihood_lsstypes_covariance():

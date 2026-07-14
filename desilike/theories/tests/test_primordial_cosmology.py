@@ -407,6 +407,50 @@ class TestACECosmology:
         assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
         assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
 
+    def test_truncate_priors(self):
+        """truncate_priors intersects the priors with the packaged emulators' training ranges
+        (H0 ranges applied to h, scaled by 1/100), leaves non-matching priors and distribution
+        attrs untouched, and returns the collection for chaining."""
+        from desilike import Parameter, VariableCollection
+        from desilike.theories.primordial_cosmology import ACECosmology
+
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        params.set(Parameter('omega_cdm', value=0.12, prior=dict(limits=[0.01, 0.99])))
+        params.set(Parameter('n_s', value=0.9649, prior=dict(dist='norm', loc=0.9649, scale=0.042)))
+        params.set(Parameter('m_ncdm', value=0.06, prior=dict(limits=[0., 0.3])))  # already narrower than the training range
+        params.set(Parameter('Omega_m', value=0.31, prior=dict(limits=[0.01, 0.99])))  # not an emulator input
+
+        # training_ranges: intersected across the packaged set; the 'cosmo' basis (default)
+        # reports H0 as h (/100), the 'emulator' basis keeps the networks' native names.
+        ranges = ACECosmology.training_ranges(engine='ace')
+        assert ranges['h'] == (0.5, 0.9) and 'H0' not in ranges
+        assert ranges['omega_cdm'] == (0.08, 0.18)
+        ranges_emulator = ACECosmology.training_ranges(engine='ace', basis='emulator')
+        assert ranges_emulator['H0'] == (50., 90.) and 'h' not in ranges_emulator
+        assert ACECosmology.training_ranges(engine='does_not_exist') == {}
+        with pytest.raises(ValueError, match='basis'):
+            ACECosmology.training_ranges(engine='ace', basis='unknown')
+
+        returned = ACECosmology.truncate_priors(params, engine='ace')
+        assert returned is params
+        # jaxace/jaxmapse training box: H0 in (50, 90) -> h in (0.5, 0.9); omega_cdm in (0.08, 0.18).
+        assert params['h'].prior.limits == (0.5, 0.9)
+        assert params['omega_cdm'].prior.limits == (0.08, 0.18)
+        # Gaussian prior keeps its distribution and attrs, gains the training-range limits
+        # (n_s in (0.8, 1.1) from jaxace, tightened by the camb_lcdm Cl emulator).
+        assert params['n_s'].prior.dist == 'norm' and params['n_s'].prior.attrs['loc'] == 0.9649
+        assert params['n_s'].prior.limits[0] >= 0.8 and params['n_s'].prior.limits[1] <= 1.1
+        # Narrower existing limits and non-emulator-input parameters are untouched.
+        assert params['m_ncdm'].prior.limits == (0., 0.3)
+        assert params['Omega_m'].prior.limits == (0.01, 0.99)
+
+        # Non-packaged engine names (no training ranges known) leave everything untouched.
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        ACECosmology.truncate_priors(params, engine='does_not_exist')
+        assert params['h'].prior.limits == (0.1, 10.)
+
     def test_packaged_direct_template(self):
         """DirectSpectrum2Template(cosmo=ACECosmology(engine='ace')) compiles and runs as pure
         JAX: qpar = qper = 1 and f consistent between fk, f0 and fsigma8 / sigma8 at the

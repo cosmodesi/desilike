@@ -650,6 +650,41 @@ class TestJAXEffort:
         k = np.linspace(0.01, 0.2, 20)
         assert _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
 
+    def test_training_ranges(self):
+        """training_ranges / truncate_priors classmethods (PT and tracer classes): the
+        'emulator' basis keeps the networks' native inputs (z, H0, m_ncdm_tot), the 'cosmo'
+        basis maps them to sampled parameter names; out-of-range parameters NaN-mask the
+        tracer prediction at runtime."""
+        from desilike import Parameter, VariableCollection
+        from desilike.theories.galaxy_clustering.full_shape import (
+            JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, _JAXEFFORT_THETA_NAMES,
+        )
+
+        ranges_emulator = JAXEffortTracerSpectrum2Poles.training_ranges(basis='emulator')
+        assert set(ranges_emulator) == set(_JAXEFFORT_THETA_NAMES)
+        ranges = JAXEffortTracerSpectrum2Poles.training_ranges()  # basis='cosmo'
+        assert 'z' not in ranges and 'H0' not in ranges and 'm_ncdm_tot' not in ranges
+        assert ranges['h'] == (ranges_emulator['H0'][0] / 100., ranges_emulator['H0'][1] / 100.)
+        assert ranges['m_ncdm'] == ranges_emulator['m_ncdm_tot']
+        assert all(low < high for low, high in ranges.values())
+        # PT and tracer classes expose the same classmethods.
+        assert JAXEffortPTSpectrum2Poles.training_ranges() == ranges
+
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        params.set(Parameter('logA', value=3.036, prior=dict(limits=[1.61, 3.91])))
+        JAXEffortTracerSpectrum2Poles.truncate_priors(params)
+        assert params['h'].prior.limits == ranges['h']
+        low, high = ranges['logA']
+        assert params['logA'].prior.limits == (max(1.61, low), min(3.91, high))
+
+        # Runtime out-of-training-range guard: NaN prediction instead of silent extrapolation.
+        k = np.linspace(0.01, 0.2, 20)
+        run = _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))
+        assert np.isfinite(np.asarray(run())).all()
+        assert np.isnan(np.asarray(run(logA=ranges['logA'][1] + 0.5))).all(), \
+            'JAXEffortTracerSpectrum2Poles: expected NaN outside the training range'
+
 
 # ── COMET ─────────────────────────────────────────────────────────────────────
 
@@ -903,6 +938,39 @@ class TestCOMET:
                 assert np.isfinite(result_np).all(), f'{name}: non-finite numpy result'
                 np.testing.assert_allclose(result_np, result_jax, rtol=0.05, atol=1.0,
                                            err_msg=f'{name}: numpy backend disagrees with jax')
+
+    def test_training_ranges(self):
+        """training_ranges / truncate_priors classmethods (PT and tracer, 2- and 3-poles): the
+        'emulator' basis keeps native comet names and units (wc, As in 1e-9, GP coordinates
+        s12/f), the 'cosmo' basis maps them to sampled desilike parameter names."""
+        from desilike import Parameter, VariableCollection
+        from desilike.theories.galaxy_clustering.full_shape import (
+            COMETPTSpectrum2Poles, COMETTracerSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles,
+        )
+
+        ranges_emulator = COMETTracerSpectrum2Poles.training_ranges(basis='emulator')
+        # VDG_infty GP inputs: shape parameters (wb, wc, ns, As, Mnu) + derived coordinates (s12, f);
+        # no h -- it only enters through the derived s12/f, checked at runtime.
+        assert 'wc' in ranges_emulator and 's12' in ranges_emulator and 'h' not in ranges_emulator
+        ranges = COMETTracerSpectrum2Poles.training_ranges()  # basis='cosmo'
+        assert 'wc' not in ranges and 's12' not in ranges and 'f' not in ranges
+        assert ranges['omega_cdm'] == ranges_emulator['wc']
+        if 'As' in ranges_emulator:
+            low, high = ranges_emulator['As']
+            assert ranges['A_s'] == (low * 1e-9, high * 1e-9)
+            np.testing.assert_allclose(ranges['logA'], (np.log(low * 10.), np.log(high * 10.)))
+        assert all(low < high for low, high in ranges.values())
+        # All four COMET calculators expose the same classmethods.
+        for calculator_cls in (COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles):
+            assert calculator_cls.training_ranges() == ranges
+
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        params.set(Parameter('omega_cdm', value=0.12, prior=dict(limits=[0.01, 0.99])))
+        COMETTracerSpectrum2Poles.truncate_priors(params)
+        assert params['h'].prior.limits == (0.1, 10.)  # no comet range on h: untouched
+        low, high = ranges['omega_cdm']
+        assert params['omega_cdm'].prior.limits == (max(0.01, low), min(0.99, high))
 
 
 def test_jit():

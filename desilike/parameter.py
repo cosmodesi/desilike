@@ -1360,3 +1360,40 @@ def expand_dict(di, names):
         for matched_name in find_names(names, template):
             toret[matched_name] = value
     return toret
+
+
+def truncate_priors(params, ranges):
+    """Intersect each parameter's prior limits in *params* with *ranges*.
+
+    Shared backend of the emulator-backed calculators' ``truncate_priors`` classmethods
+    (:meth:`~desilike.theories.primordial_cosmology.ACECosmology.truncate_priors`, the comet and
+    jaxeffort theories): outside their training ranges those calculators NaN-mask their results
+    (which :class:`~desilike.base.Posterior` maps to ``-inf``) — an effective prior truncation
+    regardless; this makes it explicit, so prior draws (e.g. the initial particles of
+    nested / SMC samplers) always land at a finite log-likelihood.
+
+    Parameters
+    ----------
+    params : VariableCollection
+        Parameters whose priors to truncate; the matching non-derived Parameters are updated
+        in place.  Names in *ranges* without a matching Parameter (or whose Parameter has no
+        prior) are ignored, as are priors already narrower than their range.
+    ranges : dict
+        ``{parameter name: (low, high)}`` training ranges.
+
+    Returns
+    -------
+    VariableCollection
+        *params*, with each matching prior's limits intersected with its range.
+    """
+    for name, (low, high) in ranges.items():
+        if name not in params:
+            continue
+        param = params[name]
+        prior = param.prior
+        if getattr(param, 'derived', False) or prior is None:
+            continue
+        limits = (max(low, prior.limits[0]), min(high, prior.limits[1]))
+        if limits != prior.limits:
+            param.update(prior=dict(dist=prior.dist, limits=limits, shape=prior.shape, **prior.attrs))
+    return params

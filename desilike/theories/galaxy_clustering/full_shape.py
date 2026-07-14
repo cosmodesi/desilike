@@ -2658,6 +2658,57 @@ class FKPTJAXTracerSpectrum3Poles(FOLPSTracerSpectrum3Poles):
                          tracers=tracers, params=params, **kwargs)
 
 
+# Input vector convention of the jaxeffort multipole networks: matches both
+# JAXEffortPTSpectrum2Poles.__call__'s theta and the rows of the networks' in_MinMax.
+_JAXEFFORT_THETA_NAMES = ('z', 'logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld')
+
+
+def _jaxeffort_training_ranges(model='velocileptors_rept_mnuw0wacdm', basis='cosmo'):
+    """Return the jaxeffort networks' training ranges (their ``in_MinMax`` input
+    normalization), intersected across multipoles, as ``{parameter name: (low, high)}``.
+
+    Outside these ranges the MLPs would silently extrapolate;
+    :meth:`JAXEffortPTSpectrum2Poles.__call__` masks its tables to NaN instead.
+
+    *basis*: ``'cosmo'`` for desilike cosmological parameter names (``'H0'`` → ``'h'``,
+    scaled by 1/100; ``'m_ncdm_tot'`` → ``'m_ncdm'``; the ``'z'`` coordinate is dropped),
+    ``'emulator'`` for the networks' native input names (:data:`_JAXEFFORT_THETA_NAMES`,
+    including ``'z'``).
+    """
+    if basis not in ('cosmo', 'emulator'):
+        raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
+    import jaxeffort
+    training_ranges = {}
+    for emulator in jaxeffort.trained_emulators.get(model, {}).values():
+        if emulator is None:
+            continue
+        in_minmax = np.asarray(emulator.P11.in_MinMax)
+        if len(in_minmax) != len(_JAXEFFORT_THETA_NAMES):
+            raise ValueError(f'jaxeffort model {model!r}: {len(in_minmax)} network inputs, expected {_JAXEFFORT_THETA_NAMES}')
+        for name, (low, high) in zip(_JAXEFFORT_THETA_NAMES, in_minmax):
+            previous_low, previous_high = training_ranges.get(name, (-np.inf, np.inf))
+            training_ranges[name] = (max(float(low), previous_low), min(float(high), previous_high))
+    if basis == 'emulator':
+        return training_ranges
+    training_ranges.pop('z', None)
+    if 'H0' in training_ranges:
+        low, high = training_ranges.pop('H0')
+        training_ranges['h'] = (low / 100., high / 100.)
+    if 'm_ncdm_tot' in training_ranges:
+        training_ranges['m_ncdm'] = training_ranges.pop('m_ncdm_tot')
+    return training_ranges
+
+
+def _jaxeffort_truncate_priors(params, model='velocileptors_rept_mnuw0wacdm'):
+    """Intersect each parameter's prior in *params* (in place) with the jaxeffort training
+    ranges: outside them :meth:`JAXEffortPTSpectrum2Poles.__call__` NaN-masks its tables
+    (mapped to ``-inf`` by the :class:`~desilike.base.Posterior`) — an effective prior
+    truncation regardless; making it explicit keeps prior draws (e.g. the initial particles
+    of nested / SMC samplers) at a finite log-likelihood."""
+    from ...parameter import truncate_priors as truncate_priors_to_ranges
+    return truncate_priors_to_ranges(params, _jaxeffort_training_ranges(model=model, basis='cosmo'))
+
+
 class JAXEffortPTSpectrum2Poles(Calculator):
     r"""
     Bias-independent PT component tables from a JAXEffort emulator.
@@ -2711,6 +2762,19 @@ class JAXEffortPTSpectrum2Poles(Calculator):
         calculator owns no parameters; cosmological parameters come from the ``cosmo`` dependency."""
         return propose_params_multitracer([], tracers)
 
+    @classmethod
+    def training_ranges(cls, model='velocileptors_rept_mnuw0wacdm', basis='cosmo'):
+        """Return the jaxeffort networks' training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for the
+        networks' native input names; see :func:`_jaxeffort_training_ranges`."""
+        return _jaxeffort_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='velocileptors_rept_mnuw0wacdm'):
+        """Intersect each parameter's prior in *params* (in place) with the jaxeffort training
+        ranges, and return *params*; see :func:`_jaxeffort_truncate_priors`."""
+        return _jaxeffort_truncate_priors(params, model=model)
+
     def __init__(self, z=0.5, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI',
                  model='velocileptors_rept_mnuw0wacdm', with_amplitude=False, params=None, **kwargs):
         vc = type(self).propose_params(tracers=tracers)
@@ -2737,7 +2801,7 @@ class JAXEffortPTSpectrum2Poles(Calculator):
             'background.comoving_transverse_distance': [{'z': self.z}],
             'background.growth_factor':                [{'z': self.z}],
             'background.growth_rate':                  [{'z': self.z}],
-            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
+            **{f'params.{name}': None for name in _JAXEFFORT_THETA_NAMES[1:]},
         }
         if self._with_amplitude:
             # Amplitude ratio for the physical (sigma8-normalized) bias basis.
@@ -2746,6 +2810,18 @@ class JAXEffortPTSpectrum2Poles(Calculator):
         import jaxeffort
         self._emulators = [jaxeffort.trained_emulators[self._model][str(ell)] for ell in self.ells]
         self._kgrid = np.asarray(self._emulators[0].P11.k_grid)
+        # Out-of-training-range guard data: the networks' input box (rows follow _JAXEFFORT_THETA_NAMES),
+        # intersected across multipoles; __call__ masks the tables to NaN outside it.
+        in_minmaxs = [np.asarray(emulator.P11.in_MinMax) for emulator in self._emulators]
+        for in_minmax in in_minmaxs:
+            if len(in_minmax) != len(_JAXEFFORT_THETA_NAMES):
+                raise ValueError(f'jaxeffort model {self._model!r}: {len(in_minmax)} network inputs, expected {_JAXEFFORT_THETA_NAMES}')
+        self._in_minmax = np.stack([np.max([in_minmax[:, 0] for in_minmax in in_minmaxs], axis=0),
+                                    np.min([in_minmax[:, 1] for in_minmax in in_minmaxs], axis=0)], axis=-1)
+        z_low, z_high = self._in_minmax[0]
+        if not z_low <= self.z <= z_high:
+            warnings.warn(f'z = {self.z} is outside the jaxeffort emulator training range ({z_low}, {z_high}): all outputs will be NaN')
+        _warn_prior_beyond_ranges(self.cosmo, type(self).training_ranges(model=self._model), 'jaxeffort emulator')
         # Fiducial distances for AP (fixed); same distance formulas as in __call__
         fiducial = _get_fiducial(fiducial, calculator=self.cosmo)
         ba = fiducial.get_background()
@@ -2756,10 +2832,10 @@ class JAXEffortPTSpectrum2Poles(Calculator):
             self._sigma8_z_fid = float(fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z))
 
     def __call__(self):
-        # Read cosmological parameters from the cosmology dep.
+        # Read cosmological parameters from the cosmology dep (network input convention:
+        # see _JAXEFFORT_THETA_NAMES).
         ba = self.cosmo.get_background()
-        theta = jnp.array([self.z, self.cosmo['logA'], self.cosmo['n_s'], self.cosmo['H0'], self.cosmo['omega_b'],
-                           self.cosmo['omega_cdm'], self.cosmo['m_ncdm_tot'], self.cosmo['w0_fld'], self.cosmo['wa_fld']])
+        theta = jnp.array([self.z] + [self.cosmo[name] for name in _JAXEFFORT_THETA_NAMES[1:]])
         D = ba.growth_factor(self.z)
         self.f = ba.growth_rate(self.z)
         # Alcock-Paczynski distortion (qpar = D_H / D_H_fid, qper = D_M / D_M_fid).
@@ -2773,8 +2849,13 @@ class JAXEffortPTSpectrum2Poles(Calculator):
         # Per-multipole stacked component tables (P11, Ploop, Pct, stochastic) on the emulator
         # k grid, shape (n_ells, n_k_emulator, n_components); the tracer calculator contracts the
         # last axis with bias_combination(biases), reproducing MultipoleEmulators.get_Pl exactly.
-        self.table = jnp.stack([jnp.hstack(emu.get_multipole_components(theta, D) + (emu.stoch_model(emu.P11.k_grid),))
-                                for emu in self._emulators])
+        table = jnp.stack([jnp.hstack(emu.get_multipole_components(theta, D) + (emu.stoch_model(emu.P11.k_grid),))
+                           for emu in self._emulators])
+        # Out-of-training-range guard: the MLPs extrapolate silently outside their training
+        # box, so mask the tables to NaN instead (rejected as -inf by the Posterior), like
+        # ACECosmology's and the comet calculators' guards.
+        valid = jnp.all((theta >= self._in_minmax[:, 0]) & (theta <= self._in_minmax[:, 1]))
+        self.table = jnp.where(valid, table, jnp.nan)
         return self.table
 
     def tree_flatten(self):
@@ -2852,6 +2933,19 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         VariableCollection
         """
         return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
+
+    @classmethod
+    def training_ranges(cls, model='velocileptors_rept_mnuw0wacdm', basis='cosmo'):
+        """Return the jaxeffort networks' training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for the
+        networks' native input names; see :func:`_jaxeffort_training_ranges`."""
+        return _jaxeffort_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='velocileptors_rept_mnuw0wacdm'):
+        """Intersect each parameter's prior in *params* (in place) with the jaxeffort training
+        ranges, and return *params*; see :func:`_jaxeffort_truncate_priors`."""
+        return _jaxeffort_truncate_priors(params, model=model)
 
     def __init__(self, k=None, ells=None, z=None, pt=None, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
         self._prior_basis = str(prior_basis)
@@ -2948,9 +3042,26 @@ def _comet_params_validity(params, params_ranges, xp=jnp):
     return valid
 
 
-def _comet_warn_prior_ranges(cosmo, params_ranges):
-    """Warn when a varied cosmological parameter's prior extends beyond the comet emulator
-    training range: such samples yield NaN outputs (effective prior truncation)."""
+def _warn_prior_beyond_ranges(cosmo, ranges, emulator_label):
+    """Warn when a varied cosmological parameter's prior extends beyond *ranges*
+    (``{desilike parameter name: (low, high)}`` training ranges): such samples yield NaN
+    outputs (effective prior truncation)."""
+    params = get_params(cosmo)
+    for basename, (low, high) in ranges.items():
+        param = params.get(basename, None)
+        if param is None or param.fixed:
+            continue
+        prior_limits = getattr(param.prior, 'limits', None)
+        if prior_limits is not None and (prior_limits[0] < low or prior_limits[1] > high):
+            warnings.warn(f'parameter {basename!r} prior range {tuple(prior_limits)} extends beyond the {emulator_label} '
+                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+
+
+def _comet_ranges_to_cosmo(params_ranges):
+    """Convert comet-space training ranges (``PTEmu.params_ranges``) to desilike
+    cosmological-parameter ranges: ``wc`` → ``omega_cdm``, ``Mnu`` → ``m_ncdm``, comet ``As``
+    (1e-9 units) reported both as ``A_s`` (SI) and ``logA``; the derived GP coordinates
+    (``s12``, ``f``) have no free cosmological parameter and are dropped."""
     # _CONVERSION_COMET maps comet name → desilike cosmo param name.
     # 'Mnu' → 'm_ncdm_tot' but the free parameter in CosmoprimoCosmology is 'm_ncdm'.
     _comet_to_desilike = dict(_CONVERSION_COMET, Mnu='m_ncdm')
@@ -2958,22 +3069,52 @@ def _comet_warn_prior_ranges(cosmo, params_ranges):
     for comet_name, (low, high) in params_ranges.items():
         desilike_name = _comet_to_desilike.get(comet_name)
         if desilike_name is None:
-            continue  # s12, f are derived GP coordinates -- not free cosmo params
+            continue
         if comet_name == 'As':
             # comet As is in 1e-9 units; desilike A_s is in SI (×1e-9)
             limits[desilike_name] = (low * 1e-9, high * 1e-9)
             limits['logA'] = (np.log(low * 10.), np.log(high * 10.))
         else:
-            limits[desilike_name] = (low, high)
-    params = get_params(cosmo)
-    for basename, (low, high) in limits.items():
-        param = params.get(basename, None)
-        if param is None or param.fixed:
-            continue
-        prior_limits = getattr(param.prior, 'limits', None)
-        if prior_limits is not None and (prior_limits[0] < low or prior_limits[1] > high):
-            warnings.warn(f'parameter {basename!r} prior range {tuple(prior_limits)} extends beyond the comet emulator '
-                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+            limits[desilike_name] = (float(low), float(high))
+    return limits
+
+
+def _comet_warn_prior_ranges(cosmo, params_ranges):
+    """Warn when a varied cosmological parameter's prior extends beyond the comet emulator
+    training range: such samples yield NaN outputs (effective prior truncation)."""
+    _warn_prior_beyond_ranges(cosmo, _comet_ranges_to_cosmo(params_ranges), 'comet emulator')
+
+
+def _comet_training_ranges(model='VDG_infty', basis='cosmo'):
+    """Return the comet emulator's training ranges (``PTEmu.params_ranges``) as
+    ``{parameter name: (low, high)}``.
+
+    These are the ranges enforced by the COMET calculators' out-of-range guard (see
+    :func:`_comet_params_validity`): the outputs are NaN-masked when a parameter falls
+    outside.
+
+    *basis*: ``'cosmo'`` for desilike cosmological parameter names (``'wc'`` →
+    ``'omega_cdm'``, ``'Mnu'`` → ``'m_ncdm'``, comet ``'As'`` (1e-9 units) reported both as
+    ``'A_s'`` (SI) and ``'logA'``; the derived GP coordinates ``s12``, ``f`` are dropped),
+    ``'emulator'`` for native comet parameter names and units, including the derived GP
+    coordinates.
+    """
+    if basis not in ('cosmo', 'emulator'):
+        raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
+    params_ranges = {name: (float(low), float(high)) for name, (low, high) in _load_comet_model(model).params_ranges.items()}
+    if basis == 'emulator':
+        return params_ranges
+    return _comet_ranges_to_cosmo(params_ranges)
+
+
+def _comet_truncate_priors(params, model='VDG_infty'):
+    """Intersect each parameter's prior in *params* (in place) with the comet training
+    ranges: outside them the COMET calculators NaN-mask their outputs (mapped to ``-inf`` by
+    the :class:`~desilike.base.Posterior`) — an effective prior truncation regardless; making
+    it explicit keeps prior draws (e.g. the initial particles of nested / SMC samplers) at a
+    finite log-likelihood."""
+    from ...parameter import truncate_priors as truncate_priors_to_ranges
+    return truncate_priors_to_ranges(params, _comet_training_ranges(model=model, basis='cosmo'))
 
 
 _CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 'As': 'A_s', 'Mnu': 'm_ncdm_tot',
@@ -3112,6 +3253,19 @@ class COMETPTSpectrum2Poles(Calculator):
                              ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=R'a_{\mathrm{vir}}')
             params += [avir]
         return propose_params_multitracer(params, tracers)
+
+    @classmethod
+    def training_ranges(cls, model='VDG_infty', basis='cosmo'):
+        """Return the comet emulator's training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for native
+        comet names and units; see :func:`_comet_training_ranges`."""
+        return _comet_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='VDG_infty'):
+        """Intersect each parameter's prior in *params* (in place) with the comet training
+        ranges, and return *params*; see :func:`_comet_truncate_priors`."""
+        return _comet_truncate_priors(params, model=model)
 
     def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, backend='jax', **kwargs):
         vc = self.propose_params(tracers=tracers, model=model)
@@ -3301,6 +3455,19 @@ class COMETTracerSpectrum2Poles(Calculator):
                              ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=R'a_{\mathrm{vir}}')
             params += [avir]
         return propose_params_multitracer(params, tracers)
+
+    @classmethod
+    def training_ranges(cls, model='VDG_infty', basis='cosmo'):
+        """Return the comet emulator's training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for native
+        comet names and units; see :func:`_comet_training_ranges`."""
+        return _comet_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='VDG_infty'):
+        """Intersect each parameter's prior in *params* (in place) with the comet training
+        ranges, and return *params*; see :func:`_comet_truncate_priors`."""
+        return _comet_truncate_priors(params, model=model)
 
     def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
@@ -3550,6 +3717,19 @@ class COMETPTSpectrum3Poles(Calculator):
         params += [cnloB]
         return propose_params_multitracer(params, tracers)
 
+    @classmethod
+    def training_ranges(cls, model='VDG_infty', basis='cosmo'):
+        """Return the comet emulator's training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for native
+        comet names and units; see :func:`_comet_training_ranges`."""
+        return _comet_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='VDG_infty'):
+        """Intersect each parameter's prior in *params* (in place) with the comet training
+        ranges, and return *params*; see :func:`_comet_truncate_priors`."""
+        return _comet_truncate_priors(params, model=model)
+
     def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
@@ -3662,6 +3842,19 @@ class COMETTracerSpectrum3Poles(Calculator):
             ]
         extra = propose_params_multitracer(extra, tracers)
         return params + extra
+
+    @classmethod
+    def training_ranges(cls, model='VDG_infty', basis='cosmo'):
+        """Return the comet emulator's training ranges as ``{parameter name: (low, high)}``:
+        ``basis='cosmo'`` for desilike cosmological parameter names, ``'emulator'`` for native
+        comet names and units; see :func:`_comet_training_ranges`."""
+        return _comet_training_ranges(model=model, basis=basis)
+
+    @classmethod
+    def truncate_priors(cls, params, model='VDG_infty'):
+        """Intersect each parameter's prior in *params* (in place) with the comet training
+        ranges, and return *params*; see :func:`_comet_truncate_priors`."""
+        return _comet_truncate_priors(params, model=model)
 
     def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)

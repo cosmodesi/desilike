@@ -897,6 +897,84 @@ class ACECosmology(PrimordialCosmology):
             params.set(Parameter('rs_drag', value=0., derived=True, latex=r'r_{\mathrm{drag}}'))
         return params
 
+    @classmethod
+    def training_ranges(cls, engine='ace', base_dir=None, basis='cosmo'):
+        r"""Return the training ranges of the emulators selected by *engine*.
+
+        These are the ranges enforced by :meth:`__call__`'s out-of-range guard: inputs are
+        clipped to them before evaluation and every emulated result is NaN-masked when a
+        parameter falls outside.
+
+        Parameters
+        ----------
+        engine : str or dict, default='ace'
+            Same as :meth:`__post_init__`'s *engine*.  Packaged emulator names and
+            Capse-style directories contribute their training ranges; custom desilike-style
+            emulator directories declare none.
+        base_dir : str, Path, optional
+            Same as :meth:`__post_init__`'s *base_dir*.
+        basis : str, default='cosmo'
+            ``'cosmo'``: desilike cosmological parameter names (the ``'H0'`` range is
+            reported as ``'h'``, scaled by 1/100).  ``'emulator'``: the networks' native
+            input names (``'H0'`` as such).
+
+        Returns
+        -------
+        dict
+            ``{parameter name: (low, high)}``, intersected across the selected emulators.
+        """
+        if basis not in ('cosmo', 'emulator'):
+            raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
+        base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
+        if isinstance(engine, str):
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section: engine for section in ['harmonic', 'fourier', 'background']}
+        training_ranges = {}
+        for engine_name in set(engine.values()):
+            if engine_name is None:
+                continue
+            emulator_dir = base_emulator_dir / engine_name
+            if (emulator_dir / 'TT' / 'nn_setup.json').is_file():
+                # Capse-style Cl emulator directory: introspect the networks' training ranges.
+                emulator_ranges = _find_capse_metadata(emulator_dir)['ranges']
+            else:
+                emulator_ranges = _PACKAGED_EMULATORS.get(engine_name, {}).get('ranges', {})
+            for name, (low, high) in emulator_ranges.items():
+                previous_low, previous_high = training_ranges.get(name, (-np.inf, np.inf))
+                training_ranges[name] = (max(low, previous_low), min(high, previous_high))
+        if basis == 'cosmo' and 'H0' in training_ranges:
+            low, high = training_ranges.pop('H0')
+            previous_low, previous_high = training_ranges.get('h', (-np.inf, np.inf))
+            training_ranges['h'] = (max(low / 100., previous_low), min(high / 100., previous_high))
+        return training_ranges
+
+    @classmethod
+    def truncate_priors(cls, params, engine='ace', base_dir=None):
+        r"""Intersect each parameter's prior in *params* with the emulators' training ranges.
+
+        Outside the training ranges (see :meth:`training_ranges`) :meth:`__call__` NaN-masks
+        every emulated result (which :class:`~desilike.base.Posterior` maps to ``-inf``) — an
+        effective prior truncation regardless; this makes it explicit, so prior draws (e.g.
+        the initial particles of nested / SMC samplers) always land at a finite
+        log-likelihood.
+
+        Parameters
+        ----------
+        params : VariableCollection
+            Parameters whose priors to truncate (e.g. from :meth:`propose_params`); the
+            matching non-derived Parameters are updated in place.
+        engine : str or dict, default='ace'
+            Same as :meth:`__post_init__`'s *engine*.
+        base_dir : str, Path, optional
+            Same as :meth:`__post_init__`'s *base_dir*.
+
+        Returns
+        -------
+        VariableCollection
+            *params*, with each prior's limits intersected with the training ranges.
+        """
+        from ..parameter import truncate_priors as truncate_priors_to_ranges
+        return truncate_priors_to_ranges(params, cls.training_ranges(engine=engine, base_dir=base_dir, basis='cosmo'))
+
     def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', **kwargs):
         self._engine = str(engine)
         if base_dir is not None:

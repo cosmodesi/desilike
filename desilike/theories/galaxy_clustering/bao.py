@@ -519,7 +519,7 @@ def _bb_correlation_auto_params(ells, broadband):
     else:
         for ell in ells:
             for ik in _BB_CORRELATION_KERNEL_IKS:
-                fixed = (broadband == 'pcs2') and (ell != 0 or ik not in (0, 1))
+                fixed = (broadband == 'pcs2') and (ell == 0 or ik not in (0, 1))
                 auto_params.append(Parameter(f'al{ell}_{ik}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-1),
                                              fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))

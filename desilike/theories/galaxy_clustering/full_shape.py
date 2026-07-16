@@ -1917,11 +1917,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     damping_method : str, default=None
         What the FoG damping multiplies:
 
-        - ``None`` (default): only the loop-order bracket (loops + TNS A/D + GTNS); the
-          tree-level Kaiser term is left undamped (original FOLPSD convention).
-        - ``'tree'``: the tree-level Kaiser term too, GTNS kept (COMET VDG-like convention).
-        - ``'tree-gtns'``: as ``'tree'``, with the GTNS term removed from the damped bracket
-          (double-counting-free: the tree-level damping resums it non-perturbatively).
+        - ``'tree+loop'``: the tree-level Kaiser term and the loop bracket only.
+        - ``'tree+loop+ctr'`` (default; ``None`` is an alias): additionally the counterterms.
+        - ``'tree+loop+ctr+sn'`` (alias ``'all'``): additionally the shot noise.
+
+        All options remove the GTNS term from the damped bracket (double-counting-free:
+        the tree-level damping resums it non-perturbatively).
+        Legacy ``'tree'`` / ``'tree-gtns'`` are deprecated and raise (use ``'tree+loop+ctr'``).
+        The fkptjax pt does not implement the tree-level damping and keeps the original
+        FOLPSD convention (tree-level Kaiser undamped, GTNS kept).
     """
 
     @classmethod
@@ -1974,7 +1978,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
+                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                  tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
@@ -1993,13 +1997,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                      fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
+                      fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                       tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
-        if damping_method not in (None, 'tree', 'tree-gtns'):
-            raise ValueError(f"damping_method must be None, 'tree' or 'tree-gtns', got {damping_method!r}")
+        if damping_method in ('tree', 'tree-gtns'):
+            raise ValueError(f"damping_method={damping_method!r} is deprecated; use 'tree+loop+ctr' (GTNS removed)")
+        if damping_method not in (None, 'loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn', 'all'):
+            raise ValueError(f"damping_method must be 'tree+loop+ctr' (default; None is an alias), 'tree+loop' or 'tree+loop+ctr+sn' (alias 'all'), got {damping_method!r}")
         self._damping_method = damping_method
         self._nbar = float(nbar)
         # Physical stochastic settings: pass fsat/sigv directly (e.g. the output of
@@ -2554,8 +2560,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         hardcoded as in FOLPS). Reads only from attributes set by ``__call__`` (or
         ``tree_unflatten`` when emulated).
         """
-        if damping_method is not None:
-            raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (only the FOLPS pt)")
+        # fkptjax only implements the original FOLPSD convention (tree-level Kaiser undamped,
+        # GTNS kept); its None default keeps that, unlike the FOLPS pt where None = 'tree+loop+ctr'.
+        if damping_method not in (None, 'loop+ctr'):
+            raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (use the FOLPS pt)")
         from fkptjax.pipelines import poles_from_tables
 
         return poles_from_tables(

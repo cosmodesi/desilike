@@ -478,8 +478,8 @@ def _kernel_func(x, kernel='pcs'):
                np.where(x < 1.5, 0.5 * (1.5 - x)**2, 0.))
     if kernel in ('pcs', 'pcs2'):
         # Piecewise cubic spline over [0, 2].
-        return np.where(x < 1., (4. - 6.*x**2 + 3.*x**3) / 4.,
-               np.where(x < 2., (2. - x)**3 / 4., 0.))
+        return np.where(x < 1., (4. - 6.*x**2 + 3.*x**3) / 6.,
+               np.where(x < 2., (2. - x)**3 / 6., 0.))
     raise ValueError(f'Unknown broadband kernel {kernel!r}; choose ngp/cic/tsc/pcs.')
 
 

@@ -61,7 +61,7 @@ jobs:
     - name: Lint with ruff
       run: |
         # TODO: Ultimately, all checks should work.
-        ruff check desilike/optmizers
+        ruff check desilike/profilers
         ruff check desilike/samplers
         ruff check desilike/statistics
     - name: Test with pytest

@@ -2,9 +2,10 @@
 
 import numpy as np
 
-from .base import StaticSampler
 from desilike.parameter import ParameterPriorError
 from desilike.utils import expand_dict
+
+from .base import StaticSampler
 
 
 class GridSampler(StaticSampler):

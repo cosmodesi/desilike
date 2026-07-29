@@ -3,4 +3,4 @@
 from . import diagnostics, plotting
 from .samples import Samples
 
-__all__ = ['diagnostics', 'plotting', 'Samples']
+__all__ = ['Samples', 'diagnostics', 'plotting']

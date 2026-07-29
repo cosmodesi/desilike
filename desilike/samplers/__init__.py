@@ -11,7 +11,17 @@ from .pocomc import PocoMCSampler
 from .qmc import QMCSampler
 from .zeus import ZeusSampler
 
-__all__ = ['DynestySampler', 'GridSampler', 'HMCSampler', 'EmceeSampler',
-           'ImportanceSampler', 'MCLMCSampler', 'MetropolisHastingsSampler',
-           'NautilusSampler', 'NoUTurnSampler', 'PocoMCSampler', 'QMCSampler',
-           'ZeusSampler']
+__all__ = [
+           'DynestySampler',
+           'EmceeSampler',
+           'GridSampler',
+           'HMCSampler',
+           'ImportanceSampler',
+           'MCLMCSampler',
+           'MetropolisHastingsSampler',
+           'NautilusSampler',
+           'NoUTurnSampler',
+           'PocoMCSampler',
+           'QMCSampler',
+           'ZeusSampler',
+]

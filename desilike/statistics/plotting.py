@@ -1,7 +1,7 @@
 """Module implementing plotting routines."""
 
-from functools import wraps
 import warnings
+from functools import wraps
 
 try:
     import matplotlib.pyplot as plt
@@ -9,7 +9,7 @@ try:
 except ModuleNotFoundError:
     MATPLOTLIB_INSTALLED = False
 import numpy as np
-from scipy.interpolate import interp1d, RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator, interp1d
 
 from . import diagnostics
 
@@ -408,8 +408,8 @@ def one_dimensional_profile(
 
 
 def two_dimensional_profile(
-        samples, params, ax=None, levels=[-4.61, -3.00, -1.14],
-        contour_kwargs=None, scatter=False, scatter_kwargs=None):
+        samples, params, ax=None, levels=None, contour_kwargs=None,
+        scatter=False, scatter_kwargs=None):
     r"""
     Add 2D profile to axes.
 
@@ -422,11 +422,12 @@ def two_dimensional_profile(
     ax : matplotlib.axes.Axes, default=None
         Axes where to add profile. If ``None``, use ``plt.gca()``. Default
         is ``None``.
-    levels : list, optional
+    levels : list or None, optional
         Confidence levels to plot, i.e., the values :math:`z` where
-        :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. Default is
-        [-4.61, -3.00, -1.14] which correspond to the 68%, 95%, and 99%
-        credible intervals for a two-dimensional Gaussian.
+        :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. If ``None``,
+        default to [-4.61, -3.00, -1.14] which correspond to the 68%, 95%,
+        and 99% credible intervals for a two-dimensional Gaussian. Default is
+        ``None``.
     contour_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.
@@ -443,11 +444,14 @@ def two_dimensional_profile(
         incorrect number of parameters is given.
 
     """
+    if levels is None:
+        levels = [-4.61, -3.00, -1.14]
+
     if ax is None:
         ax = plt.gca()
 
     if contour_kwargs is None:
-        contour_kwargs = dict(colors='black')
+        contour_kwargs = {'colors': 'black'}
 
     if scatter_kwargs is None:
         scatter_kwargs = {}
@@ -519,9 +523,9 @@ def two_dimensional_profile(
 
 @plotter
 def triangle_profile(
-        samples, params=None, plot=True, plot_kwargs=None,
-        levels=[1.14, 3.00, 4.61], contour_kwargs=None, scatter=False,
-        scatter_kwargs=None, threshold=4.5, fig=None):
+        samples, params=None, plot=True, plot_kwargs=None, levels=None,
+        contour_kwargs=None, scatter=False, scatter_kwargs=None,
+        threshold=-4.5, fig=None):
     r"""Create a triangle profile plot.
 
     Parameters
@@ -537,13 +541,12 @@ def triangle_profile(
     plot_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.plot`. Default is
         ``None``.
-    levels : list, optional
-        Confidence levels to plot for the two-dimensional profiles, i.e., the
-        values :math:`\Delta \log \mathcal{P}` where
-        :math:`\log \mathcal{P} = \max \log \mathcal{P} -
-        \Delta \log \mathcal{P}`. Default is [1.14, 3.00, 4.61] which
-        corresponds to the 68%, 95%, and 99% credible intervals of a
-        two-dimensional Gaussian.
+    levels : list or None, optional
+        Confidence levels to plot, i.e., the values :math:`z` where
+        :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. If ``None``,
+        default to [-4.61, -3.00, -1.14] which correspond to the 68%, 95%,
+        and 99% credible intervals for a two-dimensional Gaussian. Default is
+        ``None``.
     contour_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.
@@ -554,11 +557,14 @@ def triangle_profile(
         ``None``.
     threshold : float, optional
         Limit the ranges for each parameter to the corresponding intervals for
-        this threshold. Default is 4.5.
+        this threshold. Default is -4.5.
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 
     """
+    if levels is None:
+        levels = [-4.61, -3.00, -1.14]
+
     if params is None:
         params = samples.params
 
@@ -591,7 +597,7 @@ def triangle_profile(
 
     # Set x-ranges.
     for i, param in enumerate(params):
-        x_min, x_opt, x_max = samples.interval(param, threshold)
+        x_min, _, x_max = samples.interval(param, threshold)
         x_min -= 0.05 * (x_max - x_min)
         x_max += 0.05 * (x_max - x_min)
         axs[i, i].set_xlim(x_min, x_max)

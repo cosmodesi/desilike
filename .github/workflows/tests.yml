@@ -62,6 +62,10 @@ jobs:
       run: |
         # TODO: Ultimately, all checks should work.
         ruff check desilike --exit-zero
+        ruff check desilike/optmizers
+        ruff check desilike/samplers
+        ruff check desilike/statistics
+>>>>>>> 827f38a3 (make ruff happy)
     - name: Test with pytest
       run: |
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.

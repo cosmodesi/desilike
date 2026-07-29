@@ -6,7 +6,7 @@ try:
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
 
-from .base import _update_parameters, PopulationSampler
+from .base import PopulationSampler, _update_parameters
 
 
 class DynestySampler(PopulationSampler):
@@ -103,5 +103,5 @@ class DynestySampler(PopulationSampler):
         self.sampler.run_nested(**kwargs)
         results = self.sampler.results
 
-        return results.samples, results['blob'], dict(
-            log_weight=results['logwt'], log_likelihood=results['logl'])
+        return results.samples, results['blob'], {
+            'log_weight': results['logwt'], 'log_likelihood': results['logl']}

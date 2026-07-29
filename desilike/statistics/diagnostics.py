@@ -184,7 +184,7 @@ def gelman_rubin(chains, n_splits=None, keys=None):
 
     """
     chains, return_type, keys = _prepare_input(chains, keys)
-    n_chains, n_steps, n_dim = chains.shape
+    n_chains, n_steps, _ = chains.shape
 
     if n_splits is None:
         if n_chains == 1:

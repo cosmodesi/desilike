@@ -4,10 +4,11 @@ import warnings
 
 import numpy as np
 from scipy.stats import qmc
-from scipy.stats.qmc import Sobol, Halton, LatinHypercube
+from scipy.stats.qmc import Halton, LatinHypercube, Sobol
+
+from desilike.parameter import ParameterPriorError
 
 from .base import StaticSampler
-from desilike.parameter import ParameterPriorError
 
 
 class KroneckerSequence(qmc.QMCEngine):
@@ -58,8 +59,8 @@ class KroneckerSequence(qmc.QMCEngine):
         return samples
 
 
-ENGINES = dict(sobol=Sobol, halton=Halton, lhs=LatinHypercube,
-               kronecker=KroneckerSequence)
+ENGINES = {'sobol': Sobol, 'halton': Halton, 'lhs': LatinHypercube,
+           'kronecker': KroneckerSequence}
 
 
 class QMCSampler(StaticSampler):

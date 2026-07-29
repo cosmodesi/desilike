@@ -38,7 +38,8 @@ tests = [
     "matplotlib",
     "getdist",
     "iminuit",
-    "py-bobyqa"]
+    "py-bobyqa",
+    "optax"]
 plotting = [
     "matplotlib",
     "tabulate",

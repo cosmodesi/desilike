@@ -3,7 +3,7 @@ import pytest
 from jax import numpy as jnp
 
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.profilers import optimizers, Profiler
+from desilike.profilers import optimize, Profiler
 
 MEAN_PRIOR = np.array([+0.2, -0.1])
 SD_PRIOR = np.array([0.1, 0.05])
@@ -18,15 +18,17 @@ MEAN_POSTERIOR = COV_POSTERIOR @ (
     np.linalg.inv(COV_PRIOR) @ MEAN_PRIOR +
     np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
 
-OPTIMIZERS = dict(
-    bobyqa=optimizers.bobyqa,
-    dual_annealing=optimizers.dual_annealing,
-    minuit=optimizers.minuit,
-    scipy=optimizers.scipy)
-OPTIMIZERS_KWARGS = dict(
+OPTIMIZE = dict(
+    bobyqa=optimize.optimize_bobyqa,
+    dual_annealing=optimize.optimize_dual_annealing,
+    minuit=optimize.optimize_minuit,
+    optax=optimize.optimize_optax,
+    scipy=optimize.optimize_scipy)
+OPTIMIZE_KWARGS = dict(
     bobyqa=None,
     dual_annealing=dict(maxiter=10),
     minuit=None,
+    optax=None,
     scipy=None)
 
 
@@ -51,7 +53,7 @@ def likelihood():
 
 @pytest.mark.mpi
 @pytest.mark.parametrize('posterior', [True, False])
-@pytest.mark.parametrize('key', OPTIMIZERS.keys())
+@pytest.mark.parametrize('key', OPTIMIZE.keys())
 def test_accuracy(likelihood, posterior, key):
     # Test that the profiler returns the correct result.
 
@@ -62,7 +64,7 @@ def test_accuracy(likelihood, posterior, key):
     profiler.add_manual_grid(
         dict(a=np.linspace(-1, +1, 4), b=np.linspace(-1, +1, 5)))
     samples = profiler.run(
-        optimizer=OPTIMIZERS[key], optimizer_kwargs=OPTIMIZERS_KWARGS[key])
+        optimize=OPTIMIZE[key], optimize_kwargs=OPTIMIZE_KWARGS[key])
 
     if posterior:
         key = 'log_posterior'
@@ -121,15 +123,15 @@ def test_accuracy(likelihood, posterior, key):
 def test_rng(likelihood):
     # Test that the profiler is deterministic.
 
-    optimizer_kwargs = dict(maxiter=1, no_local_search=True)
+    optimize_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42)
     profiler_1.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
-    samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
+    samples_1 = profiler_1.run(optimize_kwargs=optimize_kwargs)
 
     profiler_2 = Profiler(likelihood, rng=42)
     profiler_2.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
-    samples_2 = profiler_2.run(optimizer_kwargs=optimizer_kwargs)
+    samples_2 = profiler_2.run(optimize_kwargs=optimize_kwargs)
 
     assert len(samples_1) == len(samples_2)
 
@@ -154,11 +156,11 @@ def test_remove_duplicates(likelihood):
 def test_write(likelihood, tmp_path):
     # Test that the profiler results are written correctly.
 
-    optimizer_kwargs = dict(maxiter=1, no_local_search=True)
+    optimize_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42, directory=tmp_path)
     profiler_1.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
-    samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
+    samples_1 = profiler_1.run(optimize_kwargs=optimize_kwargs)
 
     profiler_2 = Profiler(likelihood, directory=tmp_path)
     samples_2 = profiler_2.run(n_per_iter=0)

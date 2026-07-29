@@ -1,5 +1,4 @@
-"""Collection of wrappers for commonly used optimizers."""
-# TODO: implement other optimizers
+"""Collection of wrappers for commonly used optimizing functions."""
 try:
     import pybobyqa
     BOBYQA_INSTALLED = True
@@ -15,12 +14,17 @@ try:
     JAX_INSTALLED = True
 except ModuleNotFoundError:
     JAX_INSTALLED = False
+try:
+    import optax
+    OPTAX_INSTALLED = True
+except ModuleNotFoundError:
+    OPTAX_INSTALLED = False
 import numpy as np
 from scipy.optimize import minimize
 from scipy.optimize import dual_annealing as scipy_dual_annealing
 
 
-def bobyqa(f, x_0, rng, **kwargs):
+def optimize_bobyqa(f, x_0, rng, **kwargs):
     """Optimize using :meth:`pybobyqa.solve`.
 
     .. rubric:: References
@@ -65,7 +69,7 @@ def bobyqa(f, x_0, rng, **kwargs):
     return soln.x, soln.f, soln.flag == soln.EXIT_SUCCESS
 
 
-def dual_annealing(f, x_0, rng, **kwargs):
+def optimize_dual_annealing(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.dual_annealing`.
 
     Parameters
@@ -95,7 +99,7 @@ def dual_annealing(f, x_0, rng, **kwargs):
     return res.x, res.fun, res.success
 
 
-def minuit(f, x_0, rng):
+def optimize_minuit(f, x_0, rng):
     """Optimize using :meth:`iminuit.Minuit.migrad`.
 
     .. rubric:: References
@@ -145,7 +149,76 @@ def minuit(f, x_0, rng):
     return np.array([m.values[f'x{i}'] for i in range(n_dim)]), m.fval, m.valid
 
 
-def scipy(f, x_0, rng, **kwargs):
+def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
+    """Optimize using an :mod:`optax` gradient-based optimizer.
+
+    .. rubric:: References
+
+    - `optax repo <https://github.com/google-deepmind/optax>`_
+    - `optax docs <https://optax.readthedocs.io/>`_
+
+    Parameters
+    ----------
+    f : callable
+        Objective function.
+    x_0 : array-like
+        Starting point.
+    rng : numpy.random.Generator
+        Unused. Present for API consistency.
+    optimizer : optax.GradientTransformation, default=None
+        Optax optimizer. If ``None``, defaults to ``optax.adam(1e-3)``.
+    n_steps : int, default=1000
+        Number of gradient steps.
+    **kwargs
+        Additional keyword arguments passed to the default ``optax.adam``
+        optimizer. Ignored if ``optimizer`` is provided.
+
+    Returns
+    -------
+    x_min : numpy.ndarray
+        Coordinates of the minimum.
+    f_min : float
+        Value of the objective function at the minimum.
+    success : bool
+        Whether the optimizer finished successfully. Always ``True`` if
+        the final parameter values are finite.
+
+    Raises
+    ------
+    ImportError
+        If ``optax`` or ``jax`` are not installed.
+
+    """
+    for installed, name in zip([JAX_INSTALLED, OPTAX_INSTALLED],
+                               ['jax', 'optax']):
+        if not installed:
+            msg = f"The '{name}' package is required but not installed."
+            raise ImportError(msg)
+
+    if optimizer is None:
+        optimizer = optax.adam(1e-3, **kwargs)
+
+    params = jax.numpy.array(x_0, dtype=float)
+    opt_state = optimizer.init(params)
+    grad_f = jax.jit(jax.grad(f))
+
+    success = True
+    try:
+        for _ in range(n_steps):
+            grads = grad_f(params)
+            updates, opt_state = optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, updates)
+            params = jax.numpy.clip(params, 0.0, 1.0)
+    except Exception:
+        success = False
+
+    x_min = np.array(params)
+    f_min = float(f(x_min))
+    success = success and bool(np.all(np.isfinite(x_min)))
+    return x_min, f_min, success
+
+
+def optimize_scipy(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.minimize`.
 
     - `scipy repo <https://github.com/scipy/scipy>`_

@@ -116,7 +116,7 @@ class StandAloneMetropolisHastingsSampler:
     """
 
     def __init__(self, posterior, fast=None, f_fast=1, f_drag=0, pool=None,
-                 rng=np.random.default_rng()):
+                 rng=None):
         """Initialize the sampler.
 
         Parameters
@@ -134,9 +134,9 @@ class StandAloneMetropolisHastingsSampler:
         pool : object or None, optional
             Pool used for distributing the posterior computation. Default is
             ``None``.
-        rng : numpy.random.Generator, optional
-            NumPy random number generator used for seeding. Default is
-            ``numpy.random.default_rng()``.
+        rng : numpy.random.Generator or None, optional
+            NumPy random number generator used for seeding. If ``None``,
+            default to ``numpy.random.default_rng()``. Default is ``None``.
 
         Raises
         ------
@@ -156,6 +156,8 @@ class StandAloneMetropolisHastingsSampler:
             self.map = map
         else:
             self.map = pool.map
+        if rng is None:
+            rng = np.random.default_rng()
         self.rng = rng
 
     def update(self, pos=None, log_p=None, blobs=None, cov=None):

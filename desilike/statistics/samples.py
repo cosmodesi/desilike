@@ -1,7 +1,7 @@
 """Module implementing the samples."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 try:
     import h5py
@@ -13,7 +13,6 @@ from scipy.interpolate import CubicSpline, RegularGridInterpolator
 from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
-
 
 SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior',
                 'flag_.*']
@@ -56,7 +55,7 @@ def _sort_into_grid(x, y):
 class Samples(BaseClass):
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=dict(), **kwargs):
+    def __init__(self, latex=None, **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
@@ -76,6 +75,8 @@ class Samples(BaseClass):
         self.n_samples = None
         for key, value in kwargs.items():
             self[key] = value
+        if latex is None:
+            latex = {}
         self.latex = latex
 
     @property
@@ -138,7 +139,7 @@ class Samples(BaseClass):
             self.data[key] = value
         else:
             index = key
-            for key in self.keys:
+            for key in self.keys:  # noqa: PLR1704
                 self.data[key][index] = value[key]
 
     def __getitem__(self, key):
@@ -301,7 +302,7 @@ class Samples(BaseClass):
             if not H5PY_INSTALLED:
                 raise ValueError(
                     "You need `h5py` to read samples to HDF5 files.")
-            data = dict()
+            data = {}
             with h5py.File(filepath, 'r') as fstream:
                 for key in fstream:
                     data[key] = fstream[key][()]
@@ -504,7 +505,9 @@ class Samples(BaseClass):
         else:
             latex = {}
 
-        kwargs = dict(tablefmt='simple_grid') | kwargs
+        if 'tablefmt' not in kwargs:
+            kwargs['tablefmt'] = 'simple_grid'
+
         data = {latex.get(key, key): self.data[key] for key in keys}
         return tabulate.tabulate(data, headers='keys', **kwargs)
 
@@ -542,12 +545,12 @@ class Samples(BaseClass):
             weights=self.weight, names=params, labels=[
                 self.latex.get(key, key).replace('$', '') for key in params])
 
-    def profile_interpolator(self, param, posterior=True):
+    def profile_interpolator(self, params, posterior=True):
         """Get a cubic profile interpolator.
 
         Parameters
         ----------
-        param : str or list
+        params : str or list
             Parameter(s) for which to compute the interpolator.
         posterior : bool, optional
             If ``True``, get a profile for the (log) posterior. If ``False``, a
@@ -566,7 +569,7 @@ class Samples(BaseClass):
 
         """
         use = np.ones(len(self), dtype=bool)
-        params = np.atleast_1d(param)
+        params = np.atleast_1d(params)
         for param in self.params:
             # In case only one parameter is requested, use even the case
             # where the parameter itself is optimized. In all other cases, the

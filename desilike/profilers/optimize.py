@@ -20,8 +20,8 @@ try:
 except ModuleNotFoundError:
     OPTAX_INSTALLED = False
 import numpy as np
-from scipy.optimize import minimize
 from scipy.optimize import dual_annealing as scipy_dual_annealing
+from scipy.optimize import minimize
 
 
 def optimize_bobyqa(f, x_0, rng, **kwargs):
@@ -93,7 +93,7 @@ def optimize_dual_annealing(f, x_0, rng, **kwargs):
         Whether the optimizer finished successfully.
 
     """
-    kwargs = kwargs | dict(maxiter=1)
+    kwargs['maxiter'] = 1
     res = scipy_dual_annealing(
         f, [(0, 1)] * len(x_0), x0=x_0, rng=rng, **kwargs)
     return res.x, res.fun, res.success
@@ -202,19 +202,15 @@ def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
     opt_state = optimizer.init(params)
     grad_f = jax.jit(jax.grad(f))
 
-    success = True
-    try:
-        for _ in range(n_steps):
-            grads = grad_f(params)
-            updates, opt_state = optimizer.update(grads, opt_state, params)
-            params = optax.apply_updates(params, updates)
-            params = jax.numpy.clip(params, 0.0, 1.0)
-    except Exception:
-        success = False
+    for _ in range(n_steps):
+        grads = grad_f(params)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        params = jax.numpy.clip(params, 0.0, 1.0)
 
     x_min = np.array(params)
     f_min = float(f(x_min))
-    success = success and bool(np.all(np.isfinite(x_min)))
+    success = np.all(np.isfinite(x_min))
     return x_min, f_min, success
 
 

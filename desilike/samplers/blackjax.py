@@ -1,7 +1,7 @@
 """Module implementing the BlackJAX samplers."""
 try:
-    import jax
     import blackjax
+    import jax
     BLACKJAX_INSTALLED = True
 except ModuleNotFoundError:
     BLACKJAX_INSTALLED = False
@@ -199,7 +199,7 @@ class BlackJAXSampler(MarkovChainSampler):
         initial_position = {key: self.chains[0][key][-1].astype(
             jax.numpy.float64) for key in self.varied_params}
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-        (state, parameters), _ = self.adaptation_fn(
+        (_, parameters), _ = self.adaptation_fn(
             self.kernel_type, self.compute_posterior_without_derived,
             **fixed_kernel_args).run(
                 rng_key, initial_position, num_steps=steps)
@@ -214,7 +214,7 @@ class HMCSampler(BlackJAXSampler):
     """Wrapper for Hamiltonian Monte-Carlo (HMC)."""
 
     kernel_type = 'hmc'
-    adaptable_args = ['step_size', 'inverse_mass_matrix']
+    adaptable_args = ('step_size', 'inverse_mass_matrix')
     adaptation_fn = 'window_adaptation'
 
     def __init__(self, likelihood, n_chains=1, chains=None, step_size=1e-3,
@@ -273,7 +273,7 @@ class NoUTurnSampler(BlackJAXSampler):
     """
 
     kernel_type = 'nuts'
-    adaptable_args = ['step_size', 'inverse_mass_matrix']
+    adaptable_args = ('step_size', 'inverse_mass_matrix')
     adaptation_fn = 'window_adaptation'
 
     def __init__(self, likelihood, n_chains=1, chains=None, step_size=1e-3,
@@ -329,7 +329,7 @@ class MCLMCSampler(BlackJAXSampler):
     """
 
     kernel_type = 'mclmc'
-    adaptable_args = ['L', 'step_size']
+    adaptable_args = ('L', 'step_size')
     adaptation_fn = 'mclmc_find_L_and_step_size'
 
     def __init__(self, likelihood, n_chains=1, chains=None, L=1.,

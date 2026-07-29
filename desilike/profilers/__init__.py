@@ -3,4 +3,4 @@
 from . import optimizers
 from .profiler import Profiler
 
-__all__ = ['optimizers', 'Profiler']
+__all__ = ['Profiler', 'optimizers']

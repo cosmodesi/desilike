@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
-from desilike.pool import from_main, MPIPool
+from desilike.pool import MPIPool, from_main
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
 
@@ -54,8 +54,6 @@ def _update_parameters(user_kwargs, sampler, **desilike_kwargs):
 
 class BaseSamplerMeta(type(BaseClass), ABCMeta):
     """Metaclass combining BaseClass metaclass and ABCMeta."""
-
-    pass
 
 
 class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
@@ -141,7 +139,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             self._likelihood = likelihood
             if self.mpicomm.rank == 0:
                 self.log_info("Successfully jit input likelihood.")
-        except:
+        except:  # noqa: E722
             if self.mpicomm.rank == 0:
                 self.log_info("Could *not* jit input likelihood.")
 
@@ -291,7 +289,6 @@ class StaticSampler(BaseSampler):
             Samples in parameter space to evaluate.
 
         """
-        pass
 
     @from_main
     def run(self, **kwargs):
@@ -358,7 +355,6 @@ class PopulationSampler(BaseSampler):
             Extra parameters such as weights.
 
         """
-        pass
 
     @from_main
     def run(self, **kwargs):
@@ -433,7 +429,6 @@ class MarkovChainSampler(BaseSampler):
             How many additional steps to run.
 
         """
-        pass
 
     @abstractmethod
     def _adapt(self, n_steps):
@@ -445,7 +440,6 @@ class MarkovChainSampler(BaseSampler):
             How steps to run for the adaptation.
 
         """
-        pass
 
     def _initialize(self, max_init_attempts=100):
         """Initialize the chains.
@@ -567,12 +561,12 @@ class MarkovChainSampler(BaseSampler):
         self.log_info('Diagnostics:')
 
         # TODO: Do something with it.
-        if len(chains) == 1:
-            nsplits = 4
-        elif len(chains) < 4:
-            nsplits = 2
-        else:
-            nsplits = None
+        #if len(chains) == 1:
+        #    nsplits = 4
+        #elif len(chains) < 4:
+        #    nsplits = 2
+        #else:
+        #    nsplits = None
 
         if gelman_rubin != float('inf') and getattr(self, 'ensemble', False):
             msg = "Gelman-Rubin is not strictly valid for ensemble samplers."

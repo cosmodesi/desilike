@@ -1,16 +1,17 @@
 """Module implementing the pocoMC samplers."""
 
 import numpy as np
+
 try:
     import pocomc
     POCOMC_INSTALLED = True
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
-from .base import _update_parameters, PopulationSampler
+from .base import PopulationSampler, _update_parameters
 
 
-class Prior(object):
+class Prior:
     """Prior distribution for ``pocoMC``."""
 
     def __init__(self, params, random_state=None):
@@ -138,7 +139,7 @@ class PocoMCSampler(PopulationSampler):
         self.sampler.run(**kwargs)
         samples, weights, logl, logp, blobs = self.sampler.posterior(
             return_blobs=True)
-        extras = dict(log_weight=np.log(weights), log_posterior=logp,
-                      log_likelihood=logl)
+        extras = {'log_weight': np.log(weights), 'log_posterior': logp,
+                  'log_likelihood': logl}
 
         return samples, blobs, extras

@@ -3,13 +3,14 @@
 import warnings
 
 import numpy as np
+
 try:
     import zeus
     ZEUS_INSTALLED = True
 except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
-from .base import _update_parameters, MarkovChainSampler
+from .base import MarkovChainSampler, _update_parameters
 
 
 class ZeusSampler(MarkovChainSampler):

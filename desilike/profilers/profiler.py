@@ -9,8 +9,9 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
-from desilike.pool import from_main, MPIPool
+from desilike.pool import MPIPool, from_main
 from desilike.utils import BaseClass
+
 from .optimize import optimize_dual_annealing
 
 
@@ -100,7 +101,7 @@ class Profiler(BaseClass):
         # Get a list of dictionaries of fixed parameters.
         self.fixed_params = []
         for i in range(len(self.samples)):
-            self.fixed_params.append(dict())
+            self.fixed_params.append({})
             for param in self.params:
                 if not self.samples.get_flag('optimize', param)[i]:
                     self.fixed_params[i][param] = self.samples[i][param]
@@ -119,14 +120,14 @@ class Profiler(BaseClass):
             If a parameter is not described in the likelihood.
 
         """
-        for param in sample.keys():
+        for param in sample:
             if param not in self.params:
                 msg = f"Unkown parameter '{param}'."
                 raise ValueError(msg)
 
         samples = Samples(**{key: [value, ] for key, value in sample.items()})
         for param in self.params:
-            if param not in sample.keys():
+            if param not in sample:
                 samples[param] = [np.nan, ]
                 samples.set_flag('optimize', param, True)
             else:
@@ -159,7 +160,7 @@ class Profiler(BaseClass):
         if not grid:
             msg = "You must specify at least one parameter."
             raise ValueError(msg)
-        for param in grid.keys():
+        for param in grid:
             if param not in self.params:
                 msg = f"Unkown parameter '{param}'."
                 raise ValueError(msg)
@@ -204,7 +205,7 @@ class Profiler(BaseClass):
             raise ValueError(msg)
 
         varied_params = [p for p in self.params if p not in
-                         self.fixed_params[index].keys()]
+                         self.fixed_params[index]]
         a = np.array([self.limits[key][0] for key in varied_params])
         b = np.array([self.limits[key][1] - self.limits[key][0] for key in
                       varied_params])

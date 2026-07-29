@@ -7,7 +7,7 @@ except ModuleNotFoundError:
     EMCEE_INSTALLED = False
 import numpy as np
 
-from .base import _update_parameters, MarkovChainSampler
+from .base import MarkovChainSampler, _update_parameters
 
 
 class EmceeSampler(MarkovChainSampler):

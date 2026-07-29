@@ -61,7 +61,9 @@ jobs:
     - name: Lint with ruff
       run: |
         # TODO: Ultimately, all checks should work.
-        ruff check desilike --ignore E701,E721,F401,E711,F811,E402,F841,E714,E731,F541,F405,F403,E722,F523,E741,F601,E401,E713,F524
+        ruff check desilike/optmizers
+        ruff check desilike/samplers
+        ruff check desilike/statistics
     - name: Test with pytest
       run: |
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.

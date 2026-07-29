@@ -11,7 +11,7 @@ import numpy as np
 from desilike import Samples
 from desilike.pool import from_main, MPIPool
 from desilike.utils import BaseClass
-from . import optimizers
+from .optimize import optimize_dual_annealing
 
 
 class Profiler(BaseClass):
@@ -43,7 +43,7 @@ class Profiler(BaseClass):
                        in likelihood.varied_params}
 
         self.pool = MPIPool()
-        for name in ['_cost_function', '_run_optimizer']:
+        for name in ['_cost_function', '_run_optimize']:
             setattr(self, name, self.pool.cache_function(
                 getattr(self, name), name))
 
@@ -290,17 +290,16 @@ class Profiler(BaseClass):
 
         return index, x_0
 
-    def _run_optimizer(self, optimizer, args, **kwargs):
+    def _run_optimize(self, optimize, args, **kwargs):
         index, x_0, rng = args
         cost_function = partial(self._cost_function, index=index)
         if len(x_0) == 0:
             return x_0, cost_function(x_0), True
-        return optimizer(cost_function, x_0, rng, **kwargs)
+        return optimize(cost_function, x_0, rng, **kwargs)
 
     @from_main
     def run(self, n_per_iter=10, max_iter=10, tol=1e-3, warm_start=False,
-            max_init_attempts=100, optimizer=optimizers.dual_annealing,
-            optimizer_kwargs=None):
+            max_init_attempts=100, optimize=None, optimize_kwargs=None):
         """Run the profiler.
 
         Parameters
@@ -320,12 +319,14 @@ class Profiler(BaseClass):
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each sample. Default is
             100.
-        optimizer : callable, optional
-            Optimizer function from ``desilike.profilers.optimizers``. Default
-            is ``desilike.profilers.optimizers.dual_annealing``.
-        optimizer_kwargs : dict, optional
-            Optional keyword arguments passed to the optimizer. Default is
-            ``None``.
+        optimize : callable or None, optional
+            Optimize function from ``desilike.profilers.optimize``. If
+            ``None``, default to
+            ``desilike.profilers.optimize.optimize_dual_annealing``. Default
+            is ``None``.
+        optimize_kwargs : dict or None, optional
+            Optional keyword arguments passed to the optimize function.
+            Default is ``None``.
 
         Returns
         -------
@@ -342,15 +343,19 @@ class Profiler(BaseClass):
             msg = "Cannot run profiler without samples."
             raise ValueError(msg)
 
-        optimizer_kwargs = {} if optimizer_kwargs is None else optimizer_kwargs
-        run_optimizer = partial(self._run_optimizer, optimizer,
-                                **optimizer_kwargs)
+        if optimize is None:
+            optimize = optimize_dual_annealing
+
+        if optimize_kwargs is None:
+            optimize_kwargs = {}
+
+        run_optimize = partial(self._run_optimize, optimize, **optimize_kwargs)
 
         for _ in range(max_iter):
             index, x_0 = self._get_start(
                 n_per_iter, max_init_attempts=max_init_attempts)
             result = self.pool.map(
-                run_optimizer, zip(index, x_0, self.rng.spawn(len(x_0))))
+                run_optimize, zip(index, x_0, self.rng.spawn(len(x_0))))
 
             impr = np.zeros(len(self.samples))
             for i, (x_min, f_min, success) in zip(index, result):

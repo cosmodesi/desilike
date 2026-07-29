@@ -1,6 +1,6 @@
 """Module providing common interfaces for likelihood/posterior profiling."""
 
-from . import optimizers
+from . import optimize
 from .profiler import Profiler
 
-__all__ = ['Profiler', 'optimizers']
+__all__ = ['Profiler', 'optimize']

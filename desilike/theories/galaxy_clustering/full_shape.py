@@ -2135,10 +2135,9 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               f0, qpar, qper, multipoles=['B000', 'B202'],
                               precision=(8, 10, 10), damping='lor',
                               interpolation_method='linear',
-                              bias_scheme='folps', model='FOLPSD', renormalized=True):
+                              bias_scheme='folps', model='FOLPSD',
+                              renormalized=True, use_fk=False):
     folpsv2 = _import_folps()
-    # folpsv2.MatrixCalculator(A_full=True, use_TNS_model=False)
-    # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
@@ -2149,37 +2148,60 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
         if ell in _ells:
             ells.append(ell)
             provided.append((ell, False))
-        elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in _ells:
+        elif (ell_swap := ell[0] + ell[2:0:-1] + ell[3:]) in _ells:
             ells.append(ell_swap)
             provided.append((ell_swap, True))
         else:
             provided.append((False, False))
 
-    bispectrum = folpsv2.BispectrumCalculator(model=model)
-    result = bispectrum.Sugiyama_Bell(
-        f=f0,
-        bpars=bpars,
-        k_pkl_pklnw=k_pkl_pklnw_fk,
-        k1k2pairs=k1k2,
-        qpar=qpar,
-        qper=qper,
-        precision=precision,
-        damping=damping,
-        multipoles=ells,
-        bias_scheme=bias_scheme,
-        renormalize=renormalized,
-        interpolation_method=interpolation_method
+    BispectrumClass = (
+        folpsv2.BispectrumCalculator_fk
+        if use_fk else
+        folpsv2.BispectrumCalculator
     )
-
+    bispectrum = BispectrumClass(model=model)
+    
+    if use_fk:
+        result = bispectrum.Sugiyama_Bell(
+            f0,
+            bpars,
+            k_pkl_pklnw_fk,
+            k1k2pairs=k1k2,
+            qpar=qpar,
+            qper=qper,
+            precision=precision,
+            damping=damping,
+            multipoles=ells,
+            bias_scheme=bias_scheme,
+            renormalize=renormalized,
+            interpolation_method=interpolation_method,
+        )
+    else:
+        result = bispectrum.Sugiyama_Bell(
+            f=f0,
+            bpars=bpars,
+            k_pkl_pklnw=k_pkl_pklnw_fk,
+            k1k2pairs=k1k2,
+            qpar=qpar,
+            qper=qper,
+            precision=precision,
+            damping=damping,
+            multipoles=ells,
+            bias_scheme=bias_scheme,
+            renormalize=renormalized,
+            interpolation_method=interpolation_method,
+        )
+        
     toret = []
     for ell, (_ell, swap) in zip(multipoles, provided):
         if _ell:
             tmp = result[ells.index(_ell)]
-            if swap: tmp = tmp.T
+            if swap:
+                tmp = tmp.T
             toret.append(tmp)
         else:
             toret.append(jnp.zeros(len(k1k2)))
-    folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
+    BispectrumClass._tables_cache = {}  # to avoid leak
     return jnp.array(toret)
 
 
@@ -2414,7 +2436,11 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
                  model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
-                 use_numba=False, z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
+                 use_numba=False, include_neutrino_corrections=False,
+                 n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
+                 gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
+                 eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
+                 z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                  mg_params_override=None, **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
@@ -2441,10 +2467,18 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.mu2 = Parameter('mu2', value=1., fixed=True, latex=r'\mu_2')
         self.mu3 = Parameter('mu3', value=1., fixed=True, latex=r'\mu_3')
         self.mu4 = Parameter('mu4', value=1., fixed=True, latex=r'\mu_4')
+        self.gamma_0 = Parameter('gamma_0', value=float(gamma_0), fixed=True, latex=r'\gamma_0')
+        self.gamma_a = Parameter('gamma_a', value=float(gamma_a), fixed=True, latex=r'\gamma_a')
+        self.t_k = Parameter('t_k', value=float(t_k), fixed=True, latex=r't_k')
+        self.d_s = Parameter('d_s', value=float(d_s), fixed=True, latex=r'd_s')
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
                       model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
-                      use_numba=False, z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
+                      use_numba=False, include_neutrino_corrections=False,
+                      n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
+                      gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
+                      eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
+                      z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                       mg_params_override=None, **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
@@ -2453,6 +2487,18 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self._mg_variant = str(mg_variant) if mg_variant is not None else None
         self._beyond_eds = bool(beyond_eds)
         self._use_numba = bool(use_numba)
+        self._include_neutrino_corrections = bool(include_neutrino_corrections)
+        self._hs_kwargs = dict(
+            n_HS=float(n_HS),
+            beta2=float(beta2),
+            screening=int(screening),
+            omegaBD=float(omegaBD),
+        )
+        self._eft_kwargs = dict(
+            eftcamb_h1_interp=eftcamb_h1_interp,
+            eftcamb_h3_interp=eftcamb_h3_interp,
+            eftcamb_h5_interp=eftcamb_h5_interp,
+        )
         self._binning_kwargs = dict(z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
                                      scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_c=float(k_c),
                                      k_S=float(k_S), k_tw=float(k_tw))
@@ -2462,12 +2508,29 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self._fkpt_kmax = float(max(1.0, float(np.max(self.k))))
         self._fkpt_Nk_kernel = int(min(len(self.k), 120))
 
-        self._is_binning = (self._model.upper() == 'PHENOM' and (self._mg_variant or '').upper() == 'BINNING')
-        # Only the live ODE solve for 'PHENOM'/'binning' is genuinely jax-traceable
-        # (fkptjax.kfuncs_to_tables.Kfuncs_to_tables_jax); other models/variants go through
-        # the eager, non-traceable Kfuncs_to_tables and must be wrapped via pure_callback.
-        self._is_external = not self._is_binning
-        if self._is_binning:
+        model_u = self._model.strip().upper()
+        variant_u = (self._mg_variant or '').strip().upper()
+        self._is_binning = (model_u == 'PHENOM' and variant_u == 'BINNING')
+        # The JAX/diffrax binning route does not yet support the internal neutrino
+        # correction or the numba RHS. Those cases use the eager builder.
+        self._use_binning_jax = (
+            self._is_binning
+            and not self._include_neutrino_corrections
+            and not self._use_numba
+        )
+        if (
+            self._is_binning
+            and self._use_numba
+            and self._include_neutrino_corrections
+        ):
+            raise ValueError(
+                "PHENOM/binning cannot use use_numba=True together "
+                "with include_neutrino_corrections=True. "
+                "Set use_numba=False for neutrino-corrected runs."
+            )
+
+        self._is_external = not self._use_binning_jax
+        if self._use_binning_jax:
             from fkptjax.kfuncs_to_tables import build_jax_static_ctx
             self._jax_static_ctx = build_jax_static_ctx(
                 self.template.k, kmin=self._fkpt_kmin, kmax=self._fkpt_kmax,
@@ -2480,10 +2543,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         ``__call__``), resolves which ones the chosen model/variant actually consumes, and
         applies ``mg_params_override`` on top.
         """
-        model_u = self._model.upper()
-        variant_u = (self._mg_variant or '').upper()
+        model_u = self._model.strip().upper()
+        variant_u = (self._mg_variant or '').strip().upper()
         if model_u == 'HS':
-            out = dict(fR0_HS=self.fR0_HS.value)
+            out = dict(fR0_HS=self.fR0_HS.value, **self._hs_kwargs)
         elif model_u == 'NDGP':
             out = dict(r_c=self.r_c.value)
         elif model_u in ('LCDM', 'GR'):
@@ -2493,15 +2556,47 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 out = dict(mu0=self.mu0.value)
             elif variant_u == 'BZ':
                 out = dict(beta_1=self.beta_1.value, lambda_1=self.lambda_1.value, exp_s=self.exp_s.value)
+            elif variant_u in ('EFT_DE', 'EFTDE'):
+                out = dict(self._eft_kwargs)
             else:
-                raise ValueError(f"Unknown mg_variant={self._mg_variant!r} for model='HDKI'. Expected 'mu_OmDE' or 'BZ'.")
+                raise ValueError(
+                    f"Unknown mg_variant={self._mg_variant!r} for model='HDKI'. "
+                    "Expected 'mu_OmDE', 'BZ', or 'EFT_DE'."
+                )
         elif model_u == 'PHENOM':
-            if variant_u != 'BINNING':
-                raise ValueError(f"Unknown mg_variant={self._mg_variant!r} for model='PHENOM'. Expected 'binning'.")
-            out = dict(mu1=self.mu1.value, mu2=self.mu2.value, mu3=self.mu3.value, mu4=self.mu4.value)
+            if variant_u == 'BINNING':
+                out = dict(mu1=self.mu1.value, mu2=self.mu2.value,
+                           mu3=self.mu3.value, mu4=self.mu4.value)
+            elif variant_u in ('GROWTH_INDEX', 'GROWTH_INDEX_YUKAWA'):
+                out = dict(
+                    gamma_0=self.gamma_0.value,
+                    gamma_a=self.gamma_a.value,
+                    t_k=self.t_k.value,
+                    d_s=self.d_s.value,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown mg_variant={self._mg_variant!r} for model='PHENOM'. "
+                    "Expected 'binning', 'growth_index', or 'growth_index_yukawa'."
+                )
         else:
-            raise ValueError(f"Unknown or unsupported model={self._model!r}. Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'.")
+            raise ValueError(
+                f"Unknown or unsupported model={self._model!r}. "
+                "Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'."
+            )
         out.update(self._mg_params_override)
+        if model_u == 'HDKI' and variant_u in ('EFT_DE', 'EFTDE'):
+            required = (
+                'eftcamb_h1_interp',
+                'eftcamb_h3_interp',
+                'eftcamb_h5_interp',
+            )
+            missing = [name for name in required if out.get(name) is None]
+            if missing:
+                raise ValueError(
+                    "HDKI/EFT_DE requires the EFTCAMB interpolators: "
+                    + ', '.join(missing)
+                )
         return out
 
     def __call__(self):
@@ -2512,16 +2607,25 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
 
         Om = self.template.cosmo['Omega_m']
+        xnow = -3.912023
+        mg_kwargs = self._mg_kwargs()
         if self._is_binning:
+            mg_kwargs.update(self._binning_kwargs)
+
+        neutrino_correction = self._get_neutrino_correction(
+            self.template.cosmo,
+            xnow=xnow,
+        )
+        if self._use_binning_jax:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
             table_w, table_now, kernel_constants = Kfuncs_to_tables_jax(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,
                 kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
-                nquadSteps=300, NQ=10, NR=10, xnow=-3.912023, f0_kmax=1e-3,
+                nquadSteps=300, NQ=10, NR=10, xnow=xnow, f0_kmax=1e-3,
                 beyond_eds=self._beyond_eds, return_kernel_constants=True,
                 static_ctx=self._jax_static_ctx,
-                **self._binning_kwargs, **self._mg_kwargs(),
+                **mg_kwargs,
             )
         else:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
@@ -2530,10 +2634,12 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 z=float(self.template.z), Om=Om,
                 kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
                 nquadSteps=300, NQ=10, NR=10,
-                xnow=-3.912023, ode_method='RKQS', f0_kmax=1e-3,
+                xnow=xnow, ode_method='RKQS', f0_kmax=1e-3,
                 beyond_eds=self._beyond_eds, model=self._model, mg_variant=self._mg_variant,
-                use_numba=self._use_numba, return_kernel_constants=True,
-                **self._mg_kwargs(),
+                use_numba=self._use_numba,
+                neutrino_correction=neutrino_correction,
+                return_kernel_constants=True,
+                **mg_kwargs,
             )
         self._table_w = table_w
         self._table_now = table_now
@@ -2587,8 +2693,74 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             self._table_w[0], self._table_w[1], self._table_now[1], self._table_w[2] * self.f0,
             calA_arr, calAp_arr,
         ])
-        return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
-                                         multipoles=multipoles, **kwargs)
+        return _get_spectrum3poles_folps(
+            pars, k1k2, k_pkl_pklnw_fk,
+            self.f0, self.qpar, self.qper,
+            multipoles=multipoles,
+            use_fk=True,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _resolve_cosmo_provider(cosmo, method):
+        """Return an object exposing the requested cosmology method."""
+        for candidate in (
+            cosmo,
+            getattr(cosmo, '_cosmo', None),
+            getattr(cosmo, 'cosmo', None),
+        ):
+            if candidate is not None and hasattr(candidate, method):
+                return candidate
+        return None
+
+    def _get_neutrino_correction(self, cosmo, *, xnow):
+        """Build the internal massive-neutrino FKPT source correction."""
+        if not self._include_neutrino_corrections:
+            return None
+
+        provider = self._resolve_cosmo_provider(cosmo, 'get_transfer')
+        if provider is None:
+            raise AttributeError(
+                "include_neutrino_corrections=True requires a "
+                "cosmology object exposing get_transfer()."
+            )
+
+        try:
+            transfer_table = provider.get_transfer().table()
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not obtain the transfer table required for "
+                "massive-neutrino FKPT corrections."
+            ) from exc
+
+        from fkptjax.neutrinos import NeutrinoTransferCorrection
+
+        correction = NeutrinoTransferCorrection.from_cosmoprimo_transfer_table(
+            transfer_table,
+            numerator='delta_tot',
+            denominator='delta_nonu',
+        )
+
+        eta_start = float(xnow)
+        eta_stop = float(np.log(1. / (1. + float(self.template.z))))
+        eta_values = np.asarray(correction.eta, dtype='f8')
+        eta_min = float(np.min(eta_values))
+        eta_max = float(np.max(eta_values))
+
+        if (
+            eta_min > eta_start + 1.e-12
+            or eta_max < eta_stop - 1.e-12
+        ):
+            z_required = float(np.exp(-eta_start) - 1.)
+            raise ValueError(
+                "The transfer table does not cover the complete "
+                "FKPT ODE interval. "
+                f"Transfer outputs are required through at least "
+                f"z={z_required:.3f}; available eta range is "
+                f"[{eta_min:.6f}, {eta_max:.6f}]."
+            )
+
+        return correction
 
     def tree_flatten(self):
         kernel_constants = self._kernel_constants

@@ -1121,6 +1121,132 @@ class TestCOMET:
         assert params['omega_cdm'].prior.limits == (max(0.01, low), min(0.99, high))
 
 
+class TestGeoFPTAX:
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('geofptax')
+
+    def test_tracer_bispectrum_sugiyama(self):
+        """GeoFPTAXTracerSpectrum3Poles (Sugiyama basis): shape and parameter sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Sugiyama basis expects (N, 2)
+        k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='sugiyama')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Sugiyama)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Sugiyama)', b1=2.0, b2=0.5, bs=0.3)
+
+    def test_tracer_bispectrum_scoccimarro(self):
+        """GeoFPTAXTracerSpectrum3Poles (Scoccimarro basis): shape and parameter sensitivity with valid triangles."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Scoccimarro basis expects (N, 3) valid triangles.
+        # We use equilateral triangles which are strictly valid.
+        k_diag = np.linspace(0.02, 0.1, 11)
+        k = np.column_stack([k_diag, k_diag, k_diag])
+        
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='scoccimarro')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)', b1=2.0, b2=0.5, bs=0.3)
+
+    def test_invalid_triangles_scoccimarro(self):
+        """GeoFPTAXTracerSpectrum3Poles: fails if invalid triangles are provided for Scoccimarro."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Invalid triangle: k3 > k1 + k2
+        k_invalid = np.array([[0.1, 0.1, 0.3]])
+        
+        with pytest.raises(ValueError, match="violate the triangle inequality"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_invalid, basis='scoccimarro')
+            
+        # Also test wrong shape
+        k_2d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        with pytest.raises(ValueError, match="shape \\(N, 3\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
+    
+    def test_k_validation(self):
+        """GeoFPTAXTracerSpectrum3Poles: k array shape validation based on basis."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Sugiyama expects (N, 2)
+        k_2d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        theory_sugiyama = GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='sugiyama')
+        _check(_compile(theory_sugiyama)(), 'Sugiyama with (N,2) k')
+        
+        # Wrong shape for Sugiyama should raise error
+        k_3d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 3)
+        with pytest.raises(ValueError, match="basis='sugiyama'.*shape \\(N, 2\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='sugiyama')
+        
+        # Scoccimarro expects (N, 3)
+        theory_scoccimarro = GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='scoccimarro')
+        _check(_compile(theory_scoccimarro)(), 'Scoccimarro with (N,3) k')
+        
+        # Wrong shape for Scoccimarro should raise error
+        with pytest.raises(ValueError, match="basis='scoccimarro'.*shape \\(N, 3\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
+        
+        # Invalid triangles for Scoccimarro should raise error
+        k_invalid = np.array([[0.1, 0.1, 0.3]])  # violates triangle inequality
+        with pytest.raises(ValueError, match="triangle inequality"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_invalid, basis='scoccimarro')
+    
+    def test_integration_with_template(self):
+        """GeoFPTAXTracerSpectrum3Poles: integration with DirectSpectrum2Template."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template, ShapeFitSpectrum2Template
+        
+        k = np.column_stack([np.linspace(0.02, 0.1, 8)] * 2)
+        
+        # Test with explicit template
+        template = DirectSpectrum2Template(engine='eisenstein_hu', z=0.5)
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, template=template, num_points=5)
+        result = _compile(theory)()
+        _check(result, 'GeoFPTAXTracerSpectrum3Poles with explicit template')
+        assert result.shape == (len(theory.ells), len(k))
+        
+        # Verify that changing template parameters affects the result
+        template2 = DirectSpectrum2Template(engine='eisenstein_hu', z=0.8)
+        theory2 = GeoFPTAXTracerSpectrum3Poles(k=k, template=template2, num_points=5)
+        result2 = _compile(theory2)()
+        assert not np.allclose(result, result2), 'Result should change with different template'
+
+
+        template3 = ShapeFitSpectrum2Template(z=0.8)
+        theory3 = GeoFPTAXTracerSpectrum3Poles(k=k, template=template3, num_points=5)
+        result3 = _compile(theory3)()
+        assert not np.allclose(result, result3), 'Result should change with ShapeFit template'
+    
+    def test_num_points_sensitivity(self):
+        """GeoFPTAXTracerSpectrum3Poles: verify that num_points affects accuracy."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        k = np.column_stack([np.linspace(0.02, 0.08, 5)] * 2)
+        
+        # Low precision
+        theory_low = GeoFPTAXTracerSpectrum3Poles(k=k, num_points=5)
+        result_low = _compile(theory_low)()
+        
+        # High precision
+        theory_high = GeoFPTAXTracerSpectrum3Poles(k=k, num_points=15)
+        result_high = _compile(theory_high)()
+        
+        # Results should be similar but not identical
+        # (higher num_points should be more accurate)
+        reldiff = np.max(np.abs(result_high - result_low) / (np.abs(result_high) + 1e-30))
+        assert reldiff < 0.1, f'Low and high precision results differ by {reldiff:.3f}'
+        
 def test_jit():
 
     from desilike import compile, get_params

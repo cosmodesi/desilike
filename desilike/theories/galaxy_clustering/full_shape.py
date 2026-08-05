@@ -5086,3 +5086,329 @@ class COMETTracerSpectrum3Poles(Calculator):
         obj = object.__new__(cls)
         obj.poles = children[0]
         return obj
+
+
+class GeoFPTAXTracerSpectrum3Poles(Calculator):
+    r"""
+    GeoFPTAX tracer bispectrum multipoles in the Sugiyama basis.
+
+    Computes the redshift-space bispectrum multipoles ``B_{l1 l2 L}(k1, k2)`` using
+    the GeoFPTAX kernels. It requires the real-space linear power spectrum from a 
+    Boltzmann solver (via ``DirectSpectrum2Template``) and internally computes the 
+    1-loop real-space matter power spectrum to feed the bispectrum integrals.
+
+    Parameters
+    ----------
+    k : array, shape (N, 2), default=None
+        Output ``(k1, k2)`` wavenumber pairs [h/Mpc]. Defaults to a diagonal grid
+        ``k1 == k2`` over ``np.linspace(0.01, 0.1, 11)``.
+    template : template calculator, default=None
+        Power spectrum template. Defaults to :class:`DirectSpectrum2Template`.
+    ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
+        Bispectrum multipole triplets ``(l1, l2, L)``. Available: (0,0,0), (1,1,0),
+        (2,2,0), (0,2,2), (2,0,2), (1,1,2).
+    basis : str, default='sugiyama'
+        Bispectrum basis: 'sugiyama' or 'scoccimarro'.
+    geo_expansion : str, default='poly'
+        Geometric expansion to use: 'poly' or 'pade'.
+    prior_basis : str, default='physical_aap'
+        Bias / counterterm / stochastic parameterization:
+        - ``'standard'``: standard Eulerian bias; parameters ``b1, b2, bs, sn0, A_B, sigma_B``.
+        - ``'physical'``: physical Lagrangian basis, no AP rescaling.
+        - ``'physical_aap'`` (default): physical basis with AP rescaling.
+    nbar : float, default=1e-4
+        Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
+    num_points : int, default=10
+        Number of Gauss-Legendre points per angular dimension for the Sugiyama integration.
+    
+    The input ``k`` array must have a shape that depends on the chosen ``basis``:
+    
+    - ``basis='sugiyama'``: ``k`` must have shape ``(N, 2)``, where each row is a 
+      ``(k1, k2)`` pair. The third side ``k3`` is computed internally from the 
+      triangle geometry.
+    - ``basis='scoccimarro'``: ``k`` must have shape ``(N, 3)``, where each row is 
+      a ``(k1, k2, k3)`` triangle. This array is used directly as the ``tr`` input 
+      for all multipole configurations (``tr = tr2 = tr3 = tr4 = k``). The triangles 
+      must satisfy the triangle inequality.
+    
+    Parameters
+    ----------
+    k : array, default=None
+        For ``basis='sugiyama'``: shape ``(N, 2)`` of ``(k1, k2)`` pairs [h/Mpc].
+        For ``basis='scoccimarro'``: shape ``(N, 3)`` of ``(k1, k2, k3)`` triangles [h/Mpc].
+        Defaults to a diagonal grid ``k1 == k2`` (Sugiyama) or equilateral triangles 
+        ``k1 == k2 == k3`` (Scoccimarro) over ``np.linspace(0.01, 0.1, 11)``.
+    basis : str, default='sugiyama'
+        Bispectrum basis: ``'sugiyama'`` or ``'scoccimarro'``.
+    ells : tuple of (int, int, int), default=None
+        Bispectrum multipole triplets ``(l1, l2, L)``. 
+        For Sugiyama: available are (0,0,0), (1,1,0), (2,2,0), (0,2,2), (2,0,2), (1,1,2).
+        For Scoccimarro: available are (0,0,0), (2,0,0), (0,2,0), (0,0,2).
+        Defaults to ``((0, 0, 0), (2, 0, 2))`` for Sugiyama and 
+        ``((0, 0, 0), (2, 0, 0))`` for Scoccimarro.
+    template : template calculator, default=None
+        Power spectrum template. Defaults to :class:`DirectSpectrum2Template`.
+    geo_expansion : str, default='poly'
+        Geometric expansion for the Sugiyama basis: ``'poly'`` or ``'pade'``.
+        Ignored for the Scoccimarro basis.
+    prior_basis : str, default='physical_aap'
+        Bias / counterterm / stochastic parameterization.
+    nbar : float, default=1e-4
+        Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
+    num_points : int, default=10
+        Number of Gauss-Legendre points per angular dimension for the integration.
+    """
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/dforero0896/geofptax')
+
+    @classmethod
+    def propose_params(cls, tracers=None, prior_basis='physical_aap'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory."""
+        physical = (prior_basis != 'standard')
+        if physical:
+            auto_params = [
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+                Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('A_B', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='A_B'),
+                Parameter('sigma_B', value=5., prior=dict(dist='uniform', limits=[0., 10.]), ref=dict(dist='norm', loc=5., scale=1.), latex=r'\sigma_B'),
+            ]
+        else:
+            auto_params = [
+                Parameter('b1', value=2., prior=dict(limits=[0., 10.]), ref=dict(limits=[1.4, 1.6]), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(limits=[-50., 50.]), ref=dict(limits=[-1., 1.]), latex='b_2'),
+                Parameter('bs', value=0., prior=None, ref=dict(limits=[-1., 1.]), latex='b_s'),
+                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('A_B', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='A_B'),
+                Parameter('sigma_B', value=5., prior=None, ref=dict(dist='norm', loc=5., scale=1.), latex=r'\sigma_B'),
+            ]
+        return propose_params_multitracer(auto_params, tracers)
+
+    def __init__(self, k=None, ells=None, template=None, basis='sugiyama',
+                 geo_expansion='poly', prior_basis='physical_aap',
+                 tracers=None, params=None, **kwargs):
+        # Validate basis
+        if basis not in ('sugiyama', 'scoccimarro'):
+            raise ValueError(f"basis must be 'sugiyama' or 'scoccimarro', got {basis!r}")
+        
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
+        
+        # Set default k based on basis
+        if k is None:
+            if basis == 'sugiyama':
+                k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+            else:  # scoccimarro
+                k_diag = np.linspace(0.01, 0.1, 11)
+                k = np.column_stack([k_diag, k_diag, k_diag])  # equilateral triangles
+        
+        # Convert to array and validate shape
+        k = np.atleast_2d(np.asarray(k, dtype='f8'))
+        if basis == 'sugiyama':
+            if k.shape[1] != 2:
+                raise ValueError(
+                    f"For basis='sugiyama', k must have shape (N, 2) representing (k1, k2) pairs, "
+                    f"got shape {k.shape}"
+                )
+        else:  # scoccimarro
+            if k.shape[1] != 3:
+                raise ValueError(
+                    f"For basis='scoccimarro', k must have shape (N, 3) representing (k1, k2, k3) triangles, "
+                    f"got shape {k.shape}"
+                )
+            # Validate triangle inequality using the exact same threshold as geofptax
+            k1, k2, k3 = k[:, 0], k[:, 1], k[:, 2]
+            threshold = 1.1 * 2 * np.pi / 1000.0
+            valid = (k1 + k2 - k3 >= threshold) & (k1 + k3 - k2 >= threshold) & (k2 + k3 - k1 >= threshold)
+            if not np.all(valid):
+                n_invalid = np.sum(~valid)
+                raise ValueError(
+                    f"{n_invalid} out of {len(k)} triangles violate the triangle inequality "
+                    f"(threshold={threshold:.4f}). Each triangle must satisfy the condition."
+                )
+        
+        self.k = k
+        self.basis = basis
+        
+        # Set default ells based on basis
+        if ells is None:
+            if basis == 'sugiyama':
+                ells = ((0, 0, 0), (2, 0, 2))
+            else:  # scoccimarro
+                ells = ((0, 0, 0), (2, 0, 0))
+        
+        self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
+        
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        
+        # Ensure the template has a wide enough k-grid for 1-loop integrals
+        k_min = min(1e-4, self.k.min() / 2.)
+        k_max = max(1., self.k.max() * 3.)
+        self.template.update(k=np.geomspace(k_min, k_max, 500))
+
+    def __post_init__(self, k=None, ells=None, template=None, basis='sugiyama',
+                      geo_expansion='poly', prior_basis='physical_aap',
+                      nbar=1e-4, num_points=10, tracers=None, **kwargs):
+        # Non-node setup only.
+        self._prior_basis = str(prior_basis)
+        self._geo_expansion = str(geo_expansion)
+        self._nbar = float(nbar)
+        self._num_points = int(num_points)
+        
+        if basis == 'sugiyama' and self._geo_expansion not in ('poly', 'pade'):
+            raise ValueError(f"geo_expansion must be 'poly' or 'pade', got {self._geo_expansion!r}")
+        
+        # Precompute 1-loop integration grid and kernels
+        from geofptax.kernels import pt_kernel, weights_trapz
+        
+        # q grid for 1-loop integration
+        q_min = min(self.template.k[0] * 0.5, 1e-4)
+        q_max = max(self.template.k[-1] * 2.0, 1.0)
+        self._q = jnp.geomspace(q_min, q_max, 500)
+        self._wq = weights_trapz(self._q)
+        
+        # kp grid for output 1-loop power spectrum (covers bispectrum integration range)
+        kp_min = min(self.k.min() * 0.5, 1e-3)
+        kp_max = max(self.k.max() * 3.0, 1.0)
+        self._kp = jnp.geomspace(kp_min, kp_max, 500)
+        
+        # Compute the static 1-loop kernel
+        self._kernel13_d = pt_kernel(self._kp, self._q, self._wq)
+
+    def __call__(self):
+        from geofptax.kernels import pt_pk_1loop, bk_sugiyama_multip, bk_multip
+        
+        # Get cosmological quantities from template
+        f = self.template.f
+        qpar = self.template.qpar
+        qper = self.template.qper
+        z = float(self.template.z)
+        sigma8 = self.template.sigma8
+        sigma8_fid = self.template.sigma8_fid
+        
+        A_AP = 1. / (qper**2 * qpar)
+        
+        # Amplitude rescaling factor for prior renormalization
+        A = sigma8 / sigma8_fid
+        
+        # Map parameters to the geofptax cosm_par array:
+        # [f, q_par, q_perp, b1, b2, bs, sn0 (A_P), A_B, sigma_B]
+        if self._prior_basis == 'standard':
+            b1 = self.b1.value
+            b2 = self.b2.value
+            bs = self.bs.value
+            sn0 = self.sn0.value / self._nbar
+            A_B = self.A_B.value
+            sigma_B = self.sigma_B.value
+            
+        elif self._prior_basis in ['physical', 'physical_aap']:
+            if 'aap' not in self._prior_basis:
+                A_AP = 1.
+            
+            # Apply sigma8 renormalization to the bias parameters
+            b1 = self.b1.value / (A * A_AP**0.5)
+            b2 = self.b2.value / (A**2 * A_AP**0.5)
+            bs = self.bs.value / (A**2 * A_AP**0.5)
+            
+            # Stochastic parameters
+            sn0 = self.sn0.value / A_AP / self._nbar
+            A_B = self.A_B.value / A_AP
+            sigma_B = self.sigma_B.value
+            
+        else:
+            raise ValueError(f"Unknown prior_basis={self._prior_basis!r}")
+
+        # Build the 9-element cosm_par array for geofptax kernels
+        cosm_par = jnp.array([
+            f,           # 0: growth rate
+            qpar,        # 1: alpha_par (AP parameter)
+            qper,        # 2: alpha_perp (AP parameter)
+            b1,          # 3: b1 (already sigma8-renormalized)
+            b2,          # 4: b2 (already sigma8-renormalized)
+            bs,          # 5: bs (already sigma8-renormalized)
+            sn0,         # 6: A_P
+            A_B,         # 7: A_B
+            sigma_B      # 8: sigma_fog
+        ])
+        
+        # 1. Interpolate linear power spectrum to the integration grid
+        pk_q = jnp.interp(self._q, self.template.k, self.template.pk_dd)
+        
+        # 2. Compute 1-loop real-space matter power spectrum
+        pk11, pk22, pk13 = pt_pk_1loop(self._kp, self._q, self._wq, pk_q, self._kernel13_d)
+        pk_1loop = pk11 + pk22 + pk13
+        
+        # 3. Compute bispectrum multipoles based on the chosen basis
+        if self.basis == 'sugiyama':
+            # Sugiyama basis: k has shape (N, 2) representing (k1, k2) pairs
+            bk_dict = bk_sugiyama_multip(
+                k1=self.k[:, 0], k2=self.k[:, 1], kp=self._kp, pk=pk_1loop,
+                cosm_par=cosm_par, redshift=z,
+                num_points=self._num_points, geo_expansion=self._geo_expansion
+            )
+            
+            # Map the requested ells to the dict keys
+            ells_to_key = {
+                (0, 0, 0): '000', (1, 1, 0): '110', (2, 2, 0): '220',
+                (0, 2, 2): '022', (2, 0, 2): '202', (1, 1, 2): '112'
+            }
+            
+            poles = []
+            for ell in self.ells:
+                key = ells_to_key.get(ell)
+                if key is None:
+                    raise ValueError(
+                        f"Multipole {ell} not supported in Sugiyama basis. "
+                        f"Available: {list(ells_to_key.keys())}"
+                    )
+                poles.append(bk_dict[key])
+                
+            self.poles = jnp.stack(poles, axis=0)
+            
+        else:  # scoccimarro basis
+            # Scoccimarro basis: k has shape (N, 3) representing (k1, k2, k3) triangles
+            # Use the same triangle array for all 4 multipole configurations
+            bk_dict = bk_multip(
+                self.k, self.k, self.k, self.k, self._kp, pk_1loop,
+                cosm_par=cosm_par, redshift=z,
+                num_points=self._num_points
+            )
+            
+            # Map the requested ells to the dict keys
+            ells_to_key = {
+                (0, 0, 0): '000', (2, 0, 0): '200', (0, 2, 0): '020', (0, 0, 2): '002'
+            }
+            
+            poles = []
+            for ell in self.ells:
+                key = ells_to_key.get(ell)
+                if key is None:
+                    raise ValueError(
+                        f"Multipole {ell} not supported in Scoccimarro basis. "
+                        f"Available: {list(ells_to_key.keys())}"
+                    )
+                poles.append(bk_dict[key])
+                
+            self.poles = jnp.stack(poles, axis=0)
+        
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], {'k': self.k, 'ells': self.ells, 'basis': self.basis, 'geo_expansion': self._geo_expansion}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj.basis = aux['basis']
+        obj._geo_expansion = aux['geo_expansion']
+        return obj

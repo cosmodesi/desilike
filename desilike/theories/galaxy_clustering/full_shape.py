@@ -1850,7 +1850,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj._to_poles.ells = aux['ells']
         return obj
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
@@ -1863,7 +1863,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         _folps_module.use_TNS_model_status = self._remove_DeltaP
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method)
+        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS)
         return self._to_poles(pkmu)
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **options):
@@ -1921,11 +1921,24 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         - ``'tree+loop+ctr'`` (default; ``None`` is an alias): additionally the counterterms.
         - ``'tree+loop+ctr+sn'`` (alias ``'all'``): additionally the shot noise.
 
-        All options remove the GTNS term from the damped bracket (double-counting-free:
-        the tree-level damping resums it non-perturbatively).
         Legacy ``'tree'`` / ``'tree-gtns'`` are deprecated and raise (use ``'tree+loop+ctr'``).
         The fkptjax pt does not implement the tree-level damping and keeps the original
         FOLPSD convention (tree-level Kaiser undamped, GTNS kept).
+    use_GTNS : bool, default=None
+        Whether to keep :math:`\mathrm{GTNS} = -(k\mu f_0)^2\sigma_w^2 P_\mathrm{Kaiser}`, the
+        perturbative FoG suppression of the tree-level spectrum, in the damped loop bracket.
+
+        - ``None`` (default): follow ``damping_method`` — GTNS is kept for ``'loop+ctr'``
+          (where the tree-level Kaiser term is undamped, so nothing resums it) and dropped for
+          every ``'tree+...'`` method (where the tree-level damping resums it
+          non-perturbatively, so keeping both would double count at :math:`O(\lambda^2)`).
+        - ``True`` / ``False``: force it on / off regardless of ``damping_method``.
+
+        ``use_GTNS`` is orthogonal to the tree-level damping, so ``damping_method='tree+loop+ctr'``
+        with ``use_GTNS=True`` damps the tree level *and* keeps GTNS — the (double-counting)
+        convention of comet's ``VDG_infty``, which multiplies the full PT spectrum, its own
+        perturbative :math:`\sigma_v^2` terms included, by :math:`W_\infty`.
+        The fkptjax pt always keeps GTNS and only accepts ``None`` / ``True``.
     """
 
     @classmethod
@@ -1979,7 +1992,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 tracers=None, params=None, **kwargs):
+                 use_GTNS=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1998,7 +2011,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      tracers=None, **kwargs):
+                      use_GTNS=None, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
@@ -2007,6 +2020,9 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         if damping_method not in (None, 'loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn', 'all'):
             raise ValueError(f"damping_method must be 'tree+loop+ctr' (default; None is an alias), 'tree+loop' or 'tree+loop+ctr+sn' (alias 'all'), got {damping_method!r}")
         self._damping_method = damping_method
+        if use_GTNS not in (None, True, False):
+            raise ValueError(f'use_GTNS must be None (follow damping_method), True or False, got {use_GTNS!r}')
+        self._use_GTNS = use_GTNS
         self._nbar = float(nbar)
         # Physical stochastic settings: pass fsat/sigv directly (e.g. the output of
         # get_physical_stochastic_settings); defaults are the generic settings.
@@ -2066,7 +2082,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
                                sn0, sn2, 1., self.X_FoG.value]
 
-        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method)
+        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS)
         return self.poles
 
     def tree_flatten(self):
@@ -2551,7 +2567,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.f0 = self._table_state.f0
         self.fk = self._table_state.fk
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
 
         Matches :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles`'s signature
@@ -2564,6 +2580,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # GTNS kept); its None default keeps that, unlike the FOLPS pt where None = 'tree+loop+ctr'.
         if damping_method not in (None, 'loop+ctr'):
             raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (use the FOLPS pt)")
+        if use_GTNS not in (None, True):
+            raise NotImplementedError(f"use_GTNS={use_GTNS!r} is not supported by the fkptjax pipeline, which always keeps GTNS (use the FOLPS pt)")
         from fkptjax.pipelines import poles_from_tables
 
         return poles_from_tables(
@@ -2640,13 +2658,13 @@ class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
-                 tracers=None, params=None, **kwargs):
+                 use_GTNS=None, tracers=None, params=None, **kwargs):
         if pt is None:
             pt = FKPTJAXPTSpectrum2Poles(**kwargs)
             kwargs = {}
         super().__init__(k=k, pt=pt, ells=ells, template=template, prior_basis=prior_basis,
                          fsat=fsat, sigv=sigv, nbar=nbar, mu=mu, damping=damping, damping_method=damping_method,
-                         tracers=tracers, params=params, **kwargs)
+                         use_GTNS=use_GTNS, tracers=tracers, params=params, **kwargs)
 
 
 class FKPTJAXTracerSpectrum3Poles(FOLPSTracerSpectrum3Poles):
@@ -3359,6 +3377,26 @@ class COMETPTSpectrum2Poles(Calculator):
         return obj
 
 
+# In the physical / physical_aap bases COMET's bias, counterterm and stochastic parameters are
+# renamed to FOLPSD's names, so the two codes' physical_aap parameters are literally the same
+# names for the same physical quantities, with the same normalization (see the correspondence
+# table in the comparison notebooks).  comet's own names are kept for its native bases.
+# Not renamed: NP22 (extra k^2 L_2 stochastic), NB0 (extra bispectrum constant) and cnloB have
+# no FOLPSD counterpart; `avir` keeps its name deliberately -- FOLPSD's X_FoG is *not* the same
+# knob for the power spectrum (it depends on damping_method / use_GTNS), and neither is a
+# parameter of the prior document.
+_COMET_PHYSICAL_NAMES = {'b2d': 'b2', 'bk2': 'bs', 'btd': 'b3',
+                         'a0': 'alpha0', 'a2': 'alpha2', 'a4': 'alpha4',
+                         'NP0': 'sn0', 'NP20': 'sn2', 'MB0': 'snb0'}
+
+
+def _comet_physical_name(name, prior_basis):
+    """comet's parameter *name* under *prior_basis*: FOLPSD's name in the physical bases."""
+    if 'physical' in prior_basis:
+        return _COMET_PHYSICAL_NAMES.get(name, name)
+    return name
+
+
 class COMETTracerSpectrum2Poles(Calculator):
 
     @classmethod
@@ -3393,9 +3431,9 @@ class COMETTracerSpectrum2Poles(Calculator):
             if 'physical' in prior_basis:
                 params += [
                     Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
-                    Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
-                    Parameter('bk2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
-                    Parameter('btd', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
+                    Parameter('b2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
+                    Parameter('bs', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
+                    Parameter('b3', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
                 ]
             else:
                 params += [
@@ -3440,11 +3478,11 @@ class COMETTracerSpectrum2Poles(Calculator):
             # no nnlo counterterm
             if 'physical' in prior_basis:
                 params += [
-                    Parameter('a0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_0'),
-                    Parameter('a2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_2'),
-                    Parameter('a4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_4'),
-                    Parameter('NP0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=2.), latex=R'N^P_0'),
-                    Parameter('NP20', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 0}'),
+                    Parameter('alpha0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_0'),
+                    Parameter('alpha2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_2'),
+                    Parameter('alpha4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_4'),
+                    Parameter('sn0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=2.), latex=R's_{n,0}'),
+                    Parameter('sn2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R's_{n,2}'),
                     Parameter('NP22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 2}'),
                 ]
             else:
@@ -3557,8 +3595,10 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
 
         # rescale_counterterms=False: PTEmu.Pell() applies h²/h⁴ rescaling to
-        # c0/c2/c4/cnlo internally, so we must not pre-scale them; NP*/h³ and NP*/nbar
-        # are always applied here because PTEmu.Pell()'s stochastic term uses NP0 as-is.
+        # c0/c2/c4/cnlo internally, so we must not pre-scale them; likewise its stochastic
+        # term (P2d_stoch) is added outside the spline, already in (Mpc/h)^3 units, so
+        # NP0/NP20/NP22 must be passed without the h³/h⁵ rescaling either.  Only the
+        # 1/nbar normalization is applied here (PTEmu.nbar = 1.0 makes its own a no-op).
         canonical = self._get_canonical_params(rescale_counterterms=False)
         pell_params = {k: v for k, v in cosmo_params.items()}
         for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
@@ -3598,7 +3638,8 @@ class COMETTracerSpectrum2Poles(Calculator):
         _only = None if only is None else frozenset(only)
 
         def g(name):
-            param = getattr(self, name, None)
+            # `name` is comet's canonical name; the physical bases expose FOLPSD's.
+            param = getattr(self, _comet_physical_name(name, self._prior_basis), None)
             if param is None:
                 if _only is not None and name not in _only:
                     return 0.0
@@ -3662,9 +3703,17 @@ class COMETTracerSpectrum2Poles(Calculator):
             NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
             if 'physical' in self._prior_basis:
                 a0, a2, a4 = a0 / (A**2 * A_AP), a2 / (A**2 * A_AP), a4 / (A**2 * A_AP)
+                # Prior-document convention (TG_2pt3pt_priors): the stochastic sector is
+                # SN_0 + SN_2 k^2 mu^2 (+ SN_4 k^4 mu^4, which comet cannot represent -- it has
+                # no k^4 column). comet's columns are 1, k^2 and k^2 L_2(mu), so SN_2's
+                # k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)] feeds *both* k^2 columns: NP20 is SN_2,
+                # matching FOLPSD's sn2 (and its fsat sigma_v^2 prior normalization).
+                # NP22 is then an extra pure-quadrupole freedom with no document counterpart,
+                # added on top; it is 0 by default.
                 NP0 = NP0 / A_AP / self._nbar
-                NP20 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2
-                NP22 = NP22 / A_AP / self._nbar * self._fsat * self._sigv**4
+                sn2 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2
+                NP22 = 2. / 3. * sn2 + NP22 / A_AP / self._nbar * self._fsat * self._sigv**4
+                NP20 = sn2 / 3.
 
             c0 = -0.5 * (a0 * (b1**2 + b1 * f / 3.0)
                             + a2 * (b1 * f / 3.0 + f**2 / 5.0)
@@ -3688,10 +3737,14 @@ class COMETTracerSpectrum2Poles(Calculator):
                 # here too would double-count it.
                 c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
                 cnlo = cnlo / h**4
-            # for the same reason, NP* should be rescaled to compensate the h^3 factor -- always
-            # needed (eval_pell_from_raw_params()/los_average_continuous() never rescales NP0/NP20/NP22).
-            NP0 = NP0 / h**3
-            NP20, NP22 = NP20 / h**5, NP22 / h**5
+                # Same story for the stochastic terms, which the PX_ell() splines emit as
+                # k_Mpc^0 and k_Mpc^2 columns converted to (Mpc/h)^3, i.e. carrying h^3 and h^5.
+                NP0 = NP0 / h**3
+                NP20, NP22 = NP20 / h**5, NP22 / h**5
+            # rescale_counterterms=False (pt=False/_call_direct()): PTEmu.Pell() adds its
+            # stochastic term (P2d_stoch) *outside* the spline, i.e. already in (Mpc/h)^3 units,
+            # so NP0/NP20/NP22 must be passed unscaled -- unlike the counterterms, whose h^2/h^4
+            # comes from the Pctr_* spline columns.
         canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22)
         return canonical_params
 
@@ -3835,13 +3888,20 @@ class COMETTracerSpectrum3Poles(Calculator):
 
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty'):
-        relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0', 'avir']
+        # Both naming conventions: comet's native names and, in the physical bases, FOLPSD's
+        # ('b2' doubles as comet's own b2 and the renamed b2d).  b3/btd is not needed at tree level.
+        relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'bs',
+                    'NP0', 'sn0', 'avir']
         params = COMETTracerSpectrum2Poles.propose_params(tracers=tracers, prior_basis=prior_basis, model=model).select(basename=relevant)
         extra = []
         if 'physical' in prior_basis:
             extra += [
-                Parameter('NB0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
-                Parameter('MB0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
+                # The prior document has no free N^B_0: its constant is SN_0^2, tied to NP0
+                # (as in FOLPSD, whose bispectrum has no free constant either).  That piece is
+                # added in _get_canonical_params, so NB0 is an *extra* constant on top and is
+                # fixed at 0 by default; free it only to go beyond the document.
+                Parameter('NB0', value=0.0, fixed=True, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
+                Parameter('snb0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
             ]
         else:
             extra += [
@@ -3992,7 +4052,8 @@ class COMETTracerSpectrum3Poles(Calculator):
         _only = None if only is None else frozenset(only)
 
         def g(name):
-            param = getattr(self, name, None)
+            # `name` is comet's canonical name; the physical bases expose FOLPSD's.
+            param = getattr(self, _comet_physical_name(name, self._prior_basis), None)
             if param is None:
                 if _only is not None and name not in _only:
                     return 0.0
@@ -4005,14 +4066,29 @@ class COMETTracerSpectrum3Poles(Calculator):
         NB0 = g('NB0')
         MB0 = g('MB0')
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
+        SN0 = 0.
         if 'physical' in self._prior_basis:
-            NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP, MB0 / A_AP
+            # Prior-document convention (TG_2pt3pt_priors): the bispectrum shot noise is
+            # B_shot/nbar (b1 + 2 SN_0 nbar / B_shot f mu^2) Z_1 P + cycl. + SN_0^2,
+            # whose mu_i^{0,2,4} coefficients are [b1^2 B_shot, b1 f B_shot + 2 SN_0 nbar b1 f,
+            # 2 SN_0 nbar f^2] / nbar.  comet's are [b1^2 MB0, b1 f (MB0 + NP0), f^2 NP0] / nbar,
+            # i.e. the same structure with MB0 = B_shot and **NP0 = 2 SN_0 nbar**: comet absorbs
+            # the document's explicit factor 2 into NP0, its power spectrum does not.  NP0 is one
+            # shared parameter, so the 2 lives here, in the bispectrum branch only.
+            SN0 = NP0 / A_AP / self._nbar  # the document's SN_0, identical to the power spectrum's
+            NP0, NB0, MB0 = 2. * NP0 / A_AP, NB0 / A_AP, MB0 / A_AP
         # nbar normalization is needed for the BX_ell_Sugi()-decomposed path (its diagrams
         # are nbar-bare), but skipped for the direct/pt=False path (rescale_counterterms=False):
         # eval_bell_sugi_from_raw_params()'s bell_sugi()/project_sugi() apply 1/nbar/1/nbar**2
         # internally given the *raw* nbar, so applying it here too would double-count it.
         if rescale_counterterms:
             NP0, NB0, MB0 = NP0 / self._nbar, NB0 / self._nbar**2, MB0 / self._nbar
+            if 'physical' in self._prior_basis:
+                # The constant is SN_0^2, as in the document and in FOLPSD (whose bispectrum has
+                # no free constant at all -- its Pshot**2 term is tied to sn0).  The free NB0
+                # rides on top of it and is fixed at 0 by default, so the default model is
+                # FOLPSD's; freeing NB0 adds a constant the document does not have.
+                NB0 = NB0 + SN0**2
         return params | dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
 
     def tree_flatten(self):

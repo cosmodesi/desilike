@@ -540,6 +540,44 @@ class TestFOLPS:
 
         assert _compile(FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
 
+    def test_use_gtns(self):
+        """``use_GTNS`` controls the perturbative FoG term independently of ``damping_method``.
+
+        ``None`` (the default) must reproduce the ``damping_method``-driven behavior exactly --
+        GTNS kept for the legacy ``'loop+ctr'``, dropped for every ``'tree+...'`` method -- while
+        ``True`` / ``False`` override it.  In particular ``'tree+loop+ctr'`` with ``use_GTNS=True``
+        is the tree-damped, GTNS-kept convention (comet's ``VDG_infty`` structure), which no
+        ``damping_method`` alone can express.
+        """
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 40)
+        values = dict(b1=2.0, b2=0.5, bs=0.3, alpha0=2.0, sn0=0.5, X_FoG=4.0)
+
+        def poles(damping_method, use_GTNS=None, damping='vdg', **overrides):
+            theory = FOLPSTracerSpectrum2Poles(k=k, damping=damping, damping_method=damping_method,
+                                               use_GTNS=use_GTNS)
+            return np.asarray(_compile(theory)(**{**values, **overrides}))
+
+        for damping_method in ['loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn']:
+            implied = (damping_method == 'loop+ctr')
+            default = poles(damping_method)
+            np.testing.assert_allclose(poles(damping_method, use_GTNS=implied), default, rtol=1e-12, atol=0.,
+                                       err_msg=f'use_GTNS=None != use_GTNS={implied} for {damping_method!r}')
+            flipped = poles(damping_method, use_GTNS=not implied)
+            assert np.max(np.abs(flipped - default)) / np.max(np.abs(default)) > 1e-3, \
+                f'use_GTNS={not implied} did not change the model for {damping_method!r}'
+
+        # With W = 1 (damping='lor', X_FoG=0) the damping_method is inert, so use_GTNS is the
+        # only difference left between the two methods.
+        undamped = dict(damping='lor', X_FoG=0.)
+        np.testing.assert_allclose(poles('tree+loop+ctr', use_GTNS=True, **undamped),
+                                   poles('loop+ctr', **undamped), rtol=1e-12, atol=0.,
+                                   err_msg="W=1: 'tree+loop+ctr' + use_GTNS=True != 'loop+ctr'")
+
+        for bad in ['yes', 2]:
+            with pytest.raises(ValueError):
+                _compile(FOLPSTracerSpectrum2Poles(k=k, use_GTNS=bad))
+
     def test_tracer_correlation(self):
         """FOLPSTracerCorrelation2Poles: shape in both bases."""
         from desilike.theories.galaxy_clustering import FOLPSTracerCorrelation2Poles
@@ -864,6 +902,111 @@ class TestCOMET:
             base_direct = np.asarray(_compile(theory_bb_direct)(**override))
             np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
                                        err_msg=f'COMETTracerSpectrum2Poles ({prior_basis}): pt=False disagrees with shared PT')
+
+    def test_stochastic_normalization(self):
+        """The stochastic terms are analytic, so both COMET paths must reproduce them exactly:
+        NP0 -> 1/nbar on the monopole, NP20 -> k^2/nbar (isotropic), NP22 -> k^2/nbar on the
+        quadrupole.  Regression for the pt=False path, which used to divide NP0/NP20/NP22 by
+        h^3/h^5: that rescaling compensates the PX_ell() spline's Mpc -> Mpc/h conversion of
+        the noise columns (pt=True), but Pell() adds its stochastic term outside the spline,
+        already in (Mpc/h)^3."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 20)
+        nbar = 3e-4
+
+        runs = {}
+        for pt in [None, False]:
+            theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap')
+            if pt is False:
+                theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap', pt=False)
+            runs[pt] = run = _compile(theory)
+            base = np.asarray(run(b1=2.))
+            # NP0 is a pure constant added to the monopole: exact, no spline involved.
+            response = np.asarray(run(b1=2., NP0=1.)) - base
+            np.testing.assert_allclose(response[0], 1. / nbar, rtol=1e-9,
+                                       err_msg=f'COMETTracerSpectrum2Poles (pt={pt}): NP0 monopole response is not 1/nbar')
+            np.testing.assert_allclose(response[1:], 0., atol=1e-6,
+                                       err_msg=f'COMETTracerSpectrum2Poles (pt={pt}): NP0 leaks into ell > 0')
+
+        # NP20 (isotropic k^2) and NP22 (quadrupole k^2) go through the spline on the pt=True
+        # path, so the two paths agree only at the ~1e-3 interpolation level.
+        for name in ['NP20', 'NP22']:
+            responses = [np.asarray(run(b1=2., **{name: 1.})) - np.asarray(run(b1=2.)) for run in runs.values()]
+            np.testing.assert_allclose(responses[1], responses[0], rtol=1e-3, atol=1e-8,
+                                       err_msg=f'COMETTracerSpectrum2Poles: pt=False {name} response disagrees with shared PT')
+
+    def test_physical_stochastic_convention(self):
+        """In the ``physical``/``physical_aap`` bases the stochastic sector follows the
+        TG_2pt3pt_priors document rather than comet's native columns.
+
+        P(k): ``NP20`` is the document's SN_2, multiplying k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)],
+        so it feeds both of comet's k^2 columns and means the same thing as FOLPSD's ``sn2``.
+        B: ``NP0`` carries the document's explicit factor 2 (comet absorbs it into NP0, its
+        power spectrum does not), so it means the same thing as FOLPSD's ``sn0``.
+        The native bases keep comet's own convention.
+        """
+        from desilike.theories.galaxy_clustering import (COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
+                                                         FOLPSTracerSpectrum2Poles, FOLPSTracerSpectrum3Poles)
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        k = np.linspace(0.02, 0.3, 20)
+        nbar, b1 = 3e-4, 2.
+        settings = get_physical_stochastic_settings()
+        sn2_amplitude = settings['fsat'] * settings['sigv']**2 / nbar
+
+        run = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='physical_aap'))
+        response = np.asarray(run(b1=b1, sn2=1.)) - np.asarray(run(b1=b1))
+        # SN_2 k^2 mu^2 -> (1/3, 2/3, 0) on (P0, P2, P4).
+        for iell, weight in enumerate([1. / 3., 2. / 3., 0.]):
+            np.testing.assert_allclose(response[iell], weight * sn2_amplitude * k**2, rtol=1e-6, atol=1e-8,
+                                       err_msg=f'COMET physical_aap: sn2 is not SN_2 k^2 mu^2 (ell index {iell})')
+        # ... and it is then the same parameter as FOLPSD's sn2.
+        run_folps = _compile(FOLPSTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap'))
+        folps_response = np.asarray(run_folps(b1=b1, sn2=1.)) - np.asarray(run_folps(b1=b1))
+        np.testing.assert_allclose(response, folps_response, rtol=1e-6, atol=1e-8,
+                                   err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
+
+        # The physical bases expose FOLPSD's names, so the two theories share them.
+        from desilike.base import params as get_params
+        cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
+                       'Omega_k', 'w0_fld', 'wa_fld'}
+        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
+        folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
+        assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
+        assert comet_names - folps_names == {'NP22', 'avir'}, sorted(comet_names - folps_names)
+
+        # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
+        run_native = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='EggScoSmi+Comet'))
+        native = np.asarray(run_native(b1=b1, NP20=1.)) - np.asarray(run_native(b1=b1))
+        assert np.max(np.abs(native[1])) < 1e-9 * np.max(np.abs(native[0])), 'native NP20 leaked into the quadrupole'
+
+        # Bispectrum: NP0 gets the factor 2, so it matches FOLPSD's sn0 (whose response is
+        # quadratic in sn0 -- take the odd part to isolate the linear piece).
+        k3 = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)
+        run_b = _compile(COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap'))
+        run_bf = _compile(FOLPSTracerSpectrum3Poles(k=k3, nbar=nbar, prior_basis='physical_aap', damping='lor'))
+        comet_np0 = np.asarray(run_b(b1=b1, sn0=1.)) - np.asarray(run_b(b1=b1))
+        folps_sn0 = 0.5 * (np.asarray(run_bf(b1=b1, sn0=1.)) - np.asarray(run_bf(b1=b1, sn0=-1.)))
+        # The two codes use different PT for the Z1 P legs, so compare at the lowest k, where
+        # they agree best; without the factor 2 this ratio would be ~2.
+        ratio = folps_sn0[0, 0] / comet_np0[0, 0]
+        assert abs(ratio - 1.) < 0.02, f'COMET bispectrum NP0 is not 2 SN_0: FOLPSD/COMET = {ratio}'
+
+        # The constant is SN_0^2, tied to NP0 as in FOLPSD, so B is quadratic in it with a
+        # k-independent 1/nbar^2 coefficient living only in the (0, 0, 0) multipole.  NB0 is an
+        # extra constant on top, fixed at 0 by default (the document has no free N^B_0).
+        theory_b = COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap')
+        assert theory_b.NB0.fixed, 'physical_aap NB0 should be fixed (its SN_0^2 piece comes from NP0)'
+        grid = np.array([-1., -0.5, 0., 0.5, 1.])
+        vander = np.vander(grid, 3)  # [x^2, x, 1]
+        for label, run_shot, name in [('COMET sn0', run_b, 'sn0'), ('FOLPSD sn0', run_bf, 'sn0')]:
+            poles = np.array([np.asarray(run_shot(b1=b1, **{name: value})) for value in grid])
+            coeff, *_ = np.linalg.lstsq(vander, poles.reshape(len(grid), -1), rcond=None)
+            residual = np.max(np.abs(poles.reshape(len(grid), -1) - vander @ coeff)) / np.max(np.abs(poles))
+            assert residual < 1e-11, f'{label}: B is not quadratic in {name} ({residual})'
+            quadratic = coeff.reshape(3, len(theory_b.ells), len(k3))[0]
+            np.testing.assert_allclose(quadratic[0], 1. / nbar**2, rtol=1e-8,
+                                       err_msg=f'{label}: the constant is not SN_0^2 = 1/nbar^2')
+            assert np.max(np.abs(quadratic[1])) < 1e-8 / nbar**2, f'{label}: SN_0^2 leaked into B_202'
 
     def test_tracer_bispectrum(self):
         """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""

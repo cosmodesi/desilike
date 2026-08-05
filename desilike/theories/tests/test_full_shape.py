@@ -1160,6 +1160,27 @@ class TestGeoFPTAX:
         # Sensitivity
         _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)', b1=2.0, b2=0.5, bs=0.3)
 
+    def test_tracer_bispectrum_shapefit(self):
+        """GeoFPTAXTracerSpectrum3Poles (Scoccimarro basis): shape and parameter sensitivity with valid triangles."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        from desilike.theories.galaxy_clustering.template import ShapeFitSpectrum2Template
+        
+        # Scoccimarro basis expects (N, 3) valid triangles.
+        # We use equilateral triangles which are strictly valid.
+        k_diag = np.linspace(0.02, 0.1, 11)
+        k = np.column_stack([k_diag, k_diag, k_diag])
+        
+        
+        template = ShapeFitSpectrum2Template(z=0.8, apmode = 'qisoqap')
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='scoccimarro', template = template)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)', qiso = 0.95, qap = 0.95, dm = 0.02, df =1.2)
+
     def test_invalid_triangles_scoccimarro(self):
         """GeoFPTAXTracerSpectrum3Poles: fails if invalid triangles are provided for Scoccimarro."""
         from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles

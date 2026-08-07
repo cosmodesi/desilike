@@ -33,6 +33,12 @@ Quantile 3 coefficients are not independent: they are derived from the
 five-quantile partition rule using the independent coefficients for quantiles
 1, 2, 4, and 5.
 
+Set `rsd=False` to predict real-space density-split cross-power. In this mode,
+the FOLPS loop tables retain the physical cosmological growth rate, while the
+Kaiser, composite-loop velocity, derivative, and anisotropic stochastic
+kernels are evaluated with zero redshift-space angle. AP remapping remains
+active through the physical wavenumber and Jacobian.
+
 The `1-loop` branch uses the deterministic FOLPS galaxy spectrum for the `c1`
 propagation term and an explicit JAX implementation of the composite `c2 P2,g`
 loop. This branch requires `backend='jax'`.

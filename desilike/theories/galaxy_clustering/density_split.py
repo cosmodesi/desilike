@@ -261,12 +261,14 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
     ``qg_anisotropic_stochastic`` flag adds an empirical
     ``shotnoise * s0muqg_a * mu^2`` stochastic term. Quantile 3 coefficients
     are derived by the five-bin partition rule. ``k`` is expressed in
-    ``h / Mpc`` and ``smoothing_radius`` in ``Mpc / h``.
+    ``h / Mpc`` and ``smoothing_radius`` in ``Mpc / h``. Set ``rsd=False``
+    for a real-space prediction: FOLPS loop tables retain the physical growth
+    rate, while all redshift-space angular kernels are evaluated at zero.
     """
 
     config_fn = 'density_split.yaml'
     _pt_cls = FOLPSv2PowerSpectrumMultipoles
-    _default_options = dict(prior_basis='physical_aap', tracer=None, fsat=None, sigv=None, shotnoise=1e4,
+    _default_options = dict(prior_basis='physical_aap', tracer=None, fsat=None, sigv=None, shotnoise=1e4, rsd=True,
                             model=_MODEL, folps_model='FOLPSD', bias_scheme='folps', IR_resummation=True,
                             damping='lor', b3_coev=True, backend='jax', sigma8_fid=None, h_fid=None,
                             smoothing_radius=10., smoothing_kernel='gaussian', smoothing_apmode='observed',
@@ -278,6 +280,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
 
     def initialize(self, k=None, ells=(0, 2, 4), quantiles=_QUANTILES, pt=None, template=None, z=None, mu=20,
                    smoothing_radius=10., smoothing_kernel='gaussian', smoothing_apmode='observed', model=_MODEL,
+                   rsd=True,
                    prior_basis='physical_aap', tracers=None, composite_c1_prior_scale=2.,
                    qg_anisotropic_stochastic=False,
                    composite_c2_prior_scale=5., composite_c3_prior_scale=10.,
@@ -302,6 +305,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
         if self.smoothing_apmode not in _SMOOTHING_APMODES:
             raise ValueError('smoothing_apmode must be one of {}; found {}'.format(_SMOOTHING_APMODES, smoothing_apmode))
         self.qg_anisotropic_stochastic = bool(qg_anisotropic_stochastic)
+        self.rsd = bool(rsd)
 
         composite_prior_scales = {
             'composite_c1_prior_scale': composite_c1_prior_scale,
@@ -322,6 +326,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
         kwargs = dict(kwargs)
         kwargs.update(model=self.model, prior_basis=self.prior_basis, smoothing_radius=self.smoothing_radius,
                       smoothing_kernel=self.smoothing_kernel, smoothing_apmode=self.smoothing_apmode,
+                      rsd=self.rsd,
                       qg_anisotropic_stochastic=self.qg_anisotropic_stochastic,
                       composite_c1_prior_scale=float(composite_c1_prior_scale),
                       composite_c2_prior_scale=float(composite_c2_prior_scale),
@@ -334,6 +339,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
         if self.model == _MODEL_1LOOP and (self.options['backend'] != 'jax' or desilike_jax.jax is None):
             raise ValueError("density-split model '1-loop' requires backend='jax'")
         pt_kwargs = dict(kwargs)
+        pt_kwargs.pop('rsd', None)
         pt_kwargs['model'] = self.options['folps_model']
         pt_kwargs['A_full'] = False
         pt_kwargs['ells'] = self.ells
@@ -418,7 +424,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
 
     def _physical_aap_folps_pars(self, params):
         sigma8 = self.pt.sigma8
-        f = self.pt.fsigma8 / sigma8
+        f = self.pt.fsigma8 / sigma8 if self.rsd else 0.
         qpar, qper = self.pt.qpar, self.pt.qper
         A_AP = 1. / (qper**2 * qpar)
         sqrt_A_AP = A_AP**0.5
@@ -447,7 +453,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
             return self._physical_aap_folps_pars(params)
         raise ValueError("Unknown prior_basis='{}'.".format(self.prior_basis))
 
-    def _folps_pkmu(self, pars, shotnoise=None):
+    def _folps_pkmu(self, kap, muap, pars, shotnoise=None):
         import folps as folpsv2
         table = (self.pt.kt, *self.pt.pt.table, *self.pt.pt.scalars)
         table_now = (self.pt.kt, *self.pt.pt.table_now, *self.pt.pt.scalars_now)
@@ -460,15 +466,15 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
         _folps_module.use_TNS_model_status = getattr(self.pt.pt, 'remove_DeltaP', False)
         if getattr(self, '_get_folps_pkmu', None) is None:
 
-            def _get_folps_pkmu(pars, bias_scheme, damping, *table):
+            def _get_folps_pkmu(kap, muap, pars, bias_scheme, damping, *table):
                 folps_rsdmps_class = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
                 pars = folps_rsdmps_class.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-                return folps_rsdmps_class.get_rsd_pkmu(self.pt.pt.kap, self.pt.pt.muap, pars, table[:ncols], table[ncols:],
+                return folps_rsdmps_class.get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:],
                                                        IR_resummation=True, damping=damping)
 
-            self._get_folps_pkmu = jit(static_argnums=(1, 2))(_get_folps_pkmu) if self.options['backend'] == 'jax' else _get_folps_pkmu
+            self._get_folps_pkmu = jit(static_argnums=(3, 4))(_get_folps_pkmu) if self.options['backend'] == 'jax' else _get_folps_pkmu
         array = jnp.array(pars) if self.options['backend'] == 'jax' else np.array(pars)
-        return self._get_folps_pkmu(array, self.options['bias_scheme'], self.options['damping'], *table, *table_now)
+        return self._get_folps_pkmu(kap, muap, array, self.options['bias_scheme'], self.options['damping'], *table, *table_now)
 
     def _linear_matter_pk(self):
         import folps as folpsv2
@@ -482,12 +488,12 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
             self._get_linear_matter_pk = jit(_get_linear_matter_pk) if self.options['backend'] == 'jax' else _get_linear_matter_pk
         return self._get_linear_matter_pk(self.pt.pt.kap, *table)
 
-    def _composite_p2_moments(self):
+    def _composite_p2_moments(self, kap, muap, f):
         if getattr(self, '_get_composite_p2_moments', None) is None:
             self._get_composite_p2_moments = jit(static_argnames=('smoothing_kernel', 'nq', 'nx', 'nphi', 'qmin', 'qmax'))(composite_p2_moments)
         return self._get_composite_p2_moments(
-            self.pt.pt.kap, self.pt.pt.muap, self.pt.kt, self.pt.pt.table[0],
-            self.pt.fsigma8 / self.pt.sigma8, self.smoothing_radius,
+            kap, muap, self.pt.kt, self.pt.pt.table[0],
+            f, self.smoothing_radius,
             smoothing_kernel=self.smoothing_kernel,
             nq=self.options['composite_loop_nq'],
             nx=self.options['composite_loop_nx'],
@@ -499,8 +505,9 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
         self._set_from_pt()
         self.nbar = 1e-4
         jac, kap, muap = self.pt.pt.jac, self.pt.pt.kap, self.pt.pt.muap
-        f = self.pt.fsigma8 / self.pt.sigma8
-        mu2 = muap**2
+        f = self.pt.fsigma8 / self.pt.sigma8 if self.rsd else 0.
+        mu_rsd = muap if self.rsd else jnp.zeros_like(muap)
+        mu2 = mu_rsd**2
         ksmooth = _smoothing_k(self.k, kap, apmode=self.smoothing_apmode)
         window = _smoothing_window(ksmooth, self.smoothing_radius, kernel=self.smoothing_kernel)
         b1, pars = self._folps_pars(params)
@@ -510,8 +517,8 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
             pgg_base = pgg_lin
             p2g = None
         else:
-            pgg_base = self._folps_pkmu(pars, shotnoise=0.)
-            p2g = contract_p2_moments(self._composite_p2_moments(), pars[0], pars[1], pars[2])
+            pgg_base = self._folps_pkmu(kap, mu_rsd, pars, shotnoise=0.)
+            p2g = contract_p2_moments(self._composite_p2_moments(kap, mu_rsd, f), pars[0], pars[1], pars[2])
 
         power = []
         shotnoise = self.options['shotnoise']
@@ -540,7 +547,7 @@ class DensitySplitTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipo
 
     def __getstate__(self):
         state = self.to_poles.__getstate__()
-        for name in ['k', 'z', 'ells', 'quantiles', 'smoothing_radius', 'smoothing_kernel',
+        for name in ['k', 'z', 'ells', 'quantiles', 'smoothing_radius', 'smoothing_kernel', 'rsd',
                      'smoothing_apmode', 'model', 'power']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)

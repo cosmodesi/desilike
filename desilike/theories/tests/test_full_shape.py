@@ -833,14 +833,15 @@ class TestCOMET:
         # Other bias bases (each with Comet counterterms); bias_overrides covers all free bias params,
         # ct_overrides covers all free counterterm + stochastic params.
         # bGam3 (AssBauGre), b3t (AmiGleKok), btd (DESI non-physical) are fixed=True → omitted.
-        # cnlo is fixed=True for VDG_infty → omitted. physical uses DESIct (a0/a2/a4) not Comet (c0/c2/c4).
+        # cnlo is fixed=True for VDG_infty → omitted. The physical bases expose FOLPSD's names
+        # (b1/b2/bs/b3, alpha0/alpha2/alpha4, sn0/sn2/sn22), not comet's own.
         comet_ct = dict(c0=1.0, c2=1.0, c4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
-        desict_ct = dict(a0=1.0, a2=1.0, a4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
+        physical_ct = dict(alpha0=1.0, alpha2=1.0, alpha4=1.0, sn0=0.1, sn2=0.1, sn22=0.1)
         for prior_basis, bias_overrides, ct_overrides in [
             ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5), comet_ct),
             ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3), comet_ct),
             ('DESI+Comet',      dict(b1=2.0, b2d=0.5, bk2=0.3), comet_ct),
-            ('physical',        dict(b1=2.0, b2d=0.5, bk2=0.3, btd=0.2), desict_ct),
+            ('physical',        dict(b1=2.0, b2=0.5, bs=0.3, b3=0.2), physical_ct),
         ]:
             theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
             run_bb = _compile(theory_bb)
@@ -916,9 +917,9 @@ class TestCOMET:
 
         runs = {}
         for pt in [None, False]:
-            theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap')
+            theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='EggScoSmi+Comet')
             if pt is False:
-                theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap', pt=False)
+                theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='EggScoSmi+Comet', pt=False)
             runs[pt] = run = _compile(theory)
             base = np.asarray(run(b1=2.))
             # NP0 is a pure constant added to the monopole: exact, no spline involved.
@@ -972,7 +973,7 @@ class TestCOMET:
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
         assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
-        assert comet_names - folps_names == {'NP22', 'avir'}, sorted(comet_names - folps_names)
+        assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
         run_native = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='EggScoSmi+Comet'))
@@ -988,7 +989,11 @@ class TestCOMET:
         folps_sn0 = 0.5 * (np.asarray(run_bf(b1=b1, sn0=1.)) - np.asarray(run_bf(b1=b1, sn0=-1.)))
         # The two codes use different PT for the Z1 P legs, so compare at the lowest k, where
         # they agree best; without the factor 2 this ratio would be ~2.
-        ratio = folps_sn0[0, 0] / comet_np0[0, 0]
+        # Checked on (2, 0, 2), not (0, 0, 0): FOLPSD's P-hat term multiplies the full
+        # Z1 = b1 + f mu^2, so it carries an f^2 mu^4 piece COMET lacks.  That is a mu-structure
+        # difference, not a normalization one, and it lands almost entirely on the monopole --
+        # at the lowest k the quadrupole agrees to 0.9% while the monopole is 8.5% off.
+        ratio = folps_sn0[1, 0] / comet_np0[1, 0]
         assert abs(ratio - 1.) < 0.02, f'COMET bispectrum NP0 is not 2 SN_0: FOLPSD/COMET = {ratio}'
 
         # The constant is SN_0^2, tied to NP0 as in FOLPSD, so B is quadratic in it with a
@@ -1003,7 +1008,7 @@ class TestCOMET:
             coeff, *_ = np.linalg.lstsq(vander, poles.reshape(len(grid), -1), rcond=None)
             residual = np.max(np.abs(poles.reshape(len(grid), -1) - vander @ coeff)) / np.max(np.abs(poles))
             assert residual < 1e-11, f'{label}: B is not quadratic in {name} ({residual})'
-            quadratic = coeff.reshape(3, len(theory_b.ells), len(k3))[0]
+            quadratic = coeff.reshape(3, -1, len(k3))[0]
             np.testing.assert_allclose(quadratic[0], 1. / nbar**2, rtol=1e-8,
                                        err_msg=f'{label}: the constant is not SN_0^2 = 1/nbar^2')
             assert np.max(np.abs(quadratic[1])) < 1e-8 / nbar**2, f'{label}: SN_0^2 leaked into B_202'

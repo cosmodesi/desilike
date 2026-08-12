@@ -318,6 +318,9 @@ class Spectrum2PolesObservable(Calculator):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
+            # Per-multipole coordinate: the multipoles may be fit over different ranges,
+            # so this must not reuse the x left over from the loop above.
+            x = data_pole.coords('k')
             std = self.covariance.at.observable.get(**label).std()
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
@@ -521,6 +524,9 @@ class Correlation2PolesObservable(Calculator):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
+            # Per-multipole coordinate: the multipoles may be fit over different ranges,
+            # so this must not reuse the x left over from the loop above.
+            x = data_pole.coords('s')
             std = self.covariance.at.observable.get(**label).std()
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)

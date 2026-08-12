@@ -1204,14 +1204,18 @@ def _build_graph_call_fn(pipeline):
                 node_state = node_states[id(node)]
                 if is_tracing:
                     for param in nvd:
-                        if getattr(param, '_call_fn', None) is None:
+                        if getattr(param, '_call_fn', None) is None and getattr(param, 'derived', None) is not True:
                             param.value = params[param.name]
                     for param in nvd:
                         param()
                     result = node()
                     node_state['was_called'] = True
                 else:
-                    free_nvd = [param for param in nvd if getattr(param, '_call_fn', None) is None]
+                    # Derived parameters are outputs, computed by node(): seeding them from the
+                    # input dict would overwrite the value the node just produced (and, on a
+                    # second _run_graph pass, leave the stale input value standing).
+                    free_nvd = [param for param in nvd if getattr(param, '_call_fn', None) is None
+                                and getattr(param, 'derived', None) is not True]
                     own_params_np = np.concatenate([np.ravel(np.asarray(params[param.name])) for param in free_nvd]) if free_nvd else np.array([])
                     dep_states_list = [node_states[id(dep)] for dep in ncd]
                     dep_was_called = any(s['was_called'] for s in dep_states_list)

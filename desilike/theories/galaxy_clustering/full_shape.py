@@ -55,6 +55,134 @@ def _import_folps():
     return folps
 
 
+# ── redshift smearing ─────────────────────────────────────────────────────────
+
+class RedshiftSmearing(Calculator):
+    r"""
+    Damping of the observed clustering by residual redshift errors.
+
+    A redshift error displaces a galaxy along the line of sight by
+    :math:`\epsilon = \delta v / (aH)_\mathrm{fid}`, in the fiducial cosmology used to turn
+    redshifts into comoving distances. This wraps the **single-field** characteristic function
+
+    .. math:: D(k\mu) = \int d\delta v\, \mathcal{P}(\delta v) e^{i k \mu \delta v / (aH)}
+
+    so the theories can compose it themselves: :math:`D^2` for the power spectrum (the two
+    galaxies of a pair are displaced independently) and :math:`D(k_1\mu_1) D(k_2\mu_2)
+    D(k_3\mu_3)` for the bispectrum.
+
+    Parameters
+    ----------
+    fun : callable
+        ``fun(kmu, *values) -> D``, with ``kmu`` in :math:`h/\mathrm{Mpc}`. Must be
+        jax-traceable, e.g. built with ``jax.numpy``.
+    tracers : str, (str, str) or None, default=None
+    params : list, default=None
+
+    Notes
+    -----
+    To fit the kernel, give *fun* a ``params`` attribute -- a
+    :class:`~desilike.parameter.Parameter` or a list of them. They become this calculator's
+    parameters, and their values are passed to *fun* as trailing arguments::
+
+        def fun(kmu, vsmear):
+            return jnp.exp(-jnp.abs(kmu) * vsmear)
+
+        fun.params = Parameter('vsmear', value=0., prior=dict(limits=[0., 20.]))
+
+    A kernel without ``params`` is fixed and adds nothing to the theory.
+    """
+    def __init__(self, fun=None, tracers=None, params=None):
+        # Nodes (Parameters) and their update() live in __init__.
+        if not callable(fun):
+            raise ValueError(f'redshift smearing kernel must be a callable, got {fun!r}')
+        auto_params = getattr(fun, 'params', None) or []
+        if isinstance(auto_params, Parameter):
+            auto_params = [auto_params]
+        auto_params = list(auto_params)
+        for param in auto_params:
+            if not isinstance(param, Parameter):
+                raise ValueError(f'redshift smearing kernel params must be Parameter instances, got {param!r}')
+        vc = propose_params_multitracer(auto_params, tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
+        # ordered list of this instance's Parameters, matching fun's trailing arguments
+        self.params = [getattr(self, param.basename) for param in auto_params]
+
+    def __post_init__(self, fun=None, tracers=None, params=None):
+        # Non-node setup only.
+        self._fun = fun
+
+    def __call__(self):
+        self.values = [param.value for param in self.params]
+        return self
+
+    def apply(self, kmu):
+        """Return :math:`D(k\\mu)`. Call from a dependent's ``__call__``, so values stay traced."""
+        return self._fun(kmu, *self.values)
+
+    def tree_flatten(self):
+        return [self.values], {'fun': self._fun}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.values = children[0]
+        obj._fun = aux['fun']
+        return obj
+
+
+_folps_bispectrum_patched = False
+
+
+def _patch_folps_bispectrum():
+    """Let ``BispectrumCalculator.bispectrum`` damp its integrand by a per-instance ``_redshift_smearing``.
+
+    The attribute holds the single-field D(k mu); the wrapper forms
+    D(k1 mu1) D(k2 mu2) D(k3 mu3) -- one factor per field, since the three galaxies are
+    displaced independently, unlike the power spectrum where a pair gives D^2. The angular
+    variables are folps' own and are **pre-AP**: folps applies the AP transform inside
+    ``bispectrum()`` (see ``APtransforms``), while the displacement ``dv / (aH)_fid`` lives in
+    the fiducial frame the catalogue was built in.
+
+    folps has no hook for an extra factor on the integrand, and it cannot be applied to the
+    multipoles afterwards (it depends on the angles being integrated over), so this wraps the
+    method rather than forking folps. Reading the kernel off the *instance* rather than a
+    module global is what lets two tracers or redshift bins in one pipeline carry different
+    kernels: ``_get_spectrum3poles_folps`` builds its calculator fresh on every call. The
+    wrapper is a no-op when the attribute is absent, so ``redshift_smearing=None`` is
+    byte-for-byte the previous behaviour.
+
+    Shaped like the ``extra_damping`` keyword folps ought to expose: if that ever lands
+    upstream this patch can be deleted and the call site switched, with no API change here.
+    """
+    global _folps_bispectrum_patched
+    if _folps_bispectrum_patched:
+        return
+    import folps.folps as _folps_module
+
+    def make(original):
+
+        def bispectrum(self, k1, k2, x12, mu1, phi, *args, **kwargs):
+            toret = original(self, k1, k2, x12, mu1, phi, *args, **kwargs)
+            damping = getattr(self, '_redshift_smearing', None)
+            if damping is not None:
+                k3 = jnp.sqrt(k1**2 + k2**2 + 2. * k1 * k2 * x12)
+                mu2 = jnp.sqrt(1. - mu1**2) * jnp.sqrt(1. - x12**2) * jnp.cos(phi) + mu1 * x12
+                mu3 = -(k1 * mu1 + k2 * mu2) / k3
+                toret = toret * damping(k1 * mu1) * damping(k2 * mu2) * damping(k3 * mu3)
+            return toret
+
+        return bispectrum
+
+    for name in ('BispectrumCalculator', 'BispectrumCalculator_fk'):
+        cls = getattr(_folps_module, name, None)
+        if cls is not None:
+            cls.bispectrum = make(cls.bispectrum)
+    _folps_bispectrum_patched = True
+
+
 # ── utilities ─────────────────────────────────────────────────────────────────
 
 def _velocileptors_default_params(prior_basis):
@@ -1850,11 +1978,17 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj._to_poles.ells = aux['ells']
         return obj
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
         emulated) — no access to ``self.template``.
+
+        ``redshift_smearing`` is a callable returning the single-field characteristic function
+        D(k mu) of the line-of-sight displacement; P(k, mu) is damped by its **square**, since
+        the two galaxies of a pair are displaced independently. It is passed as an argument
+        rather than read from an attribute so the emulated path works: a callable would not
+        survive ``tree_flatten`` / ``tree_unflatten``.
         """
         # For emulator
         folpsv2 = _import_folps()
@@ -1864,6 +1998,10 @@ class FOLPSPTSpectrum2Poles(Calculator):
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
         pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS)
+        if redshift_smearing is not None:
+            # observed (pre-AP) k, mu: the displacement is dv / (aH)_fid, in the fiducial frame
+            # the catalogue was built in, not in the AP-distorted frame kap, muap.
+            pkmu = pkmu * redshift_smearing(self.k[:, None] * self._to_poles.mu)**2
         return self._to_poles(pkmu)
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **options):
@@ -1912,8 +2050,22 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
+
+        Note this quadrature is exact for the undamped :math:`P(k, \mu)`, a polynomial in
+        :math:`\mu`, but not once ``redshift_smearing`` multiplies it: D has a
+        :math:`|\mu|` cusp at :math:`\mu = 0` where Gauss-Legendre converges only like
+        ``1/mu``. At the default the residual is a few :math:`10^{-4}` of :math:`P_0`.
     damping : str, default='lor'
         Damping kernel for the Finger-of-God effect: 'exp', 'lor' or 'vdg'.
+    redshift_smearing : callable or None, default=None
+        Damping from residual redshift errors: the jax-traceable single-field characteristic
+        function :math:`D(k\mu)`, wrapped in a :class:`RedshiftSmearing` (see there for the
+        ``params`` protocol that makes the kernel fittable).  :math:`P(k, \mu)` is damped by
+        :math:`D^2`, since the two galaxies of a pair are displaced independently.
+
+        The factor multiplies the full :math:`P(k, \mu)`, stochastic terms included: only the
+        Poisson self-pair term is undamped, and the estimator subtracts that.  It uses the
+        *observed* (pre-AP) :math:`k, \mu`, not the AP-distorted ones.
     damping_method : str, default=None
         What the FoG damping multiplies:
 
@@ -1992,12 +2144,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 use_GTNS=None, tracers=None, params=None, **kwargs):
+                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
+        self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -2011,7 +2164,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      use_GTNS=None, tracers=None, **kwargs):
+                      use_GTNS=None, redshift_smearing=None, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
@@ -2082,7 +2235,9 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
                                sn0, sn2, 1., self.X_FoG.value]
 
-        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS)
+        redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
+        self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
+                                                                redshift_smearing=redshift_smearing)
         return self.poles
 
     def tree_flatten(self):
@@ -2152,13 +2307,16 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               precision=(8, 10, 10), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
-                              renormalized=True, use_fk=False):
+                              renormalized=True, use_fk=False, redshift_smearing=None):
     folpsv2 = _import_folps()
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
     ells = []
-    _ells = ['B000', 'B110', 'B220', 'B112', 'B202']
+    # folps computes all of these directly; the ell_swap fallback below is only for
+    # multipoles it does not have, and note it transposes a 1-D array (a no-op), so it is
+    # correct only on the k1 == k2 diagonal.
+    _ells = ['B000', 'B110', 'B220', 'B112', 'B202', 'B022', 'B222']
     provided = []
     for ell in multipoles:
         if ell in _ells:
@@ -2176,7 +2334,13 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
         folpsv2.BispectrumCalculator
     )
     bispectrum = BispectrumClass(model=model)
-    
+    if redshift_smearing is not None:
+        # Set on the instance, which is built fresh here on every call, so two tracers or
+        # redshift bins in the same pipeline each get their own kernel. Read back by the
+        # wrapper installed by _patch_folps_bispectrum(), which also forms the triple product.
+        _patch_folps_bispectrum()
+        bispectrum._redshift_smearing = redshift_smearing
+
     if use_fk:
         result = bispectrum.Sugiyama_Bell(
             f0,
@@ -2240,7 +2404,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         Forwarded to ``pt`` if given.  Defaults to :class:`DirectSpectrum2Template`.
     ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
         Bispectrum multipole triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0),
-        (2,2,0), (0,2,2), (1,1,2).
+        (2,2,0), (2,0,2), (0,2,2), (1,1,2), (2,2,2).
     prior_basis : str, default='physical_aap'
         Bias / counterterm / stochastic parameterization:
 
@@ -2257,8 +2421,21 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     model : str, default='FOLPSD'
     damping : str, default='lor'
     precision : tuple, default=(8, 10, 10)
+        Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.
     renormalized : bool, default=True
     interpolation_method : str, default='linear'
+    redshift_smearing : callable or None, default=None
+        Damping from residual redshift errors; see :class:`RedshiftSmearing`.  Supply the same
+        **single-field** characteristic function :math:`D(k\mu)`: here it enters as
+        :math:`D(k_1\mu_1) D(k_2\mu_2) D(k_3\mu_3)`, one factor per field, since the three
+        galaxies are displaced independently -- unlike the power spectrum, where a pair gives
+        :math:`D^2`.
+
+        It multiplies the full integrand, stochastic terms included, and uses the *observed*
+        (pre-AP) :math:`k_i \mu_i`. Since folps offers no hook for this, it is applied by a
+        wrapper installed on ``BispectrumCalculator.bispectrum``
+        (:func:`_patch_folps_bispectrum`), driven by a per-call instance attribute so that
+        several tracers or redshift bins each get their own kernel.
 
     Reference
     ---------
@@ -2310,12 +2487,13 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)  # no cross (bispectra not implemented)
 
     def __init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
-                 prior_basis='physical_aap', tracers=None, params=None, **kwargs):
+                 prior_basis='physical_aap', redshift_smearing=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
+        self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
         if k is None:
             k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
@@ -2329,7 +2507,8 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                       prior_basis='physical_aap', fsat=None, sigv=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(8, 10, 10),
-                      renormalized=True, interpolation_method='linear', tracers=None, **kwargs):
+                      renormalized=True, interpolation_method='linear', redshift_smearing=None,
+                      tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._nbar = float(nbar)
@@ -2379,7 +2558,9 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                     self.snb0.value / self._nbar, self.sn0.value / self._nbar, self.X_FoG.value]
 
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
-        self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme, **self._options)
+        redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
+        self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme,
+                                                                redshift_smearing=redshift_smearing, **self._options)
         return self.poles
 
     def tree_flatten(self):
@@ -3553,13 +3734,15 @@ class COMETPTSpectrum2Poles(Calculator):
 # renamed to FOLPSD's names, so the two codes' physical_aap parameters are literally the same
 # names for the same physical quantities, with the same normalization (see the correspondence
 # table in the comparison notebooks).  comet's own names are kept for its native bases.
-# Not renamed: NP22 (extra k^2 L_2 stochastic), NB0 (extra bispectrum constant) and cnloB have
-# no FOLPSD counterpart; `avir` keeps its name deliberately -- FOLPSD's X_FoG is *not* the same
-# knob for the power spectrum (it depends on damping_method / use_GTNS), and neither is a
-# parameter of the prior document.
+# NP22 has no FOLPSD counterpart -- it is an extra pure-quadrupole k^2 stochastic freedom --
+# but it is renamed 'sn22' anyway, to sit in the same s_n family as sn0 / sn2 rather than read
+# as a leftover comet name.
+# Not renamed: NB0 (extra bispectrum constant) and cnloB have no FOLPSD counterpart; `avir`
+# keeps its name deliberately -- FOLPSD's X_FoG is *not* the same knob for the power spectrum
+# (it depends on damping_method / use_GTNS), and neither is a parameter of the prior document.
 _COMET_PHYSICAL_NAMES = {'b2d': 'b2', 'bk2': 'bs', 'btd': 'b3',
                          'a0': 'alpha0', 'a2': 'alpha2', 'a4': 'alpha4',
-                         'NP0': 'sn0', 'NP20': 'sn2', 'MB0': 'snb0'}
+                         'NP0': 'sn0', 'NP20': 'sn2', 'NP22': 'sn22', 'MB0': 'snb0'}
 
 
 def _comet_physical_name(name, prior_basis):
@@ -3653,9 +3836,13 @@ class COMETTracerSpectrum2Poles(Calculator):
                     Parameter('alpha0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_0'),
                     Parameter('alpha2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_2'),
                     Parameter('alpha4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\alpha_4'),
-                    Parameter('sn0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=2.), latex=R's_{n,0}'),
-                    Parameter('sn2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R's_{n,2}'),
-                    Parameter('NP22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R'N^P_{2, 2}'),
+                    # Same priors as FOLPSTracerSpectrum2Poles' physical basis: these are the
+                    # same physical quantities with the same normalization, so a differing prior
+                    # width would show up as a model difference in a FOLPSD/COMET comparison
+                    # (sn2 is analytically marginalized, so its width enters the marginal likelihood).
+                    Parameter('sn0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,0}'),
+                    Parameter('sn2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,2}'),
+                    Parameter('sn22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R's_{n,22}'),
                 ]
             else:
                 params += [
@@ -3880,7 +4067,7 @@ class COMETTracerSpectrum2Poles(Calculator):
                 # no k^4 column). comet's columns are 1, k^2 and k^2 L_2(mu), so SN_2's
                 # k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)] feeds *both* k^2 columns: NP20 is SN_2,
                 # matching FOLPSD's sn2 (and its fsat sigma_v^2 prior normalization).
-                # NP22 is then an extra pure-quadrupole freedom with no document counterpart,
+                # sn22 is then an extra pure-quadrupole freedom with no document counterpart,
                 # added on top; it is 0 by default.
                 NP0 = NP0 / A_AP / self._nbar
                 sn2 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2

@@ -332,7 +332,12 @@ class Variable(Node):
                             latex = r'%s_{%s, %s}' % (match.group(1), match.group(2), latex_namespace)
                         break
                     elif force_namespace or (auto_namespace and add_namespace(namespace)):
-                        latex = r'%s_{%s}' % (self._latex, latex_namespace)
+                        # The namespace could not be merged into a trailing subscript. If the latex
+                        # already carries one elsewhere (e.g. r'v_\mathrm{smear}', r'\Omega_\mathrm{m}'),
+                        # appending a second one gives 'a_b_{ns}', which mathtext rejects as a double
+                        # subscript; brace the base so the appended subscript applies to the whole.
+                        base = r'{%s}' % self._latex if '_' in self._latex else self._latex
+                        latex = r'%s_{%s}' % (base, latex_namespace)
             if inline:
                 latex = '${}$'.format(latex)
             return latex

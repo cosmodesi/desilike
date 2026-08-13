@@ -2650,7 +2650,9 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.template = template
         self.template.update(with_now='peakaverage')
 
-        self.mu0 = Parameter('mu0', value=0., fixed=False,
+        # Fixed at the GR limit (0.) by default, like the other MG parameters below;
+        # fixed=False sampling is opt-in (only for model='HDKI', mg_variant='mu_OmDE').
+        self.mu0 = Parameter('mu0', value=0., fixed=True,
                               prior=dict(dist='uniform', limits=[-3., 1.]),
                               ref=dict(dist='norm', loc=0., scale=0.05), latex=r'\mu_0')
         self.beta_1 = Parameter('beta_1', value=1., fixed=True, latex=r'\beta_1')
@@ -2708,6 +2710,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         model_u = self._model.strip().upper()
         variant_u = (self._mg_variant or '').strip().upper()
         self._is_binning = (model_u == 'PHENOM' and variant_u == 'BINNING')
+        self._is_bz = (model_u == 'HDKI' and variant_u == 'BZ')
         # The JAX/diffrax binning route does not yet support the internal neutrino
         # correction or the numba RHS. Those cases use the eager builder.
         self._use_binning_jax = (
@@ -2806,8 +2809,20 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         Om = self.template.cosmo['Omega_m']
         xnow = -3.912023
         mg_kwargs = self._mg_kwargs()
+        # ``k_TGR``/``k_c``/``k_S``/``k_tw`` (binning) and ``lambda_1`` (BZ) are fixed by the
+        # user in isitgr's native units (Mpc^-1 for the wavenumber-type binning pivots, Mpc for
+        # the length-type BZ pivot), but fkptjax's own ``k`` (self.template.k) is in h/Mpc.
+        # Wavenumber-type pivots convert by dividing by h (k[h/Mpc] = k[Mpc^-1]/h); the
+        # length-type BZ pivot converts by multiplying by h (ell[Mpc/h] = ell[Mpc]*h).
+        if self._is_bz:
+            h = self.template.cosmo['h']
+            mg_kwargs['lambda_1'] = mg_kwargs['lambda_1'] * h
         if self._is_binning:
-            mg_kwargs.update(self._binning_kwargs)
+            h = self.template.cosmo['h']
+            binning_kwargs = dict(self._binning_kwargs)
+            for key in ('k_TGR', 'k_c', 'k_S', 'k_tw'):
+                binning_kwargs[key] = binning_kwargs[key] / h
+            mg_kwargs.update(binning_kwargs)
 
         neutrino_correction = self._get_neutrino_correction(
             self.template.cosmo,

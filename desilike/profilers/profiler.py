@@ -1,5 +1,4 @@
 """Base class for profilers."""
-# TODO: expand functionality such as warm starts
 # TODO: should fail if points added are outside limits
 
 import json
@@ -51,7 +50,8 @@ class Profiler(BaseClass):
         if directory is not None:
             directory = Path(directory)
             if directory.suffix:
-                raise ValueError("The directory cannot have a suffix.")
+                msg = "The directory cannot have a suffix."
+                raise ValueError(msg)
             if self.pool.main:
                 directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
@@ -106,7 +106,7 @@ class Profiler(BaseClass):
                 if not self.samples.get_flag('optimize', param)[i]:
                     self.fixed_params[i][param] = self.samples[i][param]
 
-    def add_single_sample(self, sample):
+    def add_single_sample(self, param_dict):
         """Add a parameter combination to optimize.
 
         Parameters
@@ -120,14 +120,15 @@ class Profiler(BaseClass):
             If a parameter is not described in the likelihood.
 
         """
-        for param in sample:
+        for param in param_dict:
             if param not in self.params:
                 msg = f"Unkown parameter '{param}'."
                 raise ValueError(msg)
 
-        samples = Samples(**{key: [value, ] for key, value in sample.items()})
+        samples = Samples(**{key: [value, ] for key, value in
+                             param_dict.items()})
         for param in self.params:
-            if param not in sample:
+            if param not in param_dict:
                 samples[param] = [np.nan, ]
                 samples.set_flag('optimize', param, True)
             else:
@@ -139,12 +140,12 @@ class Profiler(BaseClass):
         """Add finding the global optimum."""
         self.add_single_sample({})
 
-    def add_manual_grid(self, grid):
+    def add_manual_grid(self, param_dict_grid):
         """Manually add parameter grid to optimize.
 
         Parameters
         ----------
-        grid : dict
+        param_dict_grid : dict
             Parameter grid to profile, i.e., ``dict(a=[0, 1, 2])`` implies
             that the maximum likelihood is found for :math:`a=0`, :math:`a=1`,
             and :math:`a=2`. If multiple parameters are specified, all
@@ -157,16 +158,17 @@ class Profiler(BaseClass):
             the likelihood.
 
         """
-        if not grid:
+        if not param_dict_grid:
             msg = "You must specify at least one parameter."
             raise ValueError(msg)
-        for param in grid:
+        for param in param_dict_grid:
             if param not in self.params:
                 msg = f"Unkown parameter '{param}'."
                 raise ValueError(msg)
 
         # Get all combinations.
-        samples = dict(zip(grid.keys(), np.meshgrid(*grid.values())))
+        samples = dict(zip(param_dict_grid.keys(),
+                           np.meshgrid(*param_dict_grid.values())))
         samples = {key: value.flatten() for key, value in samples.items()}
 
         samples = Samples(**samples)
@@ -179,45 +181,52 @@ class Profiler(BaseClass):
 
         self._add_samples(samples)
 
-    def _vector_to_params(self, vector, index):
+    def _normalize(self, theta_i, param, inverse=False):
+        a = self.limits[param][0]
+        b = self.limits[param][1] - self.limits[param][0]
+        if inverse:
+            return a + b * theta_i
+        else:
+            return (theta_i - a) / b
+
+    def _vector_to_params(self, theta_var, index):
         """Convert an array of varied parameters to a (complete) dictionary.
 
         Parameters
         ----------
-        vector : numpy.ndarray
+        theta_var : numpy.ndarray
             Array of varied parameters normalized to [0, 1].
         index : int
             Index of the fixed parameters.
 
         Returns
         -------
-        params : dict
-            Dictionary including (not normalized) varied and fixed parameters.
+        param_dict : dict
+            Dictionary of varied and fixed parameters. The parameters are not
+            normalized.
 
         Raises
         ------
         ValueError
-            If ``vector`` has the wrong length.
+            If ``theta`` has the wrong length.
 
         """
-        if len(vector) != len(self.params) - len(self.fixed_params[index]):
+        if len(theta_var) != len(self.params) - len(self.fixed_params[index]):
             msg = "Incorrect number of parameters."
             raise ValueError(msg)
 
         varied_params = [p for p in self.params if p not in
                          self.fixed_params[index]]
-        a = np.array([self.limits[key][0] for key in varied_params])
-        b = np.array([self.limits[key][1] - self.limits[key][0] for key in
-                      varied_params])
-        vector = a + b * vector
-        return dict(zip(varied_params, vector)) | self.fixed_params[index]
+        theta_var = [self._normalize(theta_i, key, inverse=True) for
+                     theta_i, key in zip(theta_var, varied_params)]
+        return dict(zip(varied_params, theta_var)) | self.fixed_params[index]
 
-    def _cost_function(self, params, index=0):
+    def _cost_function(self, theta_var, index=0):
         """Cost function to optimize.
 
         Parameters
         ----------
-        params : numpy.ndarray or dict
+        theta_var : numpy.ndarray or dict
             Array of varied parameters normalized to [0, 1]. Alternatively,
             can be a dictionary listing all parameters.
         index : int, optional
@@ -229,55 +238,78 @@ class Profiler(BaseClass):
             Cost function value.
 
         """
-        if not isinstance(params, dict):
-            params = self._vector_to_params(params, index=index)
+        if isinstance(theta_var, dict):
+            param_dict = theta_var
+        else:
+            param_dict = self._vector_to_params(theta_var, index)
 
         if self.neg_cost_key == 'log_likelihood':
-            return - (self.likelihood(params) -
-                      self.likelihood.all_params.prior(**params))
+            return - (self.likelihood(param_dict) -
+                      self.likelihood.all_params.prior(**param_dict))
 
-        return - self.likelihood(params)
+        return - self.likelihood(param_dict)
 
-    def _get_start(self, n, max_init_attempts=100):
-        """Generate cold-start samples.
+    def _get_start(self, n, warm=False, max_init_attempts=100):
+        """Generate starting positions for all samples.
 
         This should only be called by the main process while the others are
         waiting.
 
         Parameters
         ----------
+        n : int
+            Number of starts per sample.
+        warm : bool, optional
+            If False, starting samples are drawn uniformly from within the
+            limits over which the likelihood is defined. If True, they are
+            instead drawn uniformly from the range of best-fit values. Default
+            is False.
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each sample. Default is
             100.
 
         Returns
         -------
-        index : numpy.ndarray
-            Indices corresponding to the sample.
-        x_0 : list of numpy.ndarray
+        idx : numpy.ndarray
+            Sample indeces.
+        theta_var : list of numpy.ndarray
             Starting positions.
 
         Raises
         ------
         ValueError
             If a finite cost function value cannot be found for all samples
-            after ``max_init_attempts``.
+            after ``max_init_attempts``. If ``warm_start=True`` but not all
+            samples have been optimized from a cold start.
 
         """
-        index = np.repeat(np.arange(len(self.samples)), n)
-        x_0 = [None] * len(index)
-        cost = np.repeat(np.inf, len(x_0))
+        idx = np.repeat(np.arange(len(self.samples)), n)
+        theta_var = [None] * len(idx)
+        cost = np.repeat(np.inf, len(theta_var))
+
+        if not warm:
+            limits = {param: (0, 1) for param in self.params}
+        else:
+            if np.any(self.samples[self.neg_cost_key] == -np.inf):
+                msg = "Not all samples initialized. Warm start not available."
+                raise ValueError(msg)
+            limits = {param: (
+                self._normalize(np.amin(self.samples[param]), param),
+                self._normalize(np.amax(self.samples[param]), param)) for
+                param in self.params}
 
         for _ in range(max_init_attempts):
 
-            for i in range(len(x_0)):
+            for i in range(len(theta_var)):
                 if np.isfinite(cost[i]):
                     pass
-                n_free = len(self.params) - len(self.fixed_params[index[i]])
-                x_0[i] = self.rng.uniform(size=n_free)
+                theta_var[i] = []
+                for param in self.params:
+                    if param not in self.fixed_params[idx[i]]:
+                        theta_var[i].append(self.rng.uniform(*limits[param]))
 
-            args = [self._vector_to_params(x, i) for i, x, c in zip(
-                index, x_0, cost) if not np.isfinite(c)]
+            args = [self._vector_to_params(t, i) for t, i, c in
+                    zip(theta_var, idx, cost) if not np.isfinite(c)]
             new_cost = self.pool.map(self._cost_function, args)
             cost[~np.isfinite(cost)] = new_cost
 
@@ -289,14 +321,14 @@ class Profiler(BaseClass):
                    f"{max_init_attempts:d} attempts.")
             raise ValueError(msg)
 
-        return index, x_0
+        return idx, theta_var
 
     def _run_optimize(self, optimize, args, **kwargs):
-        index, x_0, rng = args
+        theta_var, index, rng = args
         cost_function = partial(self._cost_function, index=index)
-        if len(x_0) == 0:
-            return x_0, cost_function(x_0), True
-        return optimize(cost_function, x_0, rng, **kwargs)
+        if len(theta_var) == 0:
+            return theta_var, cost_function(theta_var), True
+        return optimize(cost_function, theta_var, rng, **kwargs)
 
     @from_main
     def run(self, n_per_iter=10, max_iter=10, tol=1e-3, warm_start=False,
@@ -312,11 +344,11 @@ class Profiler(BaseClass):
             Maximum number of iterations. Default is 10.
         tol : float, optional
             Optimization stops if maximum improvement accross all samples
-            drops below ``tol`` between optimizations. Default is 1e-2.
+            drops below ``tol`` between iterations. Default is 1e-2.
         warm_start : bool, optional
-            If True, starting positions are derived from interpolating
-            previous points. This can only be done if the profiler was
-            run with ``warm_start=False`` before.
+            If True, starting positions are limited to the range of
+            best-fit parameters thus far. This can only be done if the profiler
+            was run before.
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each sample. Default is
             100.
@@ -353,13 +385,14 @@ class Profiler(BaseClass):
         run_optimize = partial(self._run_optimize, optimize, **optimize_kwargs)
 
         for _ in range(max_iter):
-            index, x_0 = self._get_start(
-                n_per_iter, max_init_attempts=max_init_attempts)
+            idx, theta_var = self._get_start(
+                n_per_iter, warm=warm_start,
+                max_init_attempts=max_init_attempts)
             result = self.pool.map(
-                run_optimize, zip(index, x_0, self.rng.spawn(len(x_0))))
+                run_optimize, zip(theta_var, idx, self.rng.spawn(len(idx))))
 
             impr = np.zeros(len(self.samples))
-            for i, (x_min, f_min, success) in zip(index, result):
+            for i, (x_min, f_min, success) in zip(idx, result):
                 if f_min < -self.samples[self.neg_cost_key][i]:
                     impr[i] = -self.samples[self.neg_cost_key][i] - f_min
                     params = self.samples[i]

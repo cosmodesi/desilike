@@ -544,7 +544,21 @@ class BaseSampler(ABC):
         gauss_flat_cols = np.concatenate([np.arange(col, col + size)
                                           for param, size, col in gauss_param_sizes]).astype('i4')
 
+        # Hard prior limits of the Gaussian-group params, for PPF clipping: the proposal
+        # must never emit a point outside the support -- the target density is zero there,
+        # and samplers that logit-transform bounded dimensions using these limits (PocoMC's
+        # scaler) turn out-of-bounds draws into NaNs that poison their preconditioner.
+        gauss_limits = np.array([np.asarray(param.prior.limits, dtype='f8')
+                                 for param, size, col in gauss_param_sizes
+                                 for _ in range(size)])
+        margin = 1e-7 * np.where(np.isfinite(gauss_limits[:, 1] - gauss_limits[:, 0]),
+                                 gauss_limits[:, 1] - gauss_limits[:, 0], 1.)
+
         # ── store ─────────────────────────────────────────────────────────────
+        self._gauss_low_orig     = jnp.array(np.where(np.isfinite(gauss_limits[:, 0]),
+                                                      gauss_limits[:, 0] + margin, -np.inf))
+        self._gauss_high_orig    = jnp.array(np.where(np.isfinite(gauss_limits[:, 1]),
+                                                      gauss_limits[:, 1] - margin, np.inf))
         self._gauss_mu_orig      = jnp.array(mu_gauss_orig)
         self._gauss_L_orig       = jnp.array(L_gauss)
         self._gauss_precision    = jnp.array(precision)
@@ -614,6 +628,9 @@ class BaseSampler(ABC):
             # L has zero entries (diagonal L) and u=0/1 gives z=±inf.
             z = jnp.clip(jax.scipy.stats.norm.ppf(sample[:n_gauss]), -1e38, 1e38)
             x_gauss = self._gauss_mu_orig + self._gauss_L_orig @ z
+            # Clip to the hard prior limits (see _set_gaussian_proposal): the support edge,
+            # not beyond it.
+            x_gauss = jnp.clip(x_gauss, self._gauss_low_orig, self._gauss_high_orig)
             x_orig = jnp.zeros(self.ndim).at[self._gauss_flat_cols].set(x_gauss)
             # Individual group: per-param PPF
             u_col = n_gauss

@@ -2011,9 +2011,17 @@ class FOLPSPTSpectrum2Poles(Calculator):
         — no access to ``self.template``, so this works with emulated calculators.
         ``self.table[0]`` is the loop k-grid; ``self.table[1]`` is pk_lin;
         ``self.table_now[1]`` is pk_lin_now; ``self.table[2] * self.f0`` is fk.
+
+        The k-grid is detached: it is a fixed grid, but an emulated calculator emits it as a
+        traced output (the Taylor emulator expands every ``tree_flatten`` child, with all
+        non-constant coefficients exactly zero for this one). folps then interpolates the power
+        spectrum on it, and differentiating ``jnp.interp`` with respect to its own abscissa is
+        NaN at one node -- which ``0 * NaN = NaN`` propagates into every cosmological gradient,
+        breaking gradient-based samplers. The true gradient through a constant grid is zero, so
+        ``stop_gradient`` leaves values bit-identical.
         """
         # For emulator
-        k_pkl_pklnw_fk = jnp.array([self.table[0], self.table[1], self.table_now[1], self.table[2] * self.f0])
+        k_pkl_pklnw_fk = jnp.array([jax.lax.stop_gradient(self.table[0]), self.table[1], self.table_now[1], self.table[2] * self.f0])
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
@@ -2884,12 +2892,17 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when emulated).
         Includes ``calA``/``calAp`` (beyond-EdS kernel constants) in ``k_pkl_pklnw_fk``, unlike
         the FOLPS analogue, since they matter when ``beyond_eds=True``.
+
+        The k-grid is detached for the same reason as in
+        :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`: emulated, it arrives as
+        a traced (but constant) output, and differentiating folps' interpolation with respect to
+        its own abscissa gives NaN gradients.
         """
         calA, calAp = self._kernel_constants[0], self._kernel_constants[1]
         calA_arr = jnp.ones_like(self._table_w[0]) * calA
         calAp_arr = jnp.ones_like(self._table_w[0]) * calAp
         k_pkl_pklnw_fk = jnp.array([
-            self._table_w[0], self._table_w[1], self._table_now[1], self._table_w[2] * self.f0,
+            jax.lax.stop_gradient(self._table_w[0]), self._table_w[1], self._table_now[1], self._table_w[2] * self.f0,
             calA_arr, calAp_arr,
         ])
         return _get_spectrum3poles_folps(

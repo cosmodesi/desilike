@@ -1113,6 +1113,14 @@ class MCMCSampler(BaseSampler):
                 k_new._rng = self._group_rngs[batch_start]
                 self._kernels.append(k_new)
 
+        # Nominal number of steps per kernel call. The first call is short by the samples already
+        # present (typically the initial position, i.e. one step), and a kernel that compiles its
+        # sampling loop for a given length would otherwise recompile once the full-length batches
+        # start. Kernels may ignore this.
+        if self.pool.main:
+            for kernel in self._kernels:
+                kernel.nsteps_hint = min(check_every, save_every, max_steps)
+
         # Initialise all local runs.
         for local_idx in range(self._runs_per_group):
             if self._round_samples[local_idx] is None:

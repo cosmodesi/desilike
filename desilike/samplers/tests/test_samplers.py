@@ -441,3 +441,29 @@ if __name__ == '__main__':
     likelihood = likelihood()
     sampler = samplers.Sampler(likelihood, kernel=samplers.PocoMC(n_effective=200, n_active=100), rng=42)
     results = sampler.run(n_total=100, n_evidence=100)
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('key', ['numpyro_nuts', 'numpyro_hmc', 'numpyro_barker', 'numpyro_sa'])
+def test_kernel_nparallel_batches(likelihood, key):
+    """Vectorized chains keep sampling across several kernel calls.
+
+    NumPyro caches its compiled functions on the kernel instance, so a multi-chain run that
+    wrapped that kernel in a fresh MCMC for the second batch used to raise
+    "vmap ... rank should be at least 1"; and since the first batch is short by the samples
+    already present, the compiled sample count changed on the second batch too.  ``check_every``
+    here is small enough that ``Sampler.run`` issues several calls: a short first one, then
+    full-length ones.
+    """
+    pytest.importorskip('numpyro')
+    nparallel, check_every, max_steps = 4, 10, 30
+    kernel = (SAMPLER.get(key) or SAMPLER_RUNS[key])()
+    sampler = samplers.Sampler(likelihood, kernel=kernel, nparallel=nparallel, rng=42)
+    results = sampler.run(min_steps=max_steps, max_steps=max_steps, check_every=check_every,
+                          adaptation=dict(steps=50))
+
+    if sampler.mpicomm.rank == 0:
+        for name in ['a', 'b']:
+            values = np.asarray(results[name])
+            assert values.size, f'{key}: no samples returned'
+            assert np.all(np.isfinite(values)), f'{key}: non-finite samples'

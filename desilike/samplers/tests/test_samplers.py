@@ -287,10 +287,10 @@ def test_kernel_multiple_chains(likelihood, key):
         assert len(chains_10) == nchains
 
 
-# ── PocoMC Gaussian prior ─────────────────────────────────────────────────────
+# ── PocoMC Gaussian proposal ──────────────────────────────────────────────────
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('rescale,use_prior', [
+@pytest.mark.parametrize('rescale,use_proposal', [
     (False, False),
     (True,  False),
     ('diag', False),
@@ -300,11 +300,11 @@ def test_kernel_multiple_chains(likelihood, key):
     ('diag', True),
     ('full', True),
 ])
-def test_pocomc_gaussian_prior(rescale, use_prior):
-    """PocoMC runs without error under all AffineConditioner × prior combinations.
+def test_pocomc_gaussian_proposal(rescale, use_proposal):
+    """PocoMC runs without error under all AffineConditioner × proposal combinations.
 
     Parameters have Gaussian priors with hard bounds to exercise both the
-    Gaussian-prior branch and the per-parameter bound clipping.
+    Gaussian-proposal branch and the per-parameter bound clipping.
     """
     pytest.importorskip('pocomc')
     from desilike.samples import Covariance
@@ -328,9 +328,9 @@ def test_pocomc_gaussian_prior(rescale, use_prior):
 
     graph = compile(Posterior(Likelihood(a, b), Prior(a, b)))
 
-    prior_cov = None
-    if use_prior:
-        prior_cov = Covariance(np.diag([0.15**2, 0.5**2]), params=[a, b])
+    proposal_cov = None
+    if use_proposal:
+        proposal_cov = Covariance(np.diag([0.15**2, 0.5**2]), params=[a, b])
 
     covariance = None
     if rescale in ('diag', 'full'):
@@ -342,8 +342,69 @@ def test_pocomc_gaussian_prior(rescale, use_prior):
     conditioner = samplers.AffineConditioner(covariance=covariance, rescale=rescale)
     sampler = samplers.Sampler(
         graph, kernel=samplers.PocoMC(n_effective=100, n_active=50),
-        rng=42, conditioner=conditioner, prior=prior_cov)
+        rng=42, conditioner=conditioner, proposal=proposal_cov)
     sampler.run(n_total=50, n_evidence=0)
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('kind', ['covariance', 'generic'])
+def test_pocomc_proposal_accuracy(likelihood, kind):
+    """A shifted, over-dispersed proposal must leave the posterior unbiased.
+
+    The tempered target is ``proposal * (posterior / proposal)^beta``, so at beta = 1 the
+    samples follow the exact posterior for any covering proposal; the proposal only shapes
+    the annealing path.  Analytic posterior of the `likelihood` fixture:
+    a ~ N(0.4, 1/sqrt(200)), b ~ N(0.6, 1/sqrt(10)).  The proposal is shifted by 1 sigma
+    and 1.5x wider — the supported (over-covering) regime.  A proposal 30% *narrower* was
+    measured to leave 5-17% residual under-dispersion (PocoMC's rejuvenation does not fully
+    re-expand an under-covered start), which is why inflation is required, and why this
+    test does not exercise the under-dispersed direction.
+
+    'generic' passes the same Gaussian through the object interface (logpdf/ppf) instead
+    of a Covariance, covering the custom-proposal code path.
+    """
+    pytest.importorskip('pocomc')
+    from desilike.samples import Covariance
+
+    analytic_mean = {'a': 0.4, 'b': 0.6}
+    analytic_std = {'a': 1. / np.sqrt(200.), 'b': 1. / np.sqrt(10.)}
+    mu = np.array([analytic_mean['a'] + analytic_std['a'], analytic_mean['b'] - analytic_std['b']])
+    sigma = 1.5 * np.array([analytic_std['a'], analytic_std['b']])
+
+    if kind == 'covariance':
+        params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+        proposal = Covariance(np.diag(sigma**2), params=[params['a'].clone(value=mu[0]),
+                                                         params['b'].clone(value=mu[1])])
+    else:
+        from jax.scipy import stats as jstats
+        from jax.scipy.special import ndtri
+
+        class GaussianProposal:
+            """Diagonal Gaussian through the generic logpdf/ppf interface (JAX-traceable)."""
+
+            def logpdf(self, x):
+                return jnp.sum(jstats.norm.logpdf(x, loc=mu, scale=sigma))
+
+            def ppf(self, u):
+                return mu + sigma * jnp.clip(ndtri(u), -1e38, 1e38)
+
+        proposal = GaussianProposal()
+
+    sampler = samplers.Sampler(likelihood, kernel=samplers.PocoMC(n_effective=256, n_active=128),
+                               rng=42, proposal=proposal)
+    samples = sampler.run(n_total=1000, n_evidence=0)
+    if samples is None:  # non-main ranks
+        return
+    weights = np.asarray(samples.aweight)
+    weights = weights / weights.sum()
+    for name in ('a', 'b'):
+        values = np.ravel(samples[name].value)
+        mean = np.sum(weights * values)
+        std = np.sqrt(np.sum(weights * (values - mean)**2))
+        assert abs(mean - analytic_mean[name]) < 0.15 * analytic_std[name], \
+            f'{name}: mean {mean} vs analytic {analytic_mean[name]} +- {analytic_std[name]}'
+        assert abs(std / analytic_std[name] - 1.) < 0.15, \
+            f'{name}: std {std} vs analytic {analytic_std[name]}'
 
 
 # ── MH fast-slow decomposition ────────────────────────────────

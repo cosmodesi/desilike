@@ -403,7 +403,8 @@ class BaseSampler(ABC):
             conditioner = AffineConditioner()
         self.conditioner = conditioner
         self.conditioner.init(self.varied_params)
-        self._gauss_mu_orig = None  # sentinel: no Gaussian prior
+        self._gauss_mu_orig = None  # sentinel: no Gaussian proposal
+        self._proposal_custom = None  # sentinel: no generic (logpdf/ppf object) proposal
 
         # ── MPI communicator ─────────────────────────────────────────────────
         self.mpicomm = mpicomm
@@ -439,25 +440,74 @@ class BaseSampler(ABC):
 
         self.set_rng(rng=rng)
 
-    def _set_gaussian_prior(self, prior):
-        """Build a Gaussian prior from a :class:`~desilike.samples.Covariance` object.
+    def _set_proposal(self, proposal):
+        """Install *proposal* as the starting / annealing distribution for population kernels.
 
-        Parameters present in *prior* get a joint multivariate-Gaussian prior centred on
-        ``prior.center`` with covariance ``prior.value``.  Parameters absent from *prior*
-        keep their existing per-parameter prior (uniform / normal / …).
+        The proposal replaces the prior as the beta = 0 distribution of the tempered path.
+        This does **not** change the inferred posterior: kernels receive the likelihood as
+        ``log_posterior - log_proposal`` (see :meth:`_likelihood_logpdf_one`), so the
+        tempered target ``proposal * likelihood^beta`` equals the exact posterior at
+        beta = 1 for *any* proposal, and the kernel's evidence estimate remains the true
+        one.  The proposal only shapes the annealing path.
+
+        **The proposal must over-cover the posterior.** Measured on an analytic Gaussian
+        target (`test_pocomc_proposal_accuracy`): a proposal 1.5-2x wider than the
+        posterior (shifted by 1 sigma) recovers moments to better than 0.06 sigma, while a
+        proposal 30% *narrower* leaves 5-17% residual under-dispersion that PocoMC's
+        rejuvenation does not repair.  Inflate: 1.5-2x the estimated covariance.
+
+        Parameters
+        ----------
+        proposal : Covariance or object
+            Either a :class:`~desilike.samples.Covariance` (Gaussian proposal centred on
+            ``proposal.center``, see :meth:`_set_gaussian_proposal`), or any object with
+
+            - ``logpdf(x)``: log-density of a flat ``(ndim,)`` point in original parameter
+              space (varied-parameter order); must be JAX-traceable,
+            - ``ppf(u)``: unit-cube ``(ndim,)`` to original parameter space (used by
+              nested samplers and PocoMC to draw the initial population).
+        """
+        from ..samples import Covariance as _Covariance
+        if isinstance(proposal, _Covariance):
+            return self._set_gaussian_proposal(proposal)
+        for required in ('logpdf', 'ppf'):
+            if not callable(getattr(proposal, required, None)):
+                raise TypeError(f'proposal must be a Covariance or expose a callable {required!r}, '
+                                f'got {type(proposal)}')
+        self._proposal_custom = proposal
+
+    def _set_gaussian_proposal(self, proposal):
+        """Build a Gaussian proposal from a :class:`~desilike.samples.Covariance` object.
+
+        The proposal replaces the prior as the *starting / annealing* distribution handed
+        to population kernels (the beta = 0 distribution of the tempered path).  This does
+        **not** change the inferred posterior: kernels receive the likelihood as
+        ``log_posterior - log_proposal`` (see :meth:`_likelihood_logpdf_one`), so the
+        tempered target ``proposal * likelihood^beta`` equals the exact posterior at
+        beta = 1 for *any* proposal, and the kernel's evidence estimate remains the true
+        one.  The proposal only shapes the annealing path: a posterior-shaped Gaussian
+        (e.g. an inflated profiled covariance) shrinks the prior -> posterior annealing
+        distance by orders of magnitude.  The proposal must *over-cover* the posterior
+        (inflate by 1.5-2x); see :meth:`_set_proposal` for the measured failure of
+        under-dispersed proposals.
+
+        Parameters present in *proposal* get a joint multivariate-Gaussian centred on
+        ``proposal.center`` with covariance ``proposal.value``.  Parameters absent from
+        it keep their per-parameter prior (uniform / normal / ...).
 
         Hard prior limits from each parameter's prior distribution are always enforced:
-        the prior logpdf returns ``-inf`` outside those limits, and the PPF clips to them
-        so that ``ppf(0)`` / ``ppf(1)`` return finite hard bounds (used by PocoMC and
-        Dynesty to set the sampling volume).
+        the proposal logpdf returns ``-inf`` outside those limits, and the PPF clips to
+        them so that ``ppf(0)`` / ``ppf(1)`` return finite hard bounds (used by PocoMC
+        and Dynesty to set the sampling volume).
 
         Must be called *after* :meth:`BaseSampler.__init__` (depends on the conditioner).
         Stores the Gaussian parameters in original (pre-conditioner) space so that
         ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``conditioner.forward`` once.
         """
         from ..samples import Covariance as _Covariance
-        if not isinstance(prior, _Covariance):
-            raise TypeError(f'prior must be a Covariance instance, got {type(prior)}')
+        if not isinstance(proposal, _Covariance):
+            raise TypeError(f'proposal must be a Covariance instance, got {type(proposal)}')
+        prior = proposal
 
         param_sizes_list = list(_param_sizes(self.varied_params))
 
@@ -548,13 +598,15 @@ class BaseSampler(ABC):
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
-        When a Gaussian prior is set (via :meth:`_set_gaussian_prior`), the first
+        When a Gaussian proposal is set (via :meth:`_set_gaussian_proposal`), the first
         ``n_gauss`` unit-cube dimensions are mapped through the unconstrained joint
         Cholesky PPF of the Gaussian, and the remaining dimensions map each non-Gaussian
-        param through its individual prior PPF.  Without a Gaussian prior, every param
+        param through its individual prior PPF.  Without a Gaussian proposal, every param
         uses its individual prior PPF.  Either way the result is transformed to the
         sampler's conditioned working space via :meth:`AffineConditioner.inverse`.
         """
+        if self._proposal_custom is not None:
+            return self.conditioner.inverse(jnp.asarray(self._proposal_custom.ppf(sample)))
         if self._gauss_mu_orig is not None:
             n_gauss = self._gauss_flat_cols.size
             # Gaussian group: Cholesky PPF in original space (unconstrained).
@@ -579,13 +631,15 @@ class BaseSampler(ABC):
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        When a Gaussian prior is set, evaluates the unconstrained multivariate-Gaussian
+        When a Gaussian proposal is set, evaluates the unconstrained multivariate-Gaussian
         logpdf for the Gaussian-group params and sums the individual per-param logpdfs
         for the remaining params.
-        Without a Gaussian prior, evaluates each original prior's logpdf after mapping
+        Without a Gaussian proposal, evaluates each original prior's logpdf after mapping
         to original space via :meth:`AffineConditioner.forward`.
         """
         x_orig = self.conditioner.forward(sample)
+        if self._proposal_custom is not None:
+            return self._proposal_custom.logpdf(x_orig)
         if self._gauss_mu_orig is not None:
             # Gaussian group: unconstrained multivariate Gaussian logpdf
             x_gauss = x_orig[self._gauss_flat_cols]
@@ -1256,7 +1310,7 @@ class PopulationSampler(BaseSampler):
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, rng=None, mpicomm=None,
                  output_dir=None, conditioner=None, batch_size=None,
-                 prior=None):
+                 proposal=None):
         self.kernel = kernel
         self.mpicomm = mpicomm
 
@@ -1276,8 +1330,8 @@ class PopulationSampler(BaseSampler):
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
                          conditioner=conditioner, batch_size=batch_size)
-        if prior is not None:
-            self._set_gaussian_prior(prior)
+        if proposal is not None:
+            self._set_proposal(proposal)
 
         # The kernel checkpoint directory for the first (or only) local run.
         kernel_output_dir = self._kernel_output_dir(0)
@@ -1388,7 +1442,7 @@ class PopulationSampler(BaseSampler):
 
 
 def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
-            conditioner=None, batch_size=None, prior=None):
+            conditioner=None, batch_size=None, proposal=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Selects :class:`MCMCSampler`, :class:`EnsembleSampler`, :class:`PopulationSampler`,
@@ -1425,11 +1479,18 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
         ``0`` — one task at a time.
         ``N > 0`` — chunks of N tasks.
         Ignored for :class:`StaticSampler`.
-    prior : Covariance or None, optional
-        Gaussian prior for :class:`PopulationSampler` kernels (PocoMC, Dynesty,
-        Nautilus, …).  The prior is a multivariate Gaussian centred on
-        ``prior.center`` with covariance ``prior.value``; hard per-parameter
-        bounds are always enforced on top.  Ignored for all other kernel types.
+    proposal : Covariance, object, or None, optional
+        Starting / annealing distribution for :class:`PopulationSampler`
+        kernels (PocoMC, Dynesty, Nautilus, …), replacing the prior as the beta = 0
+        distribution of the tempered path.  A :class:`Covariance` gives a multivariate
+        Gaussian centred on ``proposal.center`` with covariance ``proposal.value``
+        (hard per-parameter prior bounds enforced on top); any other object must
+        expose ``logpdf(x)`` and ``ppf(u)`` in original parameter space (see
+        :meth:`BaseSampler._set_proposal`).  The inferred posterior and the evidence
+        are unchanged for any proposal (kernels receive the likelihood as
+        ``log_posterior - log_proposal``); the proposal only shortens the annealing
+        path, and must over-cover the posterior (inflate a fitted covariance by
+        1.5-2x).  Ignored for all other kernel types.
 
     Returns
     -------
@@ -1439,7 +1500,7 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
     if cls is PopulationSampler:
         return cls(posterior, kernel=kernel, nparallel=nparallel, rng=rng,
                    output_dir=output_dir, conditioner=conditioner,
-                   batch_size=batch_size, prior=prior)
+                   batch_size=batch_size, proposal=proposal)
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    conditioner=conditioner)

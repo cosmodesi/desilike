@@ -2930,7 +2930,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.f0 = self._table_state.f0
         self.fk = self._table_state.fk
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
 
         Matches :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles`'s signature
@@ -2945,6 +2945,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (use the FOLPS pt)")
         if use_GTNS not in (None, True):
             raise NotImplementedError(f"use_GTNS={use_GTNS!r} is not supported by the fkptjax pipeline, which always keeps GTNS (use the FOLPS pt)")
+        # fkptjax has no hook for the redshift_smearing damping; accept the kwarg (the caller in
+        # FOLPSTracerSpectrum2Poles.__call__ always passes it) but only the None no-op is supported.
+        if redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing is not supported by the fkptjax pipeline (use the FOLPS pt)')
         from fkptjax.pipelines import poles_from_tables
 
         return poles_from_tables(

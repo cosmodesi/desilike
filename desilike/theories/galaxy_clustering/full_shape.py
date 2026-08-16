@@ -2613,6 +2613,21 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         (not sampled); defaults match the original fkptjax_muMG desilike wrapper.
     mg_params_override : dict, default=None
         Explicit MG parameter overrides, applied on top of the resolved per-model parameters.
+    growth_source : str, default='ode'
+        Where the linear-growth rate f(k) comes from, for model='PHENOM',
+        mg_variant='binning'.
+
+        - 'ode': fkptjax integrates the binned mu growth ODE (previous behaviour).
+        - 'template': take f(k) and f0 from ``template.fk`` / ``template.f0``.
+
+        Use 'template' when the template is served by an emulator. The ODE and the
+        emulated ``P_theta`` are otherwise two independent statements about the same
+        cosmology's growth, with nothing forcing them to agree; 'template' makes the
+        loop kernels and the linear spectrum consistent by construction, and drops
+        the diffrax solve over the full extrapolated k grid. Note this replaces the
+        LINEAR growth only -- with ``beyond_eds=True`` the beyond-EdS kernel constants
+        still come from their own third-order ODE in the MG parameters. Requires an
+        fkptjax whose ``Kfuncs_to_tables_jax`` accepts ``fk``/``f0``.
 
     Notes
     -----
@@ -2639,7 +2654,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                 mg_params_override=None, **kwargs):
+                 mg_params_override=None, growth_source='ode', **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -2679,7 +2694,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                       z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                      mg_params_override=None, **kwargs):
+                      mg_params_override=None, growth_source='ode', **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
         _import_folps()
         self._model = str(model)
@@ -2710,6 +2725,31 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         model_u = self._model.strip().upper()
         variant_u = (self._mg_variant or '').strip().upper()
         self._is_binning = (model_u == 'PHENOM' and variant_u == 'BINNING')
+
+        # growth_source: where f(k) for the linear-growth sector comes from.
+        #   'ode'      -- fkptjax integrates the binned mu growth ODE itself (default,
+        #                 previous behaviour).
+        #   'template' -- take f(k) and f0 from the template, which already derives them
+        #                 as sqrt(P_theta/P_delta) and sqrt(P_theta/P_delta)|_{k->0}.
+        # The second route matters when the template is served by an emulator: the ODE
+        # and the emulated P_theta are then two independent statements about the same
+        # cosmology's growth, and nothing forces them to agree. Taking f(k) from the
+        # template makes the loop kernels and the linear spectrum consistent by
+        # construction, and skips the diffrax solve over the full extrapolated k grid.
+        #
+        # Scope: this replaces the LINEAR growth only. With beyond_eds=True the
+        # beyond-EdS kernel constants still come from their own third-order ODE, which
+        # needs the MG parameters directly (fkptjax.jax_ode.kernel_constants_jax), so
+        # mu1..mu4 remain live either way.
+        self._growth_source = str(growth_source).strip().lower()
+        if self._growth_source not in ('ode', 'template'):
+            raise ValueError(f"growth_source must be 'ode' or 'template', got {growth_source!r}")
+        if self._growth_source == 'template' and not self._is_binning:
+            raise NotImplementedError(
+                "growth_source='template' is only wired for model='PHENOM', "
+                f"mg_variant='binning'; got model={self._model!r}, "
+                f"mg_variant={self._mg_variant!r}")
+
         # The JAX/diffrax binning route does not yet support the internal neutrino
         # correction or the numba RHS. Those cases use the eager builder.
         self._use_binning_jax = (
@@ -2727,6 +2767,13 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 "with include_neutrino_corrections=True. "
                 "Set use_numba=False for neutrino-corrected runs."
             )
+
+        if self._growth_source == 'template' and not self._use_binning_jax:
+            raise NotImplementedError(
+                "growth_source='template' is implemented for the JAX/diffrax binning "
+                "route only; this configuration falls back to the eager builder "
+                "(use_numba=True or include_neutrino_corrections=True), whose "
+                "Kfuncs_to_tables does not take an external f(k).")
 
         self._is_external = not self._use_binning_jax
         if self._use_binning_jax:
@@ -2815,8 +2862,35 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             self.template.cosmo,
             xnow=xnow,
         )
+        if self._growth_source == 'template':
+            # self.template.fk / .f0 are set by the template's own __call__ as
+            # sqrt(P_theta/P_delta) on self.template.k and at k0 = 1e-3 respectively.
+            # Passing f0 explicitly matters: fkptjax would otherwise re-estimate it by
+            # averaging f(k) below f0_kmax, a different definition that would drift
+            # from the template's value.
+            for _attr in ('fk', 'f0'):
+                if getattr(self.template, _attr, None) is None:
+                    raise ValueError(
+                        f"growth_source='template' needs template.{_attr}, which "
+                        f"{type(self.template).__name__} did not set")
+            mg_kwargs['fk'] = self.template.fk
+            mg_kwargs['f0'] = self.template.f0
+
         if self._use_binning_jax:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
+            if self._growth_source == 'template':
+                # Fail loudly on an fkptjax that predates the external-f(k) feature:
+                # **mg_kwargs would otherwise raise a bare TypeError, or worse, a
+                # permissive **kwargs signature would swallow fk and silently keep
+                # solving the ODE -- exactly the inconsistency this option removes.
+                import inspect
+                _sig = inspect.signature(Kfuncs_to_tables_jax).parameters
+                _missing = [p for p in ('fk', 'f0') if p not in _sig]
+                if _missing:
+                    raise NotImplementedError(
+                        f"growth_source='template' needs an fkptjax whose "
+                        f"Kfuncs_to_tables_jax accepts {_missing}; the installed one "
+                        f"does not. Update fkptjax or use growth_source='ode'.")
             table_w, table_now, kernel_constants = Kfuncs_to_tables_jax(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,

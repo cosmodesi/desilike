@@ -2601,8 +2601,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
     model : str, default='HDKI'
         One of 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', 'PHENOM'.
     mg_variant : str, default='mu_OmDE'
-        For model='HDKI': 'mu_OmDE' or 'BZ'. For model='PHENOM': 'binning' (the only
-        supported variant; binned mu/Sigma parameterization).
+        For model='HDKI': 'mu_OmDE', 'BZ', or 'BZ_Mass'. For model='PHENOM': 'binning' (the
+        only supported variant; binned mu/Sigma parameterization).
     beyond_eds : bool, default=True
     use_numba : bool, default=False
         Opt-in numba fast path for the PHENOM/binning MG ODE right-hand side. Only used by
@@ -2614,20 +2614,26 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
     mg_params_override : dict, default=None
         Explicit MG parameter overrides, applied on top of the resolved per-model parameters.
     growth_source : str, default='ode'
-        Where the linear-growth rate f(k) comes from, for model='PHENOM',
-        mg_variant='binning'.
+        Where the linear-growth rate f(k) comes from -- for any model/mg_variant, on both the
+        JAX/diffrax binning route (``Kfuncs_to_tables_jax``) and the eager builder
+        (``Kfuncs_to_tables``, used for non-binning models and for binning with
+        ``use_numba=True``/``include_neutrino_corrections=True``).
 
-        - 'ode': fkptjax integrates the binned mu growth ODE (previous behaviour).
+        - 'ode': fkptjax integrates its own growth ODE (previous behaviour).
         - 'template': take f(k) and f0 from ``template.fk`` / ``template.f0``.
 
-        Use 'template' when the template is served by an emulator. The ODE and the
-        emulated ``P_theta`` are otherwise two independent statements about the same
-        cosmology's growth, with nothing forcing them to agree; 'template' makes the
-        loop kernels and the linear spectrum consistent by construction, and drops
-        the diffrax solve over the full extrapolated k grid. Note this replaces the
-        LINEAR growth only -- with ``beyond_eds=True`` the beyond-EdS kernel constants
-        still come from their own third-order ODE in the MG parameters. Requires an
-        fkptjax whose ``Kfuncs_to_tables_jax`` accepts ``fk``/``f0``.
+        Use 'template' when the template is served by an emulator, or more generally to make
+        the loop kernels and the linear spectrum consistent by construction: the ODE and
+        ``template.fk``/``f0`` (``sqrt(P_theta_cb/P_delta_cb)``) are otherwise two independent
+        statements about the same cosmology's growth, with nothing forcing them to agree.  On
+        the JAX/diffrax route this also drops the diffrax solve over the full extrapolated k
+        grid.  Note this replaces the LINEAR growth only -- with ``beyond_eds=True`` the
+        beyond-EdS kernel constants still come from their own third-order ODE in the MG
+        parameters (``kernel_constants_jax``/``kernel_constants``), and
+        ``include_neutrino_corrections=True``'s correction to the ODE has no effect once ``fk``
+        is supplied externally (the two are redundant, not additive, if combined -- see
+        ``Kfuncs_to_tables``'s docstring). Requires an fkptjax whose ``Kfuncs_to_tables_jax``/
+        ``Kfuncs_to_tables`` accepts ``fk``/``f0``.
 
     Notes
     -----
@@ -2673,6 +2679,13 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.beta_1 = Parameter('beta_1', value=1., fixed=True, latex=r'\beta_1')
         self.lambda_1 = Parameter('lambda_1', value=0., fixed=True, latex=r'\lambda_1')
         self.exp_s = Parameter('exp_s', value=0., fixed=True, latex='s')
+        # BZ_Mass modified-gravity parameters (model='HDKI', mg_variant='BZ_Mass').
+        # Fixed at the GR limit by default; fixed=False sampling is opt-in.
+        self.mu_kinf_BZmass = Parameter('mu_kinf_BZmass', value=1., fixed=True,
+                                         prior=dict(dist='uniform', limits=[0., 3.]),
+                                         ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\mu_{k\to\infty}')
+        self.lambda_a_BZmass = Parameter('lambda_a_BZmass', value=0., fixed=True, latex=r'\lambda_a')
+        self.lambda_dS_BZmass = Parameter('lambda_dS_BZmass', value=0., fixed=True, latex=r'\lambda_{dS}')
         self.fR0_HS = Parameter('fR0_HS', value=1e-15, fixed=True, latex=r'f_{R_0}')
         self.r_c = Parameter('r_c', value=1.e30, fixed=True, latex='r_c')
         # Binned mu/Sigma modified-gravity parameters (model='PHENOM', mg_variant='binning').
@@ -2744,11 +2757,6 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self._growth_source = str(growth_source).strip().lower()
         if self._growth_source not in ('ode', 'template'):
             raise ValueError(f"growth_source must be 'ode' or 'template', got {growth_source!r}")
-        if self._growth_source == 'template' and not self._is_binning:
-            raise NotImplementedError(
-                "growth_source='template' is only wired for model='PHENOM', "
-                f"mg_variant='binning'; got model={self._model!r}, "
-                f"mg_variant={self._mg_variant!r}")
 
         # The JAX/diffrax binning route does not yet support the internal neutrino
         # correction or the numba RHS. Those cases use the eager builder.
@@ -2767,13 +2775,6 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 "with include_neutrino_corrections=True. "
                 "Set use_numba=False for neutrino-corrected runs."
             )
-
-        if self._growth_source == 'template' and not self._use_binning_jax:
-            raise NotImplementedError(
-                "growth_source='template' is implemented for the JAX/diffrax binning "
-                "route only; this configuration falls back to the eager builder "
-                "(use_numba=True or include_neutrino_corrections=True), whose "
-                "Kfuncs_to_tables does not take an external f(k).")
 
         self._is_external = not self._use_binning_jax
         if self._use_binning_jax:
@@ -2802,12 +2803,16 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 out = dict(mu0=self.mu0.value)
             elif variant_u == 'BZ':
                 out = dict(beta_1=self.beta_1.value, lambda_1=self.lambda_1.value, exp_s=self.exp_s.value)
+            elif variant_u in ('BZ_MASS', 'BZMASS'):
+                out = dict(mu_kinf_BZmass=self.mu_kinf_BZmass.value,
+                           lambda_a_BZmass=self.lambda_a_BZmass.value,
+                           lambda_dS_BZmass=self.lambda_dS_BZmass.value)
             elif variant_u in ('EFT_DE', 'EFTDE'):
                 out = dict(self._eft_kwargs)
             else:
                 raise ValueError(
                     f"Unknown mg_variant={self._mg_variant!r} for model='HDKI'. "
-                    "Expected 'mu_OmDE', 'BZ', or 'EFT_DE'."
+                    "Expected 'mu_OmDE', 'BZ', 'BZ_Mass', or 'EFT_DE'."
                 )
         elif model_u == 'PHENOM':
             if variant_u == 'BINNING':
@@ -2902,6 +2907,16 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             )
         else:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
+            if self._growth_source == 'template':
+                # Same defensive check as the JAX/diffrax branch above, for the eager builder.
+                import inspect
+                _sig = inspect.signature(Kfuncs_to_tables).parameters
+                _missing = [p for p in ('fk', 'f0') if p not in _sig]
+                if _missing:
+                    raise NotImplementedError(
+                        f"growth_source='template' needs an fkptjax whose "
+                        f"Kfuncs_to_tables accepts {_missing}; the installed one "
+                        f"does not. Update fkptjax or use growth_source='ode'.")
             table_w, table_now, kernel_constants = Kfuncs_to_tables(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,

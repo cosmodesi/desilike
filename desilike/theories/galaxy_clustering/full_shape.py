@@ -3086,8 +3086,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
     model : str, default='HDKI'
         One of 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', 'PHENOM'.
     mg_variant : str, default='mu_OmDE'
-        For model='HDKI': 'mu_OmDE' or 'BZ'. For model='PHENOM': 'binning' (the only
-        supported variant; binned mu/Sigma parameterization).
+        For model='HDKI': 'mu_OmDE', 'BZ', or 'BZ_Mass'. For model='PHENOM': 'binning' (the
+        only supported variant; binned mu/Sigma parameterization).
     beyond_eds : bool, default=True
     use_numba : bool, default=False
         Opt-in numba fast path for the PHENOM/binning MG ODE right-hand side. Only used by
@@ -3098,6 +3098,27 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         (not sampled); defaults match the original fkptjax_muMG desilike wrapper.
     mg_params_override : dict, default=None
         Explicit MG parameter overrides, applied on top of the resolved per-model parameters.
+    growth_source : str, default='ode'
+        Where the linear-growth rate f(k) comes from -- for any model/mg_variant, on both the
+        JAX/diffrax binning route (``Kfuncs_to_tables_jax``) and the eager builder
+        (``Kfuncs_to_tables``, used for non-binning models and for binning with
+        ``use_numba=True``/``include_neutrino_corrections=True``).
+
+        - 'ode': fkptjax integrates its own growth ODE (previous behaviour).
+        - 'template': take f(k) and f0 from ``template.fk`` / ``template.f0``.
+
+        Use 'template' when the template is served by an emulator, or more generally to make
+        the loop kernels and the linear spectrum consistent by construction: the ODE and
+        ``template.fk``/``f0`` (``sqrt(P_theta_cb/P_delta_cb)``) are otherwise two independent
+        statements about the same cosmology's growth, with nothing forcing them to agree.  On
+        the JAX/diffrax route this also drops the diffrax solve over the full extrapolated k
+        grid.  Note this replaces the LINEAR growth only -- with ``beyond_eds=True`` the
+        beyond-EdS kernel constants still come from their own third-order ODE in the MG
+        parameters (``kernel_constants_jax``/``kernel_constants``), and
+        ``include_neutrino_corrections=True``'s correction to the ODE has no effect once ``fk``
+        is supplied externally (the two are redundant, not additive, if combined -- see
+        ``Kfuncs_to_tables``'s docstring). Requires an fkptjax whose ``Kfuncs_to_tables_jax``/
+        ``Kfuncs_to_tables`` accepts ``fk``/``f0``.
 
     Notes
     -----
@@ -3124,7 +3145,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                 mg_params_override=None, **kwargs):
+                 mg_params_override=None, growth_source='ode', **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -3135,12 +3156,21 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.template = template
         self.template.update(with_now='peakaverage')
 
-        self.mu0 = Parameter('mu0', value=0., fixed=False,
+        # Fixed at the GR limit (0.) by default, like the other MG parameters below;
+        # fixed=False sampling is opt-in (only for model='HDKI', mg_variant='mu_OmDE').
+        self.mu0 = Parameter('mu0', value=0., fixed=True,
                               prior=dict(dist='uniform', limits=[-3., 1.]),
                               ref=dict(dist='norm', loc=0., scale=0.05), latex=r'\mu_0')
         self.beta_1 = Parameter('beta_1', value=1., fixed=True, latex=r'\beta_1')
         self.lambda_1 = Parameter('lambda_1', value=0., fixed=True, latex=r'\lambda_1')
         self.exp_s = Parameter('exp_s', value=0., fixed=True, latex='s')
+        # BZ_Mass modified-gravity parameters (model='HDKI', mg_variant='BZ_Mass').
+        # Fixed at the GR limit by default; fixed=False sampling is opt-in.
+        self.mu_kinf_BZmass = Parameter('mu_kinf_BZmass', value=1., fixed=True,
+                                         prior=dict(dist='uniform', limits=[0., 3.]),
+                                         ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\mu_{k\to\infty}')
+        self.lambda_a_BZmass = Parameter('lambda_a_BZmass', value=0., fixed=True, latex=r'\lambda_a')
+        self.lambda_dS_BZmass = Parameter('lambda_dS_BZmass', value=0., fixed=True, latex=r'\lambda_{dS}')
         self.fR0_HS = Parameter('fR0_HS', value=1e-15, fixed=True, latex=r'f_{R_0}')
         self.r_c = Parameter('r_c', value=1.e30, fixed=True, latex='r_c')
         # Binned mu/Sigma modified-gravity parameters (model='PHENOM', mg_variant='binning').
@@ -3162,7 +3192,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                       z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                      mg_params_override=None, **kwargs):
+                      mg_params_override=None, growth_source='ode', **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
         _import_folps()
         self._model = str(model)
@@ -3193,6 +3223,26 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         model_u = self._model.strip().upper()
         variant_u = (self._mg_variant or '').strip().upper()
         self._is_binning = (model_u == 'PHENOM' and variant_u == 'BINNING')
+
+        # growth_source: where f(k) for the linear-growth sector comes from.
+        #   'ode'      -- fkptjax integrates the binned mu growth ODE itself (default,
+        #                 previous behaviour).
+        #   'template' -- take f(k) and f0 from the template, which already derives them
+        #                 as sqrt(P_theta/P_delta) and sqrt(P_theta/P_delta)|_{k->0}.
+        # The second route matters when the template is served by an emulator: the ODE
+        # and the emulated P_theta are then two independent statements about the same
+        # cosmology's growth, and nothing forces them to agree. Taking f(k) from the
+        # template makes the loop kernels and the linear spectrum consistent by
+        # construction, and skips the diffrax solve over the full extrapolated k grid.
+        #
+        # Scope: this replaces the LINEAR growth only. With beyond_eds=True the
+        # beyond-EdS kernel constants still come from their own third-order ODE, which
+        # needs the MG parameters directly (fkptjax.jax_ode.kernel_constants_jax), so
+        # mu1..mu4 remain live either way.
+        self._growth_source = str(growth_source).strip().lower()
+        if self._growth_source not in ('ode', 'template'):
+            raise ValueError(f"growth_source must be 'ode' or 'template', got {growth_source!r}")
+
         # The JAX/diffrax binning route does not yet support the internal neutrino
         # correction or the numba RHS. Those cases use the eager builder.
         self._use_binning_jax = (
@@ -3238,12 +3288,16 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 out = dict(mu0=self.mu0.value)
             elif variant_u == 'BZ':
                 out = dict(beta_1=self.beta_1.value, lambda_1=self.lambda_1.value, exp_s=self.exp_s.value)
+            elif variant_u in ('BZ_MASS', 'BZMASS'):
+                out = dict(mu_kinf_BZmass=self.mu_kinf_BZmass.value,
+                           lambda_a_BZmass=self.lambda_a_BZmass.value,
+                           lambda_dS_BZmass=self.lambda_dS_BZmass.value)
             elif variant_u in ('EFT_DE', 'EFTDE'):
                 out = dict(self._eft_kwargs)
             else:
                 raise ValueError(
                     f"Unknown mg_variant={self._mg_variant!r} for model='HDKI'. "
-                    "Expected 'mu_OmDE', 'BZ', or 'EFT_DE'."
+                    "Expected 'mu_OmDE', 'BZ', 'BZ_Mass', or 'EFT_DE'."
                 )
         elif model_u == 'PHENOM':
             if variant_u == 'BINNING':
@@ -3298,8 +3352,35 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             self.template.cosmo,
             xnow=xnow,
         )
+        if self._growth_source == 'template':
+            # self.template.fk / .f0 are set by the template's own __call__ as
+            # sqrt(P_theta/P_delta) on self.template.k and at k0 = 1e-3 respectively.
+            # Passing f0 explicitly matters: fkptjax would otherwise re-estimate it by
+            # averaging f(k) below f0_kmax, a different definition that would drift
+            # from the template's value.
+            for _attr in ('fk', 'f0'):
+                if getattr(self.template, _attr, None) is None:
+                    raise ValueError(
+                        f"growth_source='template' needs template.{_attr}, which "
+                        f"{type(self.template).__name__} did not set")
+            mg_kwargs['fk'] = self.template.fk
+            mg_kwargs['f0'] = self.template.f0
+
         if self._use_binning_jax:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
+            if self._growth_source == 'template':
+                # Fail loudly on an fkptjax that predates the external-f(k) feature:
+                # **mg_kwargs would otherwise raise a bare TypeError, or worse, a
+                # permissive **kwargs signature would swallow fk and silently keep
+                # solving the ODE -- exactly the inconsistency this option removes.
+                import inspect
+                _sig = inspect.signature(Kfuncs_to_tables_jax).parameters
+                _missing = [p for p in ('fk', 'f0') if p not in _sig]
+                if _missing:
+                    raise NotImplementedError(
+                        f"growth_source='template' needs an fkptjax whose "
+                        f"Kfuncs_to_tables_jax accepts {_missing}; the installed one "
+                        f"does not. Update fkptjax or use growth_source='ode'.")
             table_w, table_now, kernel_constants = Kfuncs_to_tables_jax(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,
@@ -3311,6 +3392,16 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             )
         else:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
+            if self._growth_source == 'template':
+                # Same defensive check as the JAX/diffrax branch above, for the eager builder.
+                import inspect
+                _sig = inspect.signature(Kfuncs_to_tables).parameters
+                _missing = [p for p in ('fk', 'f0') if p not in _sig]
+                if _missing:
+                    raise NotImplementedError(
+                        f"growth_source='template' needs an fkptjax whose "
+                        f"Kfuncs_to_tables accepts {_missing}; the installed one "
+                        f"does not. Update fkptjax or use growth_source='ode'.")
             table_w, table_now, kernel_constants = Kfuncs_to_tables(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,
@@ -3339,7 +3430,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.f0 = self._table_state.f0
         self.fk = self._table_state.fk
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
 
         Matches :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles`'s signature
@@ -3354,6 +3445,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             raise NotImplementedError(f"damping_method={damping_method!r} is not supported by the fkptjax pipeline (use the FOLPS pt)")
         if use_GTNS not in (None, True):
             raise NotImplementedError(f"use_GTNS={use_GTNS!r} is not supported by the fkptjax pipeline, which always keeps GTNS (use the FOLPS pt)")
+        # fkptjax has no hook for the redshift_smearing damping; accept the kwarg (the caller in
+        # FOLPSTracerSpectrum2Poles.__call__ always passes it) but only the None no-op is supported.
+        if redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing is not supported by the fkptjax pipeline (use the FOLPS pt)')
         from fkptjax.pipelines import poles_from_tables
 
         return poles_from_tables(

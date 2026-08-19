@@ -1848,7 +1848,7 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
 
     Parameters
     ----------
-    node_or_graph : Calculator or CompiledGraph
+    node_or_graph : Calculator, CompiledGraph
     level : int or None, default=None
         Maximum Calculator dependency depth to traverse.  Mirrors the *level* argument of
         :func:`copy` and :func:`replace`.  ``None`` collects from the full tree.
@@ -2124,8 +2124,19 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
         raise ValueError(f'Unknown parameter(s): {sorted(bad)}')
 
     # ── split by differentiation strategy ─────────────────────────────────────
-    fd_names_sel  = [n for n in names if n in graph._fd_names]
-    jax_names_sel = [n for n in names if n in graph._jax_names]
+    # The graph classifies a parameter as FD only when it reaches a non-traceable node.  A caller
+    # may still need FD for a traceable one: a jax-traceable graph can be undifferentiable in
+    # *forward* mode -- a custom_vjp (e.g. the ACE cosmology network) defines a reverse rule only,
+    # and jacfwd through it raises.  An explicit fd_acc / fd_eps for such a parameter moves it to
+    # the FD set; FD is always valid for a traceable parameter, only slower, so this can never
+    # make a correct call wrong.
+    forced_fd = set()
+    for override in (fd_acc, fd_eps):
+        if isinstance(override, dict):
+            forced_fd |= {name if isinstance(name, str) else getattr(name, 'name', None)
+                          for name in override}
+    fd_names_sel  = [n for n in names if n in graph._fd_names or n in forced_fd]
+    jax_names_sel = [n for n in names if n in graph._jax_names and n not in forced_fd]
 
     # ── resolve fd_acc / fd_eps overrides for FD params ──────────────────────
     acc_ov = _resolve_per_param(fd_acc, fd_names_sel)
@@ -2159,15 +2170,20 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
             return val, derived_dict
         return val
 
+    # The strategy split, not the graph's own classification: a parameter the caller forced to FD
+    # must nest an FD stencil here too, otherwise this path silently rebuilds the jacfwd chain the
+    # override exists to avoid.
+    fd_set, jax_set = set(fd_names_sel), set(jax_names_sel)
+
     def _build_chain(order_dict):
         """One mixed partial: JAX jacfwd nests inner, direct FD stencils outer."""
         fn = _eval
         for name, k in order_dict.items():
-            if name in graph._jax_names and k > 0:
+            if name in jax_set and k > 0:
                 for _ in range(k):
                     fn = _jacfwd_wrap(fn, name)
         for name, k in order_dict.items():
-            if name in graph._fd_names and k > 0:
+            if name in fd_set and k > 0:
                 offsets, coeffs, eps, prior_limits = _fd_spec(name, k)
                 fn = _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=prior_limits)
         return fn

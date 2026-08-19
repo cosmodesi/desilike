@@ -277,6 +277,52 @@ class TaylorEmulator:
                    for n in self._derived_names}
         return monomials, children, derived
 
+    def contract_child(self, index, matrix, naxes=1):
+        """Apply a fixed linear *matrix* to one emulated output, by contracting its coefficients.
+
+        The Taylor polynomial is linear in its coefficients, so for any fixed matrix ``M``
+
+        ``M @ children[index](params) == (emulator with coefficients M @ C)[index](params)``
+
+        exactly.  Applying ``M`` here instead of downstream therefore costs nothing at
+        evaluation time and, when ``M`` reduces the output size, shrinks the emulator with it.
+
+        The motivating case is a window matrix: a theory table on a fine theory grid can be
+        emulated grid-agnostically and then contracted onto the handful of data bins the
+        likelihood actually uses, once, rather than convolved on every evaluation.  The
+        coefficients on the fine grid then exist only while fitting.
+
+        Linear, and a matrix specifically: the identity above is exactly the statement that ``M``
+        commutes with the sum over Taylor terms.  Anything nonlinear has to be applied after
+        :meth:`predict` instead.
+
+        Parameters
+        ----------
+        index : int
+            Which ``tree_flatten`` child to contract.
+        matrix : array, shape ``(n_out,) + trailing_shape``
+            Linear map applied to the child's trailing *naxes* axes, which it must match.
+        naxes : int, default=1
+            Number of trailing axes of the child that *matrix* consumes.
+
+        Returns
+        -------
+        self
+        """
+        if self._coeffs_children is None:
+            raise RuntimeError('Call fit() before contract_child()')
+        coeffs = np.asarray(self._coeffs_children[index])
+        matrix = np.asarray(matrix)
+        trailing_shape = coeffs.shape[coeffs.ndim - naxes:]
+        if matrix.shape[1:] != trailing_shape:
+            raise ValueError(f'matrix trailing shape {matrix.shape[1:]} does not match child {index} '
+                             f'trailing shape {trailing_shape}')
+        # (n_terms, *leading, *trailing) x (n_out, *trailing) -> (n_terms, *leading, n_out)
+        leading_shape = coeffs.shape[1:coeffs.ndim - naxes]
+        flat = coeffs.reshape((coeffs.shape[0],) + leading_shape + (-1,))
+        self._coeffs_children[index] = flat @ matrix.reshape(matrix.shape[0], -1).T
+        return self
+
     def _return_value(self, monomials, children):
         """Reconstruct the emulated graph return value from the emulated children."""
         kind = self._return_kind
@@ -318,8 +364,21 @@ class TaylorEmulator:
         root_cls = self._root_cls
         input_param_names = self._input_param_names
         derived_names = self._derived_names or []
+        # The static half of the root's tree_flatten output, recovered from the serialised treedef.
+        # An emulated calculator has no instance state until its first call, so anything a
+        # *downstream* calculator needs at construction time can only come from here -- e.g. which
+        # of several outputs the root was fitted for, which decides how the downstream one wires
+        # itself up.
+        treedef_node_data = None if self._treedef is None else self._treedef.node_data()
+        tree_aux = treedef_node_data[1] if treedef_node_data else None
 
         class TaylorEmulatedCalculator(root_cls):
+
+            # The emulator behind this calculator, so downstream calculators can apply an exact
+            # linear map to its outputs via contract_child() instead of at every evaluation.
+            _emulator = emulator
+            # The fitted root's static tree aux (None if the treedef was not serialised).
+            _tree_aux = tree_aux
 
             def __init__(self, *args, **kwargs):
                 # Register the same Variable/Parameter objects as the original graph,

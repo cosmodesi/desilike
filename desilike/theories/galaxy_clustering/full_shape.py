@@ -1861,6 +1861,49 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         return obj
 
 
+def _fold_window_into_emulator(pt, matrix):
+    """Fold a window matrix into an emulated *pt*'s Taylor coefficients; return whether it happened.
+
+    Exact: the Taylor polynomial is linear in its coefficients, and the window acts on axes the
+    bias monomials and the damping do not.  Doing it once here rather than convolving on every
+    evaluation also collapses the tables' trailing theory-grid axes onto the data bins, which is
+    what makes emulating them affordable.
+
+    Returns False when *pt* is not emulated: it then rebuilds its tables on every call, so there
+    are no fixed coefficients to fold into and the observable must keep convolving itself.
+
+    The contraction mutates the emulator, so it is idempotent: ``__post_init__`` may run more than
+    once, and the emulator may be a cached object shared with another pipeline.
+
+    *matrix* must already be on the tables' layout -- see each pt's ``window_matrix_for_tables``,
+    which is where any multipole permutation between the window's ordering and the tables' is
+    folded in.
+    """
+    emulator = getattr(pt, '_emulator', None)
+    if emulator is None:
+        return False
+    contracted = getattr(emulator, '_contracted_window', None)
+    if contracted is None:
+        for child_index, naxes in pt._window_children:
+            emulator.contract_child(child_index, matrix, naxes=naxes)
+        emulator._contracted_window = matrix
+    elif contracted.shape != matrix.shape or not np.allclose(contracted, matrix):
+        raise ValueError('this emulator was already contracted with a different window matrix; '
+                         'build a fresh emulator per observable')
+    return True
+
+
+def _check_output(output):
+    """Validate the *output* selector shared by the FOLPS PT calculators.
+
+    ``None`` gives the usual per-call evaluation; ``'monomials'`` gives bias-monomial tables that
+    a parameter point contracts in one einsum (see each class's ``_compute_monomials``).
+    """
+    if output not in (None, 'monomials'):
+        raise ValueError(f"output must be None (direct evaluation) or 'monomials', got {output!r}")
+    return output
+
+
 class FOLPSPTSpectrum2Poles(Calculator):
     r"""
     FOLPS matter power spectrum multipoles.
@@ -1885,26 +1928,41 @@ class FOLPSPTSpectrum2Poles(Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/FolpsD')
 
-    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, **kwargs):
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, output=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
+        # Set here as well as in __post_init__ so that a downstream calculator can ask what this
+        # pt produces before compile() has run.
+        self._output = _check_output(output)
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
         self.template.update(with_now='peakaverage')
 
-    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, **kwargs):
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104.,
+                      A_full=True, remove_DeltaP=False, output=None, damping_method='tree+loop',
+                      use_GTNS=None, fixed_bias=None, **kwargs):
         # Non-node setup only.
         self._kernels = str(kernels)
         self._rbao = float(rbao)
         self._A_full = bool(A_full)
         self._remove_DeltaP = bool(remove_DeltaP)
+        self._output = _check_output(output)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         folpsv2 = _import_folps()
         self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
+        if self._output == 'monomials':
+            # These shape the tables, so they are needed at build time, not only when the bias
+            # terms are combined.
+            self._damping_method = damping_method
+            self._use_GTNS = use_GTNS
+            self._nmu = int(mu)
+            self._fixed_bias = dict(fixed_bias or {})
+            self._monomials = None       # filled by the first __call__, then carried in the aux
+            self._legendre_weights = None
 
     def __call__(self):
         folpsv2 = _import_folps()
@@ -1939,15 +1997,60 @@ class FOLPSPTSpectrum2Poles(Calculator):
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.fsigma8
         self.sigma8_fid = self.template.sigma8_fid
+        if self._output == 'monomials':
+            self._compute_monomials()
+
+    def _compute_monomials(self):
+        """Replace the loop table by bias-monomial tables on the ``(k, mu)`` quadrature grid.
+
+        ``folps.get_rsd_pkmu_monomials_tables`` does the whole bias-independent part once per
+        cosmology -- the AP transform, the interpolation of the loop table onto ``(k_AP, mu_AP)``,
+        the IR resummation and the loop bracket -- leaving **20 bias monomials** (17 with
+        ``ctilde`` fixed) for a parameter point to contract.
+
+        The Finger-of-God kernel is left unapplied at the quadrature nodes, so ``X_FoG`` is
+        handled **exactly**: multiplying by ``D(k mu)`` is a linear operator on a space of ``mu``
+        dimension ``nmu``, which is 6.  (The bispectrum cannot do this -- its angular integral is
+        3-D with 800 points per pair -- and collocates in ``Lambda`` instead; see
+        :meth:`FOLPSPTSpectrum3Poles._compute_monomials`.)
+        """
+        folpsv2 = _import_folps()
+        calculator = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
+        tables = calculator.get_rsd_pkmu_monomials_tables(
+            self.k, self.qpar, self.qper, tuple(self.table), tuple(self.table_now),
+            nmu=self._nmu, ells=self.ells, IR_resummation=True,
+            damping_method=self._damping_method, use_GTNS=self._use_GTNS,
+            fixed_bias=self._fixed_bias)
+        self._monomials = tables['monomials']
+        self.undamped = jnp.asarray(tables['undamped'])
+        self.damped_wiggle = jnp.asarray(tables['damped_wiggle'])
+        self.damped_nowiggle = jnp.asarray(tables['damped_nowiggle'])
+        self.lam = jnp.asarray(tables['lam'])
+        self.sigma2w = jnp.asarray(tables['sigma2w'])
+        self.sigma2w_nowiggle = jnp.asarray(tables['sigma2w_nowiggle'])
+        self._legendre_weights = tables['legendre_weights']
+        # The loop table has served its purpose; dropping it keeps it out of the emulator.
+        del self.table, self.table_now, self.kap, self.muap
 
     def tree_flatten(self):
+        if self._output == 'monomials':
+            children = [self.undamped, self.damped_wiggle, self.damped_nowiggle, self.lam,
+                        self.sigma2w, self.sigma2w_nowiggle, self.jac,
+                        self.f, self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid]
+            # Everything a method reads off self must be here: an emulated calculator is rebuilt
+            # from (children, aux) alone and its __post_init__ never runs.
+            aux = {'k': self.k, 'ells': self.ells, 'output': self._output,
+                   'monomials': self._monomials, 'legendre_weights': self._legendre_weights,
+                   'damping_method': self._damping_method, 'use_GTNS': self._use_GTNS}
+            return children, aux
         # table / table_now are tuples of per-element arrays; flatten each element
         # as a separate child so JAX preserves their individual shapes.
         table = list(self.table)
         table_now = list(self.table_now)
         children = ([self.kap, self.muap, self.jac] + table + table_now
                     + [self.f, self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid])
-        aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
+        aux = {'k': self.k, 'ells': self.ells, 'output': self._output,
+               'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
                'A_full': self._A_full, 'remove_DeltaP': self._remove_DeltaP,
                'n_table': len(table), 'n_table_now': len(table_now)}
         return children, aux
@@ -1955,6 +2058,16 @@ class FOLPSPTSpectrum2Poles(Calculator):
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj._output = aux.get('output')
+        if obj._output == 'monomials':
+            (obj.undamped, obj.damped_wiggle, obj.damped_nowiggle, obj.lam,
+             obj.sigma2w, obj.sigma2w_nowiggle, obj.jac,
+             obj.f, obj.f0, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
+            obj._monomials, obj._legendre_weights = aux['monomials'], aux['legendre_weights']
+            obj._damping_method, obj._use_GTNS = aux['damping_method'], aux['use_GTNS']
+            return obj
         it = iter(children)
         obj.kap = next(it)
         obj.muap = next(it)
@@ -1968,8 +2081,6 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj.sigma8 = next(it)
         obj.fsigma8 = next(it)
         obj.sigma8_fid = next(it)
-        obj.k = aux['k']
-        obj.ells = aux['ells']
         obj._A_full = aux['A_full']
         obj._remove_DeltaP = aux['remove_DeltaP']
         obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
@@ -1978,7 +2089,8 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj._to_poles.ells = aux['ells']
         return obj
 
-    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
+                                           redshift_smearing=None, window_operator=None):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
@@ -1989,7 +2101,19 @@ class FOLPSPTSpectrum2Poles(Calculator):
         the two galaxies of a pair are displaced independently. It is passed as an argument
         rather than read from an attribute so the emulated path works: a callable would not
         survive ``tree_flatten`` / ``tree_unflatten``.
+
+        With ``output='monomials'`` this is one contraction of the tables instead of a quadrature
+        over the biases, and *window_operator* — the window matrix composed with the Legendre
+        weights, built by :class:`FOLPSTracerSpectrum2Poles` — returns the flat data vector
+        directly rather than the multipoles.
         """
+        if self._output == 'monomials':
+            return self._combine_monomials_spectrum2_poles(
+                pars, bias_scheme, damping, damping_method=damping_method, use_GTNS=use_GTNS,
+                redshift_smearing=redshift_smearing, window_operator=window_operator)
+        if window_operator is not None:
+            raise ValueError("window_operator applies to output='monomials' only; the direct path "
+                             'returns multipoles for the observable to convolve')
         # For emulator
         folpsv2 = _import_folps()
         import folps.folps as _folps_module
@@ -2003,6 +2127,32 @@ class FOLPSPTSpectrum2Poles(Calculator):
             # the catalogue was built in, not in the AP-distorted frame kap, muap.
             pkmu = pkmu * redshift_smearing(self.k[:, None] * self._to_poles.mu)**2
         return self._to_poles(pkmu)
+
+    def _combine_monomials_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None,
+                                           use_GTNS=None, redshift_smearing=None, window_operator=None):
+        """Contract the monomial tables with *pars*; one einsum, no quadrature over the biases.
+
+        *damping_method* and *use_GTNS* are checked rather than applied: they shaped the tables at
+        build time, so a different value here would silently return a different model.
+        """
+        if redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing multiplies P(k, mu) with a free parameter, '
+                                      'which the monomial factorization does not absorb; '
+                                      'use output=None')
+        for name, value, built in [('damping_method', damping_method, self._damping_method),
+                                   ('use_GTNS', use_GTNS, self._use_GTNS)]:
+            if value is not None and value != built:
+                raise ValueError(f'tables were built with {name}={built!r}, asked for {value!r}')
+        folpsv2 = _import_folps()
+        calculator = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
+        pars = calculator.set_bias_scheme(list(pars), bias_scheme=bias_scheme)
+        tables = {'monomials': self._monomials, 'lam': self.lam,
+                  'sigma2w': self.sigma2w, 'sigma2w_nowiggle': self.sigma2w_nowiggle,
+                  'undamped': self.undamped, 'damped_wiggle': self.damped_wiggle,
+                  'damped_nowiggle': self.damped_nowiggle,
+                  'legendre_weights': self._legendre_weights}
+        return calculator.get_rsd_pkell_from_monomials(tables, pars, damping=damping,
+                                                       window_operator=window_operator)
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **options):
         """Evaluate bispectrum multipoles for *pars*.
@@ -2020,12 +2170,297 @@ class FOLPSPTSpectrum2Poles(Calculator):
         breaking gradient-based samplers. The true gradient through a constant grid is zero, so
         ``stop_gradient`` leaves values bit-identical.
         """
+        if self._output == 'monomials':
+            raise NotImplementedError(f"{self.__class__.__name__} with output='monomials' carries no "
+                                      'linear table; use FOLPSPTSpectrum3Poles for the bispectrum')
         # For emulator
         k_pkl_pklnw_fk = jnp.array([jax.lax.stop_gradient(self.table[0]), self.table[1], self.table_now[1], self.table[2] * self.f0])
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
+def _resolve_spectrum3_multipoles(multipoles):
+    """Map requested bispectrum multipole names onto the ones folps computes.
+
+    Returns ``(folps_multipoles, provided)``: the list to ask folps for, and, per requested
+    multipole, ``(name, swap)`` with ``name`` False when folps has neither it nor its
+    index-swapped partner (that entry is then zero).  Note the swap transposes a 1-D array,
+    i.e. it is a no-op, so it is correct only on the ``k1 == k2`` diagonal.
+    """
+    available = ['B000', 'B110', 'B220', 'B112', 'B202', 'B022', 'B222']
+    folps_multipoles, provided = [], []
+    for multipole in multipoles:
+        if multipole in available:
+            folps_multipoles.append(multipole)
+            provided.append((multipole, False))
+        elif (swapped := multipole[0] + multipole[2:0:-1] + multipole[3:]) in available:
+            folps_multipoles.append(swapped)
+            provided.append((swapped, True))
+        else:
+            provided.append((False, False))
+    return folps_multipoles, provided
+
+
+class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
+    r"""
+    FOLPS linear inputs for the bispectrum.
+
+    Same parameters, template and AP interface as :class:`FOLPSPTSpectrum2Poles`, but
+    ``__call__`` evaluates only what the bispectrum reads: ``folps.get_linear`` returns
+    ``[k, pk_lin, pk_lin_now, fk]`` and explicitly does not need the one-loop table.
+
+    This exists for the emulator.  :meth:`combine_bias_terms_spectrum3_poles` uses exactly those
+    four arrays, but on a :class:`FOLPSPTSpectrum2Poles` they are 4 of its 84 ``tree_flatten``
+    children, so a Taylor emulator built over it expands the entire one-loop table — ~3.8 MB of
+    coefficients per tracer, and the finite-difference stencils to fit them — and then discards
+    all of it.  Here the emulated state is one ``(4, n_k)`` array plus the AP/normalisation
+    scalars, ~20x smaller and correspondingly cheaper to fit and to evaluate.
+
+    Note the loop table is not merely unemulated but *not computed*, so this is also faster than
+    :class:`FOLPSPTSpectrum2Poles` on the un-emulated path.
+    """
+
+    def __init__(self, k=None, template=None, ells=None, mu=6, kernels='fk', rbao=104.,
+                 A_full=True, remove_DeltaP=False, output=None, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.  With output='monomials'
+        # the k grid is (k1, k2) pairs and ells are triplets, so both are normalised here -- and
+        # `ells` therefore has no single default: it is resolved per output rather than defaulting
+        # to the power spectrum's (0, 2, 4), which cannot be read as triplets.
+        self._output = _check_output(output)
+        if ells is None:
+            ells = ((0, 0, 0), (2, 0, 2)) if self._output == 'monomials' else (0, 2, 4)
+        if self._output == 'monomials':
+            if k is None:
+                k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+            self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
+            self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
+        else:
+            if k is None:
+                k = np.linspace(0.01, 0.2, 101)
+            self.k = np.asarray(k, dtype='f8')
+            self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, k=None, template=None, ells=None, mu=6, kernels='fk', rbao=104.,
+                      A_full=True, remove_DeltaP=False, output=None, model='FOLPSD', damping='lor',
+                      precision=(8, 10, 10), renormalized=True, interpolation_method='linear',
+                      n_lambda=12, fixed_bias=None, **kwargs):
+        # Non-node setup only.  Deliberately not the parent's: that builds a ProjectToPoles over
+        # ``ells``, which this calculator never uses and which cannot even be constructed when
+        # ``ells`` are bispectrum triplets.
+        self._kernels = str(kernels)
+        self._rbao = float(rbao)
+        self._A_full = bool(A_full)
+        self._remove_DeltaP = bool(remove_DeltaP)
+        self._output = _check_output(output)
+        folpsv2 = _import_folps()
+        self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
+        if self._output == 'monomials':
+            self._model = str(model)
+            self._damping = str(damping)
+            self._precision = tuple(precision)
+            self._renormalized = bool(renormalized)
+            self._interpolation_method = str(interpolation_method)
+            self._fixed_bias = dict(fixed_bias or {})
+            self._folps_multipoles, self._provided = _resolve_spectrum3_multipoles(
+                tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells))
+            # Fixed structure, so it must not depend on cosmology: the nodes are set by the
+            # requested wavenumbers and a bound on the growth rate.
+            self._lambda_nodes = folpsv2.fog_lambda_nodes(self.k, n_nodes=int(n_lambda))
+            self._monomials = None   # filled by the first __call__, then carried in the tree aux
+
+    def __call__(self):
+        folpsv2 = _import_folps()
+        cosmo_params = {'pkttlin': self.template.pk_dd * self.template.fk**2,
+                        'f0': self.template.f0}
+        folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
+            mmatrices=self._matrices, kernels=self._kernels, rbao=self._rbao, **cosmo_params)
+        linear = folps_nlps.get_linear(
+            k=self.template.k, pklin=self.template.pk_dd, pknow=self.template.pknow_dd, **cosmo_params)
+        # Same four rows FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles builds from
+        # table / table_now: get_linear's 'f_k' is f0 * Fkoverf0, i.e. its 'table[2] * f0'.
+        self.k_pkl_pklnw_fk = jnp.array([linear['k'], linear['pk_l'], linear['pk_l_NW'], linear['f_k']])
+        self.f0 = self.template.f0
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.fsigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        if self._output == 'monomials':
+            self._compute_monomials()
+
+    def _compute_monomials(self):
+        r"""Replace the linear inputs by bias-monomial tables, with Finger-of-God factorized out.
+
+        The redshift-space bispectrum is a polynomial in every bias parameter; the only exception
+        is ``X_FoG``, which enters the angular integrand solely through
+        :math:`\Lambda = \frac{f^2}{2}\sum_i (k_i\mu_i)^2`.  ``folps.Sugiyama_Bell_monomials``
+        therefore does the whole bias-independent part once -- the AP transform, six power
+        spectrum interpolations, the IR resummation, the ``Z2`` kernels and the 8 x 10 x 10
+        angular quadrature per ``(k1, k2)`` pair -- and returns tables that a parameter point
+        contracts in one einsum, exactly in the biases and collocated in ``Lambda``.
+
+        Unlike the power spectrum, the ``Lambda`` axis is a collocation rather than an exact
+        representation: the orientation quadrature has 800 nodes per pair against the power
+        spectrum's 6 in ``mu``, so keeping it would be ~400x larger, not smaller.
+
+        The tables' trailing ``(n_multipoles, n_pairs)`` axes are meant to be contracted with the
+        window matrix into the Taylor coefficients afterwards
+        (:meth:`~desilike.emulators.TaylorEmulator.contract_child`), which is exact and is what
+        keeps them small.
+        """
+        folpsv2 = _import_folps()
+        bispectrum = folpsv2.BispectrumCalculator(model=self._model)
+        tables = bispectrum.Sugiyama_Bell_monomials(
+            f=self.f0, k_pkl_pklnw=self.k_pkl_pklnw_fk[:3], k1k2pairs=self.k,
+            qpar=self.qpar, qper=self.qper, precision=self._precision,
+            multipoles=self._folps_multipoles, renormalize=self._renormalized,
+            interpolation_method=self._interpolation_method,
+            lambda_nodes=self._lambda_nodes, fixed_bias=self._fixed_bias)
+        self._monomials = tables['monomials']
+        self.undamped = jnp.asarray(tables['undamped'])
+        self.damped = jnp.asarray(tables['damped'])
+        self.correction = jnp.asarray(tables['correction'])
+        self.sigma2v = jnp.asarray(tables['sigma2v'])
+
+    def tree_flatten(self):
+        if self._output == 'monomials':
+            children = [self.undamped, self.damped, self.correction, self.sigma2v,
+                        self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid]
+            aux = {'k': self.k, 'ells': self.ells, 'output': self._output,
+                   'monomials': self._monomials, 'lambda_nodes': self._lambda_nodes,
+                   'damping': self._damping, 'provided': self._provided,
+                   'folps_multipoles': self._folps_multipoles, 'model': self._model}
+            return children, aux
+        children = [self.k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
+                    self.sigma8, self.fsigma8, self.sigma8_fid]
+        aux = {'k': self.k, 'ells': self.ells, 'output': self._output}
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.k, obj.ells = aux['k'], aux['ells']
+        obj._output = aux.get('output')
+        if obj._output == 'monomials':
+            (obj.undamped, obj.damped, obj.correction, obj.sigma2v,
+             obj.f0, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
+            obj._monomials, obj._lambda_nodes = aux['monomials'], aux['lambda_nodes']
+            obj._damping, obj._provided = aux['damping'], aux['provided']
+            obj._folps_multipoles, obj._model = aux['folps_multipoles'], aux['model']
+            return obj
+        (obj.k_pkl_pklnw_fk, obj.f0, obj.qpar, obj.qper,
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
+        return obj
+
+    # tree_flatten children whose trailing (n_multipoles, n_pairs) axes a window matrix consumes;
+    # output='monomials' only.
+    _window_children = ((0, 2), (1, 2), (2, 2))   # (child index, number of trailing axes)
+
+    @staticmethod
+    def window_matrix_for_tables(window_matrix, multipoles, n_pairs):
+        """Reshape a window matrix onto the monomial tables' layout.
+
+        The window is indexed by the *requested* multipoles, the tables by the ones folps
+        computes, so the permutation between them is folded in here -- once the window is inside
+        the coefficients there is no later opportunity to reorder.  Requested multipoles folps
+        does not provide contribute nothing, which matches their zero entry in the direct path.
+
+        Static, and taking *multipoles* and *n_pairs* explicitly, because it has to run at
+        ``__post_init__`` time: an emulated calculator has no instance state at all until its
+        first ``__call__`` populates it from the tree aux.
+        """
+        folps_multipoles, provided = _resolve_spectrum3_multipoles(tuple(multipoles))
+        window = np.asarray(window_matrix).reshape(-1, len(multipoles), n_pairs)
+        toret = np.zeros((window.shape[0], len(folps_multipoles), n_pairs))
+        for requested_idx, (name, swap) in enumerate(provided):
+            if name:
+                # swap transposes a 1-D array, i.e. does nothing; see _resolve_spectrum3_multipoles.
+                toret[:, folps_multipoles.index(name)] += window[:, requested_idx]
+        return toret
+
+    def combine_bias_terms_spectrum2_poles(self, *args, **kwargs):
+        """Not available: this calculator carries no loop table (use :class:`FOLPSPTSpectrum2Poles`)."""
+        raise NotImplementedError(f'{self.__class__.__name__} computes bispectrum inputs only; '
+                                  'use FOLPSPTSpectrum2Poles for the power spectrum')
+
+    def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, bias_scheme='folps',
+                                           redshift_smearing=None, windowed=False, **options):
+        """Evaluate bispectrum multipoles for *pars*.
+
+        The k-grid is detached for the same reason as in
+        :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`: it is a fixed grid,
+        but an emulated calculator emits it as a traced output, and differentiating
+        ``jnp.interp`` with respect to its own abscissa is NaN at one node, which
+        ``0 * NaN = NaN`` propagates into every cosmological gradient.
+
+        With ``output='monomials'`` this is one contraction of the tables instead of the angular
+        quadrature, and *windowed* says the tables' trailing axes are already data bins (the
+        window having been folded into the emulator coefficients), so the result is the flat data
+        vector and no multipole reordering applies.
+        """
+        if self._output == 'monomials':
+            return self._combine_monomials_spectrum3_poles(
+                pars, k1k2, multipoles, bias_scheme=bias_scheme,
+                redshift_smearing=redshift_smearing, windowed=windowed, **options)
+        if windowed:
+            raise ValueError("windowed applies to output='monomials' only; the direct path returns "
+                             'multipoles for the observable to convolve')
+        k_pkl_pklnw_fk = jnp.concatenate([jax.lax.stop_gradient(self.k_pkl_pklnw_fk[:1]), self.k_pkl_pklnw_fk[1:]])
+        return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
+                                         multipoles=multipoles, bias_scheme=bias_scheme,
+                                         redshift_smearing=redshift_smearing, **options)
+
+    def _combine_monomials_spectrum3_poles(self, pars, k1k2, multipoles, bias_scheme='folps',
+                                           redshift_smearing=None, windowed=False, **options):
+        """Contract the monomial tables with *pars*; one einsum, no quadrature.
+
+        *k1k2* and *multipoles* are accepted for interface compatibility and checked against what
+        the tables were built for -- unlike the direct path, this cannot evaluate a grid it was
+        not constructed with.
+        """
+        if redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing multiplies the angular integrand with a free '
+                                      'parameter, which the monomial factorization does not absorb; '
+                                      'use output=None')
+        requested, _ = _resolve_spectrum3_multipoles(tuple(multipoles))
+        if list(requested) != list(self._folps_multipoles):
+            raise ValueError(f'tables were built for multipoles {self._folps_multipoles}, asked for {requested}')
+        folpsv2 = _import_folps()
+        calculator = folpsv2.BispectrumCalculator(model=self._model)
+        pars = calculator.set_bias_scheme(list(pars), bias_scheme=bias_scheme)
+        tables = {'monomials': self._monomials, 'lambda_nodes': self._lambda_nodes,
+                  'sigma2v': self.sigma2v, 'undamped': self.undamped,
+                  'damped': self.damped, 'correction': self.correction}
+        poles = calculator.Sugiyama_Bell_from_monomials(tables, pars, damping=self._damping)
+        if windowed:
+            return poles
+        toret = []
+        for name, swap in self._provided:
+            if name:
+                value = poles[self._folps_multipoles.index(name)]
+                toret.append(value.T if swap else value)
+            else:
+                toret.append(jnp.zeros(poles.shape[-1]))
+        return jnp.array(toret)
+
+
 _FOLPS_PRIOR_BASES = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
+
+
+def _pt_output(pt):
+    """What *pt* produces: ``None`` for direct evaluation, ``'monomials'`` for bias-monomial tables.
+
+    A constructed pt says so itself through ``_output``.  An *emulated* one has no instance state
+    until its first call, so it is asked through the static tree aux the emulator kept from the
+    fit.
+    """
+    output = getattr(pt, '_output', None)
+    if output is None:
+        output = (getattr(pt, '_tree_aux', None) or {}).get('output')
+    return output
 
 
 class FOLPSTracerSpectrum2Poles(Calculator):
@@ -2101,6 +2536,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         The fkptjax pt always keeps GTNS and only accepts ``None`` / ``True``.
     """
 
+    # Protocol with the observable (see Spectrum2PolesObservable): set in __init__ from whether
+    # the pt produces monomial tables, which is the only case a window matrix can fold into.
+    can_include_window = False
+
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='physical_aap', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
@@ -2152,7 +2591,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, **kwargs):
+                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None,
+                 monomials=False, window_matrix=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2164,16 +2604,39 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
         if pt is None:
-            pt = FOLPSPTSpectrum2Poles(**kwargs)
+            pt = FOLPSPTSpectrum2Poles(output='monomials' if monomials else None, **kwargs)
         self.pt = pt
         self.pt.update(k=self.k, ells=self.ells, mu=mu)
+        self.can_include_window = _pt_output(self.pt) == 'monomials'
+        if self.can_include_window:
+            # These decide which blocks the tables damp, so the pt needs them at build time, not
+            # only when the bias terms are combined.
+            self.pt.update(damping_method=damping_method, use_GTNS=use_GTNS)
         if template is not None:
             self.pt.update(template=template)
+        self._window_matrix = None if window_matrix is None else np.asarray(window_matrix)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      use_GTNS=None, redshift_smearing=None, tracers=None, **kwargs):
+                      use_GTNS=None, redshift_smearing=None, tracers=None,
+                      monomials=False, window_matrix=None, **kwargs):
         # Non-node setup only.
+        # The window is composed with the mu quadrature's Legendre weights into one
+        # cosmology-independent operator, applied per call rather than folded into the emulator
+        # coefficients: the damping sits between the two, so it cannot be pre-contracted -- and
+        # since the tables keep their (compacted) k axis, there is nothing to gain by trying.
+        self._window_operator = None
+        self.is_windowed = False
+        if self._window_matrix is not None and self.can_include_window:
+            folpsv2 = _import_folps()
+            # folps' own nodes, so the weights match the ones the tables were built on.
+            muobs, weights_mu = folpsv2.weights_leggauss(int(mu), sym=True)
+            from scipy import special
+            legendre_weights = np.array([weights_mu * (2 * ell + 1) * special.legendre(ell)(muobs)
+                                         for ell in self.ells])
+            window = np.asarray(self._window_matrix).reshape(-1, len(self.ells), len(self.k))
+            self._window_operator = np.einsum('dlk,lm->dkm', window, legendre_weights)
+            self.is_windowed = True
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
         if damping_method in ('tree', 'tree-gtns'):
@@ -2244,9 +2707,11 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                                sn0, sn2, 1., self.X_FoG.value]
 
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
+        options = {'window_operator': self._window_operator} if self.is_windowed else {}
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
-                                                                redshift_smearing=redshift_smearing)
+                                                                redshift_smearing=redshift_smearing, **options)
         return self.poles
+
 
     def tree_flatten(self):
         return [self.poles], None
@@ -2320,21 +2785,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
-    ells = []
-    # folps computes all of these directly; the ell_swap fallback below is only for
-    # multipoles it does not have, and note it transposes a 1-D array (a no-op), so it is
-    # correct only on the k1 == k2 diagonal.
-    _ells = ['B000', 'B110', 'B220', 'B112', 'B202', 'B022', 'B222']
-    provided = []
-    for ell in multipoles:
-        if ell in _ells:
-            ells.append(ell)
-            provided.append((ell, False))
-        elif (ell_swap := ell[0] + ell[2:0:-1] + ell[3:]) in _ells:
-            ells.append(ell_swap)
-            provided.append((ell_swap, True))
-        else:
-            provided.append((False, False))
+    ells, provided = _resolve_spectrum3_multipoles(multipoles)
 
     BispectrumClass = (
         folpsv2.BispectrumCalculator_fk
@@ -2379,7 +2830,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
             renormalize=renormalized,
             interpolation_method=interpolation_method,
         )
-        
+
     toret = []
     for ell, (_ell, swap) in zip(multipoles, provided):
         if _ell:
@@ -2405,9 +2856,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     k : array, shape (N, 2), default=None
         Output ``(k1, k2)`` wavenumber pairs [h/Mpc].  Defaults to a diagonal grid
         ``k1 == k2`` over ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
-    pt : FOLPSPTSpectrum2Poles, default=None
+    pt : FOLPSPTSpectrum3Poles, default=None
         PT calculator providing ``sigma8``, ``fsigma8``, ``qpar``, ``qper`` and the
-        underlying template.  Defaults to a new :class:`FOLPSPTSpectrum2Poles`.
+        underlying template.  Defaults to a new :class:`FOLPSPTSpectrum3Poles`, which computes
+        the linear inputs only; pass a :class:`FOLPSPTSpectrum2Poles` to share one PT
+        calculator with a power spectrum theory instead.
     template : template calculator, default=None
         Forwarded to ``pt`` if given.  Defaults to :class:`DirectSpectrum2Template`.
     ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
@@ -2449,6 +2902,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     ---------
     arXiv:2404.07269
     """
+    # Protocol with the observable (see Spectrum3PolesObservable): set in
+    # __init__ from whether the pt produces monomial tables, which is the only case whose
+    # tables a window matrix can be folded into.
+    can_include_window = False
+
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/FolpsD')
@@ -2495,7 +2953,8 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)  # no cross (bispectra not implemented)
 
     def __init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
-                 prior_basis='physical_aap', redshift_smearing=None, tracers=None, params=None, **kwargs):
+                 prior_basis='physical_aap', redshift_smearing=None, tracers=None, params=None,
+                 monomials=False, window_matrix=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2507,17 +2966,31 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
         if pt is None:
-            pt = FOLPSPTSpectrum2Poles(**kwargs)
+            pt = FOLPSPTSpectrum3Poles(output='monomials' if monomials else None, **kwargs)
         self.pt = pt
+        # The monomial pt builds its tables for a specific (k1, k2) grid and multipole set, so it
+        # must be told them; the other pts carry k / ells as inert metadata, and a shared
+        # FOLPSPTSpectrum2Poles must not have its power spectrum grid overwritten.
+        if _pt_output(self.pt) == 'monomials':
+            self.pt.update(k=self.k, ells=self.ells)
         if template is not None:
             self.pt.update(template=template)
+        # Advertised to the observable, which then hands over its window matrix (see
+        # Spectrum3PolesObservable): only the monomial tables can absorb one.
+        self.can_include_window = _pt_output(self.pt) == 'monomials'
+        self._window_matrix = None if window_matrix is None else np.asarray(window_matrix)
 
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                       prior_basis='physical_aap', fsat=None, sigv=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(8, 10, 10),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
-                      tracers=None, **kwargs):
+                      tracers=None, monomials=False, window_matrix=None, **kwargs):
         # Non-node setup only.
+        self.is_windowed = False
+        if self._window_matrix is not None and self.can_include_window:
+            multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
+            self.is_windowed = _fold_window_into_emulator(
+                self.pt, self.pt.window_matrix_for_tables(self._window_matrix, multipoles, len(self.k)))
         self._prior_basis = str(prior_basis)
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
@@ -2567,9 +3040,13 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
+        options = dict(self._options)
+        if self.is_windowed:
+            options['windowed'] = True
         self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme,
-                                                                redshift_smearing=redshift_smearing, **self._options)
+                                                                redshift_smearing=redshift_smearing, **options)
         return self.poles
+
 
     def tree_flatten(self):
         return [self.poles], {'k': self.k, 'ells': self.ells}
@@ -3545,17 +4022,17 @@ def _comet_ap_params(cosmo_base, cosmo_fid, z, use_mpc=False, xp=None):
     return qpar, qper
 
 
-def _comet_growth_amplitude(cosmo_base, cosmo_fid, z, xp=None):
-    """Growth amplitude ratio sqrt(As/As_fid) * D(z)/D_fid(z), and growth rate f(z).
+def _comet_growth_rate(cosmo_base, z, xp=None):
+    """Growth rate f(z), squeezed; dtype follows *xp* (jnp → JAX arrays, np → numpy).
 
-    Returns (AsD, f), both squeezed; dtype follows *xp* (jnp → JAX arrays, np → numpy).
+    The physical-basis amplitude rescaling A = sigma8(z) / sigma8_ref(z) is computed from comet's
+    own emulated linear P(k) (see ``PTEmu.sigmaR_from_pklin``), matching FOLPSD's
+    ``A = pt.sigma8 / pt.sigma8_fid``.  The former sqrt(As/As_fid) * D(z)/D_fid(z) is *not* that
+    quantity once the transfer-function shape moves, so it is deliberately not offered here.
     """
     if xp is None:
         xp = jnp
-    D = cosmo_base.growth_factor(float(z))
-    D_fid = cosmo_fid.growth_factor(float(z))
-    AsD = (cosmo_base.As / cosmo_fid.As) ** 0.5 * D / D_fid
-    return xp.squeeze(AsD), xp.squeeze(cosmo_base.growth_rate(z))
+    return xp.squeeze(cosmo_base.growth_rate(z))
 
 
 def _cosmo_to_comet(cosmo):
@@ -3681,6 +4158,11 @@ class COMETPTSpectrum2Poles(Calculator):
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
         _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
+        # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
+        # from comet's own emulated linear P(k) so that S carries the full transfer-function
+        # shape response.  Computed once here (concrete, never traced).
+        self._sigma8_fid = float(self._md.sigmaR_fixed(
+            8.0, dict(self._fid_comet, z=float(self.z)), self._de_model))
 
     def __call__(self):
         _use_jax = (self._backend == 'jax')
@@ -3694,8 +4176,8 @@ class COMETPTSpectrum2Poles(Calculator):
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
-        AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f = qpar, qper, AsD, f
+        f = _comet_growth_rate(cosmo_base, self.z, xp=xp)
+        self.qpar, self.qper, self.f = qpar, qper, f
 
         # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
         # templates (no octopole/P6 contribution), matching the original
@@ -3714,6 +4196,13 @@ class COMETPTSpectrum2Poles(Calculator):
         # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
+        # Physical-basis amplitude rescaling from the linear P(k) the emulator has just
+        # produced -- no second evaluation.  It replaces sqrt(As/As_fid) * D/D_fid, which is
+        # the same quantity only at fixed transfer function: that misses the shape response
+        # and is off by 6.6% at 1 sigma in omega_cdm, where sigma8-based S matches folps to
+        # 0.0004%.
+        self.A = md.sigmaR_from_pklin(8.0, md.Pk_lin,
+                                        h=None if self._use_mpc else self.cosmo['h']) / self._sigma8_fid
         self.h = self.cosmo['h']
         # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
         # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
@@ -3723,20 +4212,20 @@ class COMETPTSpectrum2Poles(Calculator):
             valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: PTEmu clipped its GP inputs internally (finite
         # evaluation); mask the outputs to NaN so the sample is rejected instead.
-        self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
-                                                              for value in (self.table, self.qpar, self.qper, self.AsD, self.f)]
+        self.table, self.qpar, self.qper, self.A, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.table, self.qpar, self.qper, self.A, self.f)]
         if _use_jax:
             md.clear_jax_state()
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.h]
+        children = [self.qpar, self.qper, self.table, self.f, self.A, self.h]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.h = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.A, obj.h = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3932,6 +4421,11 @@ class COMETTracerSpectrum2Poles(Calculator):
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
             _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
+            # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
+            # from comet's own emulated linear P(k) so that S carries the full transfer-function
+            # shape response.  Computed once here (concrete, never traced).
+            self._sigma8_fid = float(self._md.sigmaR_fixed(
+                8.0, dict(self._fid_comet, z=float(self.z)), self._de_model))
         else:
             self.k = self.pt.k
             self.ells = self.pt.ells
@@ -3963,14 +4457,19 @@ class COMETTracerSpectrum2Poles(Calculator):
         valid = _comet_params_validity(cosmo_params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
-        AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
+        f = _comet_growth_rate(cosmo_base, self.z, xp=xp)
+        self.qpar, self.qper, self.f, self.h = qpar, qper, f, self.cosmo['h']
 
         # rescale_counterterms=False: PTEmu.Pell() applies h²/h⁴ rescaling to
         # c0/c2/c4/cnlo internally, so we must not pre-scale them; likewise its stochastic
         # term (P2d_stoch) is added outside the spline, already in (Mpc/h)^3 units, so
         # NP0/NP20/NP22 must be passed without the h³/h⁵ rescaling either.  Only the
         # 1/nbar normalization is applied here (PTEmu.nbar = 1.0 makes its own a no-op).
+        # A must be known before _get_canonical_params(), which rescales the bias by it, so on the
+        # direct paths the linear spectrum is evaluated first (sigmaR_fixed does that itself);
+        # the pt paths can instead reuse the Pk_lin their table call has already produced.
+        self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
+                                       ) / self._sigma8_fid
         canonical = self._get_canonical_params(rescale_counterterms=False)
         pell_params = {k: v for k, v in cosmo_params.items()}
         for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
@@ -3989,8 +4488,8 @@ class COMETTracerSpectrum2Poles(Calculator):
         if range_nan_factor is not None:
             valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
-        self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
-                                                              for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]
+        self.poles, self.qpar, self.qper, self.A, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.poles, self.qpar, self.qper, self.A, self.f)]
         if _use_jax:
             md.clear_jax_state()
         return self.poles
@@ -4005,7 +4504,7 @@ class COMETTracerSpectrum2Poles(Calculator):
 
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
         if 'physical' in self._prior_basis:
-            A = pt.AsD
+            A = pt.A
 
         _only = None if only is None else frozenset(only)
 
@@ -4189,6 +4688,11 @@ class COMETPTSpectrum3Poles(Calculator):
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
         _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
+        # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
+        # from comet's own emulated linear P(k) so that S carries the full transfer-function
+        # shape response.  Computed once here (concrete, never traced).
+        self._sigma8_fid = float(self._md.sigmaR_fixed(
+            8.0, dict(self._fid_comet, z=float(self.z)), self._de_model))
         self.quad_deg = tuple(quad_deg)
         self.mu12_transform = mu12_transform
 
@@ -4207,8 +4711,8 @@ class COMETPTSpectrum3Poles(Calculator):
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
-        AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
+        f = _comet_growth_rate(cosmo_base, self.z, xp=xp)
+        self.qpar, self.qper, self.f, self.h = qpar, qper, f, self.cosmo['h']
 
         if avir is not None:
             params['avirB'] = _wrap(avir)
@@ -4223,6 +4727,12 @@ class COMETPTSpectrum3Poles(Calculator):
         self.table = xp.stack(
             [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
         self.h = self.cosmo['h']
+        # Physical-basis amplitude rescaling from the linear P(k) the emulator has just produced
+        # -- no second evaluation.  Replaces sqrt(As/As_fid) * D/D_fid, which is the same quantity
+        # only at fixed transfer function: that misses the shape response and is off by 6.6% at
+        # 1 sigma in omega_cdm.
+        self.A = md.sigmaR_from_pklin(8.0, md.Pk_lin,
+                                        h=None if self._use_mpc else self.cosmo['h']) / self._sigma8_fid
         # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
         # derived GP inputs (s12, f) were in their training ranges, NaN when not (jax path;
         # None when unset / numpy path -- comet clips them either way, see comet PTEmu).
@@ -4230,20 +4740,20 @@ class COMETPTSpectrum3Poles(Calculator):
         if range_nan_factor is not None:
             valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
-        self.table, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
-                                                              for value in (self.table, self.qpar, self.qper, self.AsD, self.f)]
+        self.table, self.qpar, self.qper, self.A, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.table, self.qpar, self.qper, self.A, self.f)]
         if _use_jax:
             md.clear_jax_state()
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.h]
+        children = [self.qpar, self.qper, self.table, self.f, self.A, self.h]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.h = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.A, obj.h = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -4349,6 +4859,11 @@ class COMETTracerSpectrum3Poles(Calculator):
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
             _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
+            # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
+            # from comet's own emulated linear P(k) so that S carries the full transfer-function
+            # shape response.  Computed once here (concrete, never traced).
+            self._sigma8_fid = float(self._md.sigmaR_fixed(
+                8.0, dict(self._fid_comet, z=float(self.z)), self._de_model))
             self.quad_deg = tuple(quad_deg)
             self.mu12_transform = mu12_transform
         else:
@@ -4381,13 +4896,18 @@ class COMETTracerSpectrum3Poles(Calculator):
         valid = _comet_params_validity(cosmo_params, md.params_ranges, xp=xp)
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
-        AsD, f = _comet_growth_amplitude(cosmo_base, self._cosmo_fid, self.z, xp=xp)
-        self.qpar, self.qper, self.AsD, self.f, self.h = qpar, qper, AsD, f, self.cosmo['h']
+        f = _comet_growth_rate(cosmo_base, self.z, xp=xp)
+        self.qpar, self.qper, self.f, self.h = qpar, qper, f, self.cosmo['h']
 
         # rescale_counterterms=True (default): NP0/NB0/MB0 are nbar-normalised but NOT
         # h³-rescaled (no h-rescaling comment on these in _get_canonical_params applies
         # to bispectrum params), ready to pass directly to PTEmu.Bell_Sugi() which
         # uses them as-is (PTEmu.nbar = 1.0 so its internal 1/nbar division is a no-op).
+        # A must be known before _get_canonical_params(), which rescales the bias by it, so on the
+        # direct paths the linear spectrum is evaluated first (sigmaR_fixed does that itself);
+        # the pt paths can instead reuse the Pk_lin their table call has already produced.
+        self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
+                                       ) / self._sigma8_fid
         canonical = self._get_canonical_params()
         bell_params = {k: v for k, v in cosmo_params.items()}
         bell_params['z'] = float(self.z)
@@ -4409,8 +4929,8 @@ class COMETTracerSpectrum3Poles(Calculator):
         if range_nan_factor is not None:
             valid = valid & xp.isfinite(range_nan_factor)
         # Out-of-training-range guard: see COMETPTSpectrum2Poles.__call__.
-        self.poles, self.qpar, self.qper, self.AsD, self.f = [xp.where(valid, value, xp.nan)
-                                                              for value in (self.poles, self.qpar, self.qper, self.AsD, self.f)]
+        self.poles, self.qpar, self.qper, self.A, self.f = [xp.where(valid, value, xp.nan)
+                                                              for value in (self.poles, self.qpar, self.qper, self.A, self.f)]
         if _use_jax:
             md.clear_jax_state()
         return self.poles

@@ -3223,6 +3223,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         model_u = self._model.strip().upper()
         variant_u = (self._mg_variant or '').strip().upper()
         self._is_binning = (model_u == 'PHENOM' and variant_u == 'BINNING')
+        self._is_bz_mass = (model_u == 'HDKI' and variant_u in ('BZ_MASS', 'BZMASS'))
 
         # growth_source: where f(k) for the linear-growth sector comes from.
         #   'ode'      -- fkptjax integrates the binned mu growth ODE itself (default,
@@ -3243,26 +3244,33 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         if self._growth_source not in ('ode', 'template'):
             raise ValueError(f"growth_source must be 'ode' or 'template', got {growth_source!r}")
 
-        # The JAX/diffrax binning route does not yet support the internal neutrino
-        # correction or the numba RHS. Those cases use the eager builder.
-        self._use_binning_jax = (
-            self._is_binning
+        # Which models have a JAX right-hand side in fkptjax.mg_jax. Everything else --
+        # and any binning/BZ_Mass run that asks for the internal neutrino correction or the
+        # numba RHS, neither of which the JAX route implements -- falls back to the eager
+        # builder under pure_callback.
+        #
+        # This gate is what decides `_is_external` below, and with it whether the posterior
+        # is differentiable and whether walkers vmap in parallel. Adding a model to
+        # fkptjax.mg_jax without adding it here leaves it silently on the slow path.
+        self._has_jax_rhs = self._is_binning or self._is_bz_mass
+        self._use_jax_tables = (
+            self._has_jax_rhs
             and not self._include_neutrino_corrections
             and not self._use_numba
         )
         if (
-            self._is_binning
+            self._has_jax_rhs
             and self._use_numba
             and self._include_neutrino_corrections
         ):
             raise ValueError(
-                "PHENOM/binning cannot use use_numba=True together "
+                f"{self._model}/{self._mg_variant} cannot use use_numba=True together "
                 "with include_neutrino_corrections=True. "
                 "Set use_numba=False for neutrino-corrected runs."
             )
 
-        self._is_external = not self._use_binning_jax
-        if self._use_binning_jax:
+        self._is_external = not self._use_jax_tables
+        if self._use_jax_tables:
             from fkptjax.kfuncs_to_tables import build_jax_static_ctx
             self._jax_static_ctx = build_jax_static_ctx(
                 self.template.k, kmin=self._fkpt_kmin, kmax=self._fkpt_kmax,
@@ -3366,7 +3374,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             mg_kwargs['fk'] = self.template.fk
             mg_kwargs['f0'] = self.template.f0
 
-        if self._use_binning_jax:
+        if self._use_jax_tables:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
             if self._growth_source == 'template':
                 # Fail loudly on an fkptjax that predates the external-f(k) feature:
@@ -3388,6 +3396,9 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 nquadSteps=300, NQ=10, NR=10, xnow=xnow, f0_kmax=1e-3,
                 beyond_eds=self._beyond_eds, return_kernel_constants=True,
                 static_ctx=self._jax_static_ctx,
+                # STATIC: selects which model's mu is traced in fkptjax.mg_jax. The MG
+                # parameter VALUES ride in mg_kwargs and stay traced.
+                model=self._model, mg_variant=self._mg_variant,
                 **mg_kwargs,
             )
         else:

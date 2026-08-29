@@ -144,6 +144,46 @@ def test_correctness(pipeline):
     assert abs(got - expected) < 1e-8, f"got {got}, expected {expected}"
 
 
+def test_unknown_param_name_raises(pipeline):
+    """A name the graph does not have is an error, not a silent drop: the pipeline would
+    otherwise run with the parameter left at its default and return a plausible number."""
+    with pytest.raises(ValueError, match='H0'):
+        pipeline({'H0': 70., 'A': 1.2})
+    with pytest.raises(ValueError, match='H0'):
+        pipeline(H0=70., A=1.2)
+
+
+def test_unknown_param_name_suggests_a_close_one(pipeline):
+    with pytest.raises(ValueError, match=r'did you mean.*omega_m'):
+        pipeline({'omega_n': 0.3})
+
+
+def test_unknown_param_name_raises_with_an_input_callable():
+    """Both the dict and the kwargs form of the ``input=`` convention are checked."""
+    likelihood = _make_nodes()[-1]
+    received = []
+    pipe = compile(likelihood, input=received.append)
+    with pytest.raises(ValueError, match='typo'):
+        pipe(None, {'typo': 1.})
+    with pytest.raises(ValueError, match='typo'):
+        pipe(None, typo=1.)
+
+
+def test_derived_param_name_is_accepted(pipeline):
+    """A derived parameter is a Variable of the graph; passing its name is legal (the
+    marginalization machinery writes solved values back into the dict it passes on)."""
+    lik = _make_nodes()[-1]
+    lik.derived_A = Parameter('derived_A', value=0., derived=True)
+    pipe = compile(lik)
+    pipe({'A': 1.1, 'derived_A': 0.})
+
+
+def test_differentiate_rejects_unknown_param_name(pipeline):
+    jac = jacfwd(pipeline, params=['A'])
+    with pytest.raises(ValueError, match='H0'):
+        jac({'H0': 70.})
+
+
 def test_eager_attrs_updated(pipeline):
     """After an eager call, all node attributes reflect the computed values."""
     omega_m, z, A, ns = 0.28, 0.6, 1.1, 0.97

@@ -105,15 +105,22 @@ def _emulate(theory, inner_pt=None):
 def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     """Center: exact match (atol=1e-8). Shifted by 5 %: relative error < tol."""
     center = {p.name: p.value for p in pipe_exact.params}
+
+    def _call(pipe, values):
+        # The emulated pipeline may expose fewer parameters than the exact one: `_fd_box` skips
+        # any parameter sitting at a prior edge, and one so skipped is frozen inside the
+        # emulator.  A pipeline rejects a name it does not have, so each is given its own subset.
+        return np.asarray(pipe({name: value for name, value in values.items() if name in pipe.params}))
+
     # rtol as well as atol: "exact at the centre" means to MACHINE precision, and an
     # absolute-only tolerance says something different at every scale.
-    np.testing.assert_allclose(np.asarray(pipe_emu(center)), np.asarray(pipe_exact(center)),
+    np.testing.assert_allclose(_call(pipe_emu, center), _call(pipe_exact, center),
                                atol=1e-8, rtol=1e-10,
                                err_msg='emulator mismatch at expansion center')
     if shift_param in center:
         shifted = {**center, shift_param: center[shift_param] * 1.05}
-        exact_s = np.asarray(pipe_exact(shifted))
-        emu_s = np.asarray(pipe_emu(shifted))
+        exact_s = _call(pipe_exact, shifted)
+        emu_s = _call(pipe_emu, shifted)
         reldiff = float(np.max(np.abs(emu_s - exact_s) / (np.abs(exact_s) + 1e-30)))
         assert reldiff < reldiff_tol, f'[{shift_param}+5%] max reldiff={reldiff:.3f} > {reldiff_tol}'
 

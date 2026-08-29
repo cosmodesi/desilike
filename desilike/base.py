@@ -35,6 +35,7 @@ Pipeline:
   __call__(params) compatible with jax.jit / jax.vmap / jax.grad.
 """
 
+import difflib
 import functools
 import logging
 from collections.abc import Callable
@@ -333,6 +334,17 @@ class Prior(Calculator):
         obj = object.__new__(cls)
         obj.logpdf = children[0]
         return obj
+
+
+def _restrict(params, graph):
+    """The subset of *params* that *graph* actually has.
+
+    Internal plumbing routinely holds a superset: the whole likelihood's parameters handed to the
+    prior sub-graph, to a marginalization group, to one component of a sum.  The graph rejects
+    names it does not have (:meth:`CompiledGraph._check_names`), so these sites filter first --
+    a superset is legitimate here, a typo is not, and only the caller can tell them apart.
+    """
+    return {name: value for name, value in params.items() if name in graph.params}
 
 
 def _transitive_param_names(node: Calculator, pipe: 'CompiledGraph') -> set:
@@ -784,7 +796,7 @@ class Posterior(Calculator):
         for sp in self._solved_params:
             sp._value = jnp.zeros(sp.shape) if sp.shape else jnp.zeros(())
         params = {p.name: p.value for p in self._likelihood.params}
-        logprior, reparam_vals = self._prior(params)
+        logprior, reparam_vals = self._prior(_restrict(params, self._prior))
         params = {**params, **dict(zip(self._prior_param_names, reparam_vals))}
         is_tracing = isinstance(logprior, jax.core.Tracer)
         if is_tracing or not bool(jnp.isneginf(logprior)):
@@ -798,9 +810,9 @@ class Posterior(Calculator):
                 # _run_graph restores p._value after each call; requesting
                 # return_derived=True gives back the traced values so the outer
                 # _run_graph reads them correctly.
-                _, inner_derived = self._likelihood(params, return_derived=True)
+                _, inner_derived = self._likelihood(_restrict(params, self._likelihood), return_derived=True)
             else:
-                loglik, inner_derived = self._likelihood(params, return_derived=True)
+                loglik, inner_derived = self._likelihood(_restrict(params, self._likelihood), return_derived=True)
             for p in self._likelihood._derived_params:
                 p._value = inner_derived[p.name]
             logpdf = logprior + loglik
@@ -1663,6 +1675,31 @@ class CompiledGraph:
         """JIT-compiled version of ``_call_fn``; created once and cached on the graph."""
         return jax.jit(self._call_fn)
 
+    def _check_names(self, names):
+        """Raise on any parameter name this graph does not have.
+
+        A name that is not a parameter of the graph used to be dropped in silence, leaving the
+        parameter at its default: the pipeline still runs and still returns a plausible number,
+        just not the function the caller asked for.  Derived and solved names are accepted --
+        they are Variables of the graph, and the marginalization machinery writes solved values
+        back into the dict it passes on.
+
+        Callers holding a superset of the graph's parameters (the prior sub-graph, a
+        marginalization group, a component of a sum) must filter before calling, not rely on
+        the graph to drop the extras.
+        """
+        unknown = [name for name in names if name not in self.params]
+        if not unknown:
+            return
+        available = self.params.names()
+        detail = []
+        for name in unknown:
+            close = difflib.get_close_matches(name, available, n=3, cutoff=0.5)
+            detail.append(repr(name) + (' (did you mean {}?)'.format(close) if close else ''))
+        raise ValueError('{} pipeline has no parameter {}. It would otherwise be silently '
+                         'ignored and the parameter left at its default. Available: {}'.format(
+                             type(self.root).__name__, '; '.join(detail), sorted(available)))
+
     def __call__(self, *args, return_derived=False, **kwargs):
         """
         Pure function: params → return_val, or ``(return_val, derived_dict)``
@@ -1687,6 +1724,11 @@ class CompiledGraph:
         The *input* callable is invoked for its side-effects only (return value ignored).
         Kwargs form is a convenience for eager calls; missing params are filled from defaults.
 
+        A name the graph does not have raises :exc:`ValueError` in either form, rather than
+        being dropped and the parameter left at its default.  Callers that legitimately hold a
+        superset (the prior sub-graph, a marginalization group, one component of a sum) filter
+        with :func:`_restrict` first.
+
         After each eager call the parameters' ``.value`` attributes are restored
         to whatever they were on entry, so that finite-difference mutations
         inside ``pure_callback`` do not corrupt subsequent default-argument calls.
@@ -1703,6 +1745,12 @@ class CompiledGraph:
         all_saved = {p.name: p._value for p in self.params}
         input_saved = {n: v for n, v in all_saved.items()
                        if not self.params[n].derived}
+        # Reject unknown names before the merge, in both calling conventions: after the merge
+        # an unknown name is indistinguishable from a legitimate one.
+        if params is not None:
+            self._check_names(params)
+        if kwargs:
+            self._check_names(kwargs)
         if params is None:
             params = dict(all_saved)
             params.update(kwargs)
@@ -2540,8 +2588,13 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
         input_saved = {n: v for n, v in all_saved.items()
                        if not graph.params[n].derived}
         p0 = dict(all_saved)
+        # Same hole as the graph's own __call__: an unknown name would be added to p0 and never
+        # read again, leaving the parameter at its default.
         if params is not None:
+            graph._check_names(params)
             p0.update(params)
+        if kwargs:
+            graph._check_names(kwargs)
         p0.update(kwargs)
         _return_derived[0] = return_derived
         try:

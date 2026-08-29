@@ -24,5 +24,6 @@ from .samplers import (Sampler,
                        Emcee, Zeus, MH,
                        BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC,
                        NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA,
-                       Dynesty, Nautilus, PocoMC,
-                       Grid, QMC, Importance)
+                       Dynesty, Nautilus, PocoMC, SMC,
+                       Grid, QMC, Importance,
+                       PriorProposal, SamplesProposal, GaussianProposal, ProductProposal)

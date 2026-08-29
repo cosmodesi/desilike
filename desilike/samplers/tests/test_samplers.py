@@ -85,15 +85,19 @@ KWARGS_RUN_FAST = dict(
 )
 
 
-@pytest.fixture
-def likelihood():
+def make_likelihood(flatdata=(0.4, 0.6)):
+    """Compile the two-parameter Gaussian posterior used throughout these tests.
+
+    *flatdata* shifts the data vector, which shifts the posterior: passing a perturbed
+    value gives a second, slightly wrong posterior -- a stand-in for an emulated one.
+    """
 
     class Likelihood(BaseGaussianLikelihood):
 
         def __init__(self, a, b):
             self.a = a
             self.b = b
-            self.flatdata = jnp.array([0.4, 0.6])
+            self.flatdata = jnp.asarray(flatdata, dtype=float)
             self.precision = jnp.diag(jnp.array([100., 10.]))
             self.c = Parameter('c', value=0., derived=True)
             self.d = Parameter('d', value=jnp.zeros(3), shape=(3,), derived=True)
@@ -116,6 +120,11 @@ def likelihood():
     graph.precision = like.precision.copy()
     graph.mpicomm = get_mpicomm()
     return graph
+
+
+@pytest.fixture
+def likelihood():
+    return make_likelihood()
 
 
 # ── Accuracy ──────────────────────────────────────────────────────────────────
@@ -417,6 +426,257 @@ def test_mh_fast_slow(likelihood):
     sampler.run(max_steps=100)
 
 
+def _skip_if_mpi():
+    """Skip a single-process test under MPI.
+
+    ``pytest.mark.mpi_skip`` is only enforced when pytest-mpi is installed; without it a
+    test that drives the pool from the main rank alone deadlocks the workers rather than
+    being skipped.
+    """
+    if get_mpicomm().size > 1:
+        pytest.skip('single-process test')
+
+
+# ── SMC bridge ────────────────────────────────────────────────────────────────
+
+# Analytic posterior of the `likelihood` fixture: a ~ N(0.4, 1/sqrt(200)), b ~ N(0.6, 1/sqrt(10)).
+_ANALYTIC_MEAN = np.array([0.4, 0.6])
+_ANALYTIC_STD = np.array([1. / np.sqrt(200.), 1. / np.sqrt(10.)])
+
+
+def _analytic_logevidence(graph, mean=_ANALYTIC_MEAN, std=_ANALYTIC_STD):
+    """Return log Z of *graph*, whose posterior is exactly Gaussian.
+
+    The graph returns an unnormalized log-posterior, but a Gaussian is fixed by its shape,
+    so evaluating it at the mean and dividing by the normalized Gaussian there gives the
+    normalization exactly (the prior box at +-10 sigma cuts nothing).
+    """
+    log_post = float(graph(dict(zip(('a', 'b'), mean)), return_derived=False))
+    log_gauss = float(-0.5 * len(mean) * np.log(2. * np.pi) - np.sum(np.log(std)))
+    return log_post - log_gauss
+
+
+def _shifted_proposal(likelihood, shift=1., scale=1.5):
+    """A Gaussian proposal shifted by *shift* sigma and *scale* times wider."""
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+    center = _ANALYTIC_MEAN + shift * _ANALYTIC_STD * np.array([1., -1.])
+    covariance = Covariance(np.diag((scale * _ANALYTIC_STD)**2),
+                            params=[params['a'].clone(value=center[0]),
+                                    params['b'].clone(value=center[1])])
+    return samplers.GaussianProposal(covariance)
+
+
+def _check_posterior(samples, atol_mean=0.15, rtol_std=0.1):
+    """Check equal-weight *samples* against the analytic posterior, in units of sigma."""
+    weights = np.asarray(samples.weight, dtype='f8')
+    weights = weights / weights.sum()
+    for i, name in enumerate(('a', 'b')):
+        values = np.ravel(samples[name].value)
+        mean = np.sum(weights * values)
+        std = np.sqrt(np.sum(weights * (values - mean)**2))
+        assert abs(mean - _ANALYTIC_MEAN[i]) < atol_mean * _ANALYTIC_STD[i], \
+            f'{name}: mean {mean} vs analytic {_ANALYTIC_MEAN[i]} +- {_ANALYTIC_STD[i]}'
+        assert abs(std / _ANALYTIC_STD[i] - 1.) < rtol_std, \
+            f'{name}: std {std} vs analytic {_ANALYTIC_STD[i]}'
+
+
+@pytest.mark.mpi_skip
+def test_smc_gaussian_proposal(likelihood):
+    """Bridging from a shifted, over-dispersed Gaussian recovers the posterior and its evidence."""
+    _skip_if_mpi()
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=512), rng=42,
+                               proposal=_shifted_proposal(likelihood))
+    samples = sampler.run()
+
+    _check_posterior(samples)
+    assert samples.attrs['beta'] == 1.
+    # The proposal is normalized, so the bridge returns the actual log-evidence.
+    assert abs(samples.attrs['logevidence'] - _analytic_logevidence(likelihood)) < 0.2
+    # Derived parameters are carried through the whole schedule, not recomputed at the end.
+    assert np.allclose(np.ravel(samples['c'].value),
+                       np.ravel(samples['a'].value) + np.ravel(samples['b'].value))
+
+
+@pytest.mark.mpi
+def test_smc_prior_annealing(likelihood):
+    """Without a proposal the bridge is the usual prior-to-posterior annealing.
+
+    Marked ``mpi`` rather than ``mpi_skip`` so the padded, pooled evaluation path is
+    exercised with several ranks: the batch a rank is handed must stay one fixed shape
+    however many particles are live.
+    """
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=512), rng=42)
+    samples = sampler.run()
+
+    if sampler.mpicomm.rank != 0:
+        return
+    _check_posterior(samples)
+    # No proposal, so delayed acceptance is off: screening on the prior would screen nothing.
+    assert samples.attrs['beta'] == 1.
+    # Annealing all the way from the prior needs many more temperatures than a bridge does.
+    assert len(samples.attrs['history']) > 3
+
+
+@pytest.mark.mpi_skip
+def test_smc_delayed_acceptance(likelihood):
+    """Delayed acceptance changes the cost, not the posterior."""
+    _skip_if_mpi()
+    results = {}
+    for delayed in (False, True):
+        sampler = samplers.Sampler(
+            likelihood, kernel=samplers.SMC(nparticles=512, delayed=delayed), rng=42,
+            proposal=_shifted_proposal(likelihood))
+        results[delayed] = sampler.run()
+        _check_posterior(results[delayed])
+
+    # The screening stage rejects before paying for the posterior, so it must cost less.
+    assert results[True].attrs['nevaluations'] < results[False].attrs['nevaluations']
+    # And both must land on the same evidence.
+    assert abs(results[True].attrs['logevidence'] - results[False].attrs['logevidence']) < 0.2
+
+
+@pytest.mark.mpi_skip
+def test_smc_seeds(likelihood):
+    """Two seeds scatter around the same posterior."""
+    _skip_if_mpi()
+    means = []
+    for seed in (42, 7):
+        sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=512), rng=seed,
+                                   proposal=_shifted_proposal(likelihood))
+        samples = sampler.run()
+        _check_posterior(samples)
+        means.append(samples.mean(['a', 'b']))
+    assert np.allclose(means[0], means[1], atol=0.15 * _ANALYTIC_STD, rtol=0)
+
+
+@pytest.mark.mpi_skip
+def test_smc_samples_proposal():
+    """The emulated-to-exact bridge: an existing chain plus the density it was sampled under.
+
+    The 'emulated' posterior is the same Gaussian with a perturbed data vector, so it sits
+    about 1 sigma off in b -- the emulator error the bridge has to remove. Reweighting the
+    chain would work here too; the point is that the machinery does, and that it removes the
+    shift rather than inheriting it.
+    """
+    _skip_if_mpi()
+    exact = make_likelihood()
+    emulated_data = np.array([0.4 + 0.5 * _ANALYTIC_STD[0], 0.6 + _ANALYTIC_STD[1]])
+    emulated = make_likelihood(flatdata=emulated_data)
+    # a keeps its N(0.4, 0.1) prior, so shifting the data moves the mean only half as far;
+    # b's prior is uniform, so its mean follows the data exactly.
+    emulated_mean = np.array([0.5 * (0.4 + emulated_data[0]), emulated_data[1]])
+
+    # A grid under the emulated posterior stands in for a converged chain: its weights are
+    # the emulated posterior, so SamplesProposal draws from exactly the density it is given.
+    grid_sampler = samplers.Sampler(emulated, kernel=samplers.Grid(), rng=42)
+    chain = grid_sampler.run(grid=dict(a=_a_grid, b=_b_grid))
+
+    proposal = samplers.SamplesProposal(emulated, chain)
+    sampler = samplers.Sampler(exact, kernel=samplers.SMC(nparticles=512), rng=42, proposal=proposal)
+    samples = sampler.run()
+
+    _check_posterior(samples)
+    # log(Z_exact / Z_emulated), both graphs sharing the same unknown constant.
+    expected = _analytic_logevidence(exact) - _analytic_logevidence(emulated, mean=emulated_mean)
+    assert abs(samples.attrs['logevidence'] - expected) < 0.2
+
+
+@pytest.mark.mpi_skip
+def test_smc_product_proposal(likelihood):
+    """A product of independent factors over disjoint blocks is a valid proposal."""
+    _skip_if_mpi()
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+    factors = [samplers.GaussianProposal(
+        Covariance(np.diag([(1.5 * _ANALYTIC_STD[i])**2]),
+                   params=[params[name].clone(value=_ANALYTIC_MEAN[i] + _ANALYTIC_STD[i])]))
+        for i, name in enumerate(('a', 'b'))]
+
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=512), rng=42,
+                               proposal=samplers.ProductProposal(*factors))
+    samples = sampler.run()
+
+    _check_posterior(samples)
+    # The factorized proposal is normalized too, so the evidence is still the true one.
+    assert abs(samples.attrs['logevidence'] - _analytic_logevidence(likelihood)) < 0.2
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('names', [('a', 'b'), ('a',)])
+def test_smc_covariance_proposal(likelihood, names):
+    """A Covariance is still accepted as a proposal, covering all parameters or only some.
+
+    It is wrapped into a GaussianProposal inside a ProductProposal; the parameters the
+    covariance leaves out keep their own prior.
+    """
+    _skip_if_mpi()
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+    index = [('a', 'b').index(name) for name in names]
+    center = _ANALYTIC_MEAN[index] + _ANALYTIC_STD[index]
+    covariance = Covariance(np.diag((1.5 * _ANALYTIC_STD[index])**2),
+                            params=[params[name].clone(value=value)
+                                    for name, value in zip(names, center)])
+
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=512), rng=42,
+                               proposal=covariance)
+    _check_posterior(sampler.run())
+
+
+@pytest.mark.mpi_skip
+def test_proposal_errors(likelihood):
+    """Malformed proposals are rejected where they are built, not deep inside a run."""
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+
+    def gaussian(name):
+        return samplers.GaussianProposal(
+            Covariance(np.diag([0.1**2]), params=[params[name].clone(value=0.5)]))
+
+    with pytest.raises(ValueError, match='disjoint'):
+        samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42,
+                         proposal=samplers.ProductProposal(gaussian('a'), gaussian('a')))
+
+    # Parameters no factor covers are not an error: they keep their own prior. Cover b, and
+    # shifting a must move the proposal density exactly as a's (normal) prior does.
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42,
+                               proposal=samplers.ProductProposal(gaussian('b')))
+    lo, hi = np.zeros((1, 2)), np.array([[0.2, 0.]])
+    shift = (float(np.asarray(sampler.prior_logpdf(hi))[0])
+             - float(np.asarray(sampler.prior_logpdf(lo))[0]))
+    a0 = float(np.asarray(sampler.conditioner.forward(np.zeros(2)))[0])
+    prior_a = params['a'].prior
+    assert np.isclose(shift, float(prior_a.logpdf(jnp.array(a0 + 0.2)) - prior_a.logpdf(jnp.array(a0))))
+
+    # A factor covering only part of the space is not usable on its own: the sampler would
+    # feed it vectors of the wrong width. It has to say so, not narrow itself silently.
+    with pytest.raises(ValueError, match='ProductProposal'):
+        samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42, proposal=gaussian('a'))
+
+    # A product handed as a factor is flattened, not nested.
+    product = samplers.ProductProposal(gaussian('a'), samplers.ProductProposal(gaussian('b')))
+    assert len(product.factors) == 2
+    samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42, proposal=product)
+
+    class RvsOnly:
+        """A proposal that can be drawn from but not inverted from the unit cube."""
+
+        def logpdf(self, x):
+            return jnp.zeros(())
+
+        def rvs(self, size, rng):
+            return rng.random((size, 2))
+
+    # SMC draws through rvs, so it accepts this; kernels that need a ppf must say so clearly.
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42, proposal=RvsOnly())
+    with pytest.raises(NotImplementedError, match='ppf'):
+        sampler.prior_ppf(np.full((1, 2), 0.5))
+
+    with pytest.raises(TypeError, match='logpdf'):
+        samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42, proposal=object())
+
+
 # ── Static kernels ─────────────────────────────────────────────────────────────
 
 @pytest.mark.mpi
@@ -454,7 +714,7 @@ def test_static_kernel_importance(likelihood):
     grid_results = grid_sampler.run(grid=dict(a=_a_grid, b=_b_grid))
 
     imp_sampler = samplers.Sampler(likelihood, kernel=samplers.Importance(), rng=42)
-    results = imp_sampler.run(samples=grid_results, resample=False)
+    results = imp_sampler.run(samples=grid_results, combine=True)
 
     if imp_sampler.mpicomm.rank == 0:
         cov = np.linalg.inv(2 * likelihood.precision + np.array([[100, 0], [0, 0]]))
@@ -462,6 +722,31 @@ def test_static_kernel_importance(likelihood):
                            likelihood.flatdata, atol=1e-3, rtol=0)
         assert np.allclose(results.covariance(likelihood.params.select(varied=True)),
                            cov, atol=1e-3)
+
+
+@pytest.mark.mpi
+def test_static_kernel_importance_reweight(likelihood):
+    """Importance reweighting an already-weighted grid to the same posterior is the identity."""
+    grid_sampler = samplers.Sampler(likelihood, kernel=samplers.Grid(), rng=42)
+    grid_results = grid_sampler.run(grid=dict(a=_a_grid, b=_b_grid))
+
+    imp_sampler = samplers.Sampler(likelihood, kernel=samplers.Importance(), rng=42)
+    results = imp_sampler.run(samples=grid_results)
+    # Every rank must take part in the second run, so it cannot sit inside the rank-0 branch.
+    equal = imp_sampler.run(samples=grid_results, resample=True, reuse=False)
+
+    if imp_sampler.mpicomm.rank == 0:
+        # The weighted grid already represents the posterior, so reweighting it to the
+        # very same posterior must leave the weights (and hence the moments) unchanged.
+        params = likelihood.params.select(varied=True)
+        assert np.allclose(results.aweight, grid_results.aweight, atol=0, rtol=1e-8)
+        assert np.allclose(results.mean(params), grid_results.mean(params), atol=0, rtol=1e-6)
+        assert results.attrs['ess_correction'] > 0.999 * len(results.aweight)
+        assert abs(results.attrs['logevidence']) < 1e-8
+
+        # Resampling to equal weight preserves the moments to Monte-Carlo accuracy.
+        assert np.allclose(equal.aweight, 1.)
+        assert np.allclose(equal.mean(params), grid_results.mean(params), atol=3e-2, rtol=0)
 
 
 if __name__ == '__main__':

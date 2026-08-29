@@ -421,6 +421,15 @@ class Variable(Node):
         return np.asarray(self._value).dtype
 
     @property
+    def size(self):
+        """Number of scalar entries, i.e. this variable's width in a flat parameter vector.
+
+        Follows :attr:`shape`, not the stored value, and is 1 for a scalar variable.
+        Distinct from :attr:`ndim`, which is the value's number of axes.
+        """
+        return int(np.prod(self.shape)) if self.shape else 1
+
+    @property
     def ndim(self):
         if hasattr(self._value, 'ndim'):
             return self._value.ndim
@@ -1147,6 +1156,17 @@ class Parameter(Variable):
 
     def __repr__(self):
         return f'Parameter({self._name!r}, {"fixed" if self.fixed else "varied"})'
+
+
+def _cumsize_params(params):
+    """Return the cumulative flat-vector offsets of *params*, as an ``(len(params) + 1,)`` array.
+
+    Entry *i* is where parameter *i* starts in a flat parameter vector, so a parameter's
+    slice is ``[cumsize[i]:cumsize[i + 1]]`` and ``cumsize[-1]`` is the total width.
+    Written as an array rather than a running offset so that it can be used inside a
+    comprehension.
+    """
+    return np.cumsum([0] + [param.size for param in params])
 
 
 @register_type

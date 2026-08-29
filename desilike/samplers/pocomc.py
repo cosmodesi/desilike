@@ -16,9 +16,9 @@ from .base import PopulationKernel, update_kwargs
 class _Prior:
     """Prior wrapper for ``pocoMC`` built from prior callables."""
 
-    def __init__(self, prior_logpdf, prior_ppf, prior_bounds, ndim, rng):
+    def __init__(self, prior_logpdf, prior_rvs, prior_bounds, ndim, rng):
         self._logpdf = prior_logpdf
-        self._ppf = prior_ppf
+        self._rvs = prior_rvs
         self._rng = rng
         self._bounds = prior_bounds   # (ndim, 2)
         self._ndim = ndim
@@ -31,21 +31,9 @@ class _Prior:
         return log_p
 
     def rvs(self, size=1):
-        lo = self._bounds[:, 0]
-        hi = self._bounds[:, 1]
-        accepted = []
-        max_tries = 100
-        for _ in range(max_tries):
-            u = self._rng.random((size * 2, self._ndim))
-            candidates = np.asarray(self._ppf(u))
-            mask = np.all((candidates >= lo) & (candidates <= hi), axis=1)
-            accepted.extend(candidates[mask])
-            if len(accepted) >= size:
-                return np.array(accepted[:size])
-        raise RuntimeError(
-            f'_Prior.rvs: failed to collect {size} in-bounds samples after {max_tries} attempts '
-            f'(collected {len(accepted)} so far).'
-        )
+        # Drawing through the sampler rather than through a PPF of our own also lets pocoMC
+        # start from proposals that have no inverse CDF, such as an existing chain.
+        return np.asarray(self._rvs(size, self._rng))
 
     @property
     def bounds(self):
@@ -107,7 +95,7 @@ class PocoMC(PopulationKernel):
 
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
-        self._prior_logpdf, self._prior_ppf, self._prior_bounds = prior
+        self._prior_logpdf, _, self._prior_rvs, self._prior_bounds = prior
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']
@@ -119,7 +107,7 @@ class PocoMC(PopulationKernel):
 
         if self._pool.main:
             if self._sampler is None:
-                prior_obj = _Prior(self._prior_logpdf, self._prior_ppf, self._prior_bounds, self._ndim, self._rng)
+                prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_bounds, self._ndim, self._rng)
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'pocoMC',
                     prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,

@@ -15,7 +15,7 @@ import numpy as np
 from scipy.special import logsumexp
 
 from ..base import build, CompiledGraph
-from ..parameter import VariableCollection
+from ..parameter import VariableCollection, _cumsize_params
 from ..samples import MCSamples, Covariance, diagnostics
 from ..distributed import default_mpicomm, get_mpicomm
 from ..conditioning import AffineConditioner
@@ -32,28 +32,6 @@ def update_kwargs(user_kwargs, sampler_name, **desilike_kwargs):
             warnings.warn(f"Keyword argument '{key}' passed to {sampler_name} is overwritten.")
         kwargs[key] = value
     return kwargs
-
-
-def _param_sizes(varied_params):
-    """Return a list of ``(param, size, col_start)`` for each varied parameter.
-
-    Parameters
-    ----------
-    varied_params : VariableCollection
-
-    Returns
-    -------
-    list of (Parameter, int, int)
-        Each tuple contains the parameter, its flat scalar size, and its
-        starting column index in the flat parameter vector.
-    """
-    result = []
-    col = 0
-    for param in varied_params:
-        size = int(np.prod(param.shape)) if param.shape else 1
-        result.append((param, size, col))
-        col += size
-    return result
 
 
 def _normalize_sample_ids(nsamples):
@@ -98,9 +76,10 @@ def _flat_to_dict(sample, varied_params):
         scalar when ``param.shape`` is empty.  The values keep the dtype of
         *sample* (so this stays JAX-traceable when *sample* is a tracer).
     """
+    cumsize = _cumsize_params(varied_params)
     result = {}
-    for param, size, col in _param_sizes(varied_params):
-        chunk = sample[col:col + size]
+    for i, param in enumerate(varied_params):
+        chunk = sample[cumsize[i]:cumsize[i + 1]]
         result[param.name] = chunk.reshape(param.shape) if param.shape else chunk[0]
     return result
 
@@ -258,16 +237,21 @@ class PopulationKernel:
         likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
             Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
             respectively for a single rescaled-space ``(ndim,)`` sample.
-        prior : tuple of (prior_logpdf, prior_ppf, prior_bounds)
+        prior : tuple of (prior_logpdf, prior_ppf, prior_rvs, prior_bounds)
             ``prior_logpdf``: pool-aware log-prior callable.
             ``prior_ppf``: unit-hypercube → parameter-space transform.
+            ``prior_rvs``: ``(size, rng)`` draws; see :meth:`BaseSampler.prior_rvs`.
             ``prior_bounds``: ``(ndim, 2)`` array of lower/upper bounds in rescaled space.
+
+            All four describe the beta = 0 distribution, which is the proposal rather than
+            the prior when one is set.
         rng : numpy.random.Generator
             Random-number generator (main process).
         **context : dict
             ``pool`` : Pool — MPI pool for distributing evaluations.
             ``ndim`` : int — dimensionality of the conditioned parameter space.
             ``output_dir`` : Path or None — checkpoint directory.
+            ``proposal`` : object or None — the proposal that replaced the prior, if any.
         """
 
     def run(self, **kwargs):
@@ -313,6 +297,9 @@ class StaticKernel:
 
     logger = logging.getLogger('StaticKernel')
     _sampler_cls = 'StaticSampler'
+
+    #: Random-number generator, injected by :class:`StaticSampler` before :meth:`get_samples`.
+    rng = None
 
     def get_samples(self, varied_params, **kwargs):
         """Return an ``(n_samples, ndim)`` array of points in **original** parameter space.
@@ -400,18 +387,14 @@ class BaseSampler(ABC):
         # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
         self.derived_params = posterior.params.select(derived=True) + posterior.params.select(solved=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)
-        self.nderived = int(sum(
-            int(np.prod(p.shape)) if p.shape else 1
-            for p in self.derived_params
-        ))
+        self.nderived = int(_cumsize_params(self.derived_params)[-1])
 
         # ── conditioner transform ─────────────────────────────────────────────
         if conditioner is None:
             conditioner = AffineConditioner()
         self.conditioner = conditioner
         self.conditioner.init(self.varied_params)
-        self._gauss_mu_orig = None  # sentinel: no Gaussian proposal
-        self._proposal_custom = None  # sentinel: no generic (logpdf/ppf object) proposal
+        self._proposal_custom = None  # sentinel: no proposal (the prior is the beta = 0 distribution)
 
         # ── MPI communicator ─────────────────────────────────────────────────
         self.mpicomm = mpicomm
@@ -466,112 +449,49 @@ class BaseSampler(ABC):
         Parameters
         ----------
         proposal : Covariance or object
-            Either a :class:`~desilike.samples.Covariance` (Gaussian proposal centred on
-            ``proposal.center``, see :meth:`_set_gaussian_proposal`), or any object with
+            A :class:`~desilike.samples.Covariance` is wrapped into a
+            :class:`~desilike.samplers.proposals.GaussianProposal` centred on
+            ``proposal.center``, with the parameters absent from it keeping their own prior.
+            Otherwise, any object with
 
             - ``logpdf(x)``: log-density of a flat ``(ndim,)`` point in original parameter
-              space (varied-parameter order); must be JAX-traceable,
-            - ``ppf(u)``: unit-cube ``(ndim,)`` to original parameter space (used by
-              nested samplers and PocoMC to draw the initial population).
+              space (varied-parameter order); must be JAX-traceable, and may be unnormalized
+              (the constant cancels in ``log_posterior - log_proposal``),
+
+            and at least one way of drawing from it:
+
+            - ``ppf(u)``: unit-cube ``(ndim,)`` to original parameter space (required by
+              nested samplers and PocoMC, which sample the initial population that way),
+            - ``rvs(size, rng)``: ``(size, ndim)`` draws in original parameter space, for
+              proposals with no closed-form inverse CDF -- a set of chain rows, say. Kernels
+              that need a ``ppf`` raise a clear error when only ``rvs`` is available; see
+              :meth:`prior_rvs`.
         """
         from ..samples import Covariance as _Covariance
         if isinstance(proposal, _Covariance):
-            return self._set_gaussian_proposal(proposal)
-        for required in ('logpdf', 'ppf'):
-            if not callable(getattr(proposal, required, None)):
-                raise TypeError(f'proposal must be a Covariance or expose a callable {required!r}, '
-                                f'got {type(proposal)}')
+            from .proposals import GaussianProposal, ProductProposal
+            if not any(param.name in proposal for param in self.varied_params):
+                raise ValueError('None of the varied parameters are present in the proposal Covariance.')
+            # The product fills in the parameters the covariance does not cover with their priors.
+            proposal = ProductProposal(GaussianProposal(proposal))
+        if not callable(getattr(proposal, 'logpdf', None)):
+            raise TypeError(f'proposal must be a Covariance or expose a callable {"logpdf"!r}, '
+                            f'got {type(proposal)}')
+        if not any(callable(getattr(proposal, name, None)) for name in ('ppf', 'rvs')):
+            raise TypeError(f'proposal must expose a callable {"ppf"!r} or {"rvs"!r}, got {type(proposal)}')
+        # Proposals from desilike.samplers.proposals bind themselves to the sampler's own
+        # parameter layout here, so they never have to guess the flat ordering.
+        init = getattr(proposal, 'init', None)
+        if callable(init):
+            init(self.varied_params)
+            # A proposal binds only the parameters it covers, so a partial one would leave the
+            # sampler feeding it vectors of the wrong width. Wrap it in a ProductProposal to
+            # give the rest their priors.
+            ndim = getattr(proposal, 'ndim', self.ndim)
+            if ndim != self.ndim:
+                raise ValueError(f'proposal {type(proposal).__name__} covers {ndim} of the '
+                                 f'{self.ndim} varied dimensions; wrap it in a ProductProposal.')
         self._proposal_custom = proposal
-
-    def _set_gaussian_proposal(self, proposal):
-        """Build a Gaussian proposal from a :class:`~desilike.samples.Covariance` object.
-
-        The proposal replaces the prior as the *starting / annealing* distribution handed
-        to population kernels (the beta = 0 distribution of the tempered path).  This does
-        **not** change the inferred posterior: kernels receive the likelihood as
-        ``log_posterior - log_proposal`` (see :meth:`_likelihood_logpdf_one`), so the
-        tempered target ``proposal * likelihood^beta`` equals the exact posterior at
-        beta = 1 for *any* proposal, and the kernel's evidence estimate remains the true
-        one.  The proposal only shapes the annealing path: a posterior-shaped Gaussian
-        (e.g. an inflated profiled covariance) shrinks the prior -> posterior annealing
-        distance by orders of magnitude.  The proposal must *over-cover* the posterior
-        (inflate by 1.5-2x); see :meth:`_set_proposal` for the measured failure of
-        under-dispersed proposals.
-
-        Parameters present in *proposal* get a joint multivariate-Gaussian centred on
-        ``proposal.center`` with covariance ``proposal.value``.  Parameters absent from
-        it keep their per-parameter prior (uniform / normal / ...).
-
-        Hard prior limits from each parameter's prior distribution are always enforced:
-        the proposal logpdf returns ``-inf`` outside those limits, and the PPF clips to
-        them so that ``ppf(0)`` / ``ppf(1)`` return finite hard bounds (used by PocoMC
-        and Dynesty to set the sampling volume).
-
-        Must be called *after* :meth:`BaseSampler.__init__` (depends on the conditioner).
-        Stores the Gaussian parameters in original (pre-conditioner) space so that
-        ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``conditioner.forward`` once.
-        """
-        from ..samples import Covariance as _Covariance
-        if not isinstance(proposal, _Covariance):
-            raise TypeError(f'proposal must be a Covariance instance, got {type(proposal)}')
-        prior = proposal
-
-        param_sizes_list = list(_param_sizes(self.varied_params))
-
-        # ── split varied params into Gaussian group and individual group ──────
-        gauss_param_sizes = []   # (param, size, col) for params in prior
-        indiv_param_sizes = []   # (param, size, col) for params not in prior
-        for param, size, col in param_sizes_list:
-            if param.name in prior:
-                gauss_param_sizes.append((param, size, col))
-            else:
-                indiv_param_sizes.append((param, size, col))
-
-        if not gauss_param_sizes:
-            raise ValueError('None of the varied parameters are present in the prior Covariance.')
-
-        # ── covariance and mean in original space ──────────────────────────────────────
-        gauss_params_list = [param for param, size, col in gauss_param_sizes]
-        gauss_prior = prior.select(gauss_params_list)
-        C_gauss_orig = gauss_prior.value  # (n_gauss, n_gauss)
-        mu_gauss_orig = gauss_prior.center  # n_gauss
-
-        # ── Cholesky of C_gauss_orig ──────────────────────────────────────────
-        try:
-            L_gauss = np.linalg.cholesky(C_gauss_orig)
-        except np.linalg.LinAlgError as exc:
-            raise ValueError('prior covariance is not positive-definite.') from exc
-        L_gauss_inv = np.linalg.inv(L_gauss)
-        precision = L_gauss_inv.T @ L_gauss_inv  # (n_gauss, n_gauss)
-        n_gauss = mu_gauss_orig.size
-        # log det = 2 * sum(log(diag(L)))
-        log_norm = 0.5 * n_gauss * np.log(2. * np.pi) + np.sum(np.log(np.diag(L_gauss)))
-
-        # ── flat column indices in the ndim vector for Gaussian params ────────
-        gauss_flat_cols = np.concatenate([np.arange(col, col + size)
-                                          for param, size, col in gauss_param_sizes]).astype('i4')
-
-        # Hard prior limits of the Gaussian-group params, for PPF clipping: the proposal
-        # must never emit a point outside the support -- the target density is zero there,
-        # and samplers that logit-transform bounded dimensions using these limits (PocoMC's
-        # scaler) turn out-of-bounds draws into NaNs that poison their preconditioner.
-        gauss_limits = np.array([np.asarray(param.prior.limits, dtype='f8')
-                                 for param, size, col in gauss_param_sizes
-                                 for _ in range(size)])
-        margin = 1e-7 * np.where(np.isfinite(gauss_limits[:, 1] - gauss_limits[:, 0]),
-                                 gauss_limits[:, 1] - gauss_limits[:, 0], 1.)
-
-        # ── store ─────────────────────────────────────────────────────────────
-        self._gauss_low_orig     = jnp.array(np.where(np.isfinite(gauss_limits[:, 0]),
-                                                      gauss_limits[:, 0] + margin, -np.inf))
-        self._gauss_high_orig    = jnp.array(np.where(np.isfinite(gauss_limits[:, 1]),
-                                                      gauss_limits[:, 1] - margin, np.inf))
-        self._gauss_mu_orig      = jnp.array(mu_gauss_orig)
-        self._gauss_L_orig       = jnp.array(L_gauss)
-        self._gauss_precision    = jnp.array(precision)
-        self._gauss_log_norm     = float(log_norm)
-        self._gauss_flat_cols    = gauss_flat_cols
-        self._indiv_param_sizes  = indiv_param_sizes
 
     def set_rng(self, rng):
         """Set the random number generator."""
@@ -585,10 +505,7 @@ class BaseSampler(ABC):
     @property
     def ndim(self):
         """Total number of scalar dimensions across all varied parameters."""
-        return int(sum(
-            int(np.prod(param.shape)) if param.shape else 1
-            for param in self.varied_params
-        ))
+        return int(_cumsize_params(self.varied_params)[-1])
 
     def set_pool(self, mpicomm, batch_size=None):
         """Create the pool and register the batched evaluators.
@@ -619,72 +536,90 @@ class BaseSampler(ABC):
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
-        When a Gaussian proposal is set (via :meth:`_set_gaussian_proposal`), the first
-        ``n_gauss`` unit-cube dimensions are mapped through the unconstrained joint
-        Cholesky PPF of the Gaussian, and the remaining dimensions map each non-Gaussian
-        param through its individual prior PPF.  Without a Gaussian proposal, every param
-        uses its individual prior PPF.  Either way the result is transformed to the
-        sampler's conditioned working space via :meth:`AffineConditioner.inverse`.
+        When a proposal is set it supplies the PPF instead, over whichever parameters it
+        covers. Either way the result is transformed to the sampler's conditioned working
+        space via :meth:`AffineConditioner.inverse`.
         """
         if self._proposal_custom is not None:
-            return self.conditioner.inverse(jnp.asarray(self._proposal_custom.ppf(sample)))
-        if self._gauss_mu_orig is not None:
-            n_gauss = self._gauss_flat_cols.size
-            # Gaussian group: Cholesky PPF in original space (unconstrained).
-            # Clip z to a large finite range before the matmul to avoid 0*inf=NaN when
-            # L has zero entries (diagonal L) and u=0/1 gives z=±inf.
-            z = jnp.clip(jax.scipy.stats.norm.ppf(sample[:n_gauss]), -1e38, 1e38)
-            x_gauss = self._gauss_mu_orig + self._gauss_L_orig @ z
-            # Clip to the hard prior limits (see _set_gaussian_proposal): the support edge,
-            # not beyond it.
-            x_gauss = jnp.clip(x_gauss, self._gauss_low_orig, self._gauss_high_orig)
-            x_orig = jnp.zeros(self.ndim).at[self._gauss_flat_cols].set(x_gauss)
-            # Individual group: per-param PPF
-            u_col = n_gauss
-            for param, size, col in self._indiv_param_sizes:
-                u_chunk = sample[u_col:u_col + size]
-                x_orig = x_orig.at[col:col + size].set(jnp.atleast_1d(param.prior.ppf(u_chunk)))
-                u_col += size
-            return self.conditioner.inverse(x_orig)
-        parts = []
-        for param, size, col in _param_sizes(self.varied_params):
-            u_chunk = sample[col:col + size]
-            parts.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
+            ppf = getattr(self._proposal_custom, 'ppf', None)
+            if not callable(ppf):
+                raise NotImplementedError(
+                    f'proposal {type(self._proposal_custom).__name__} exposes no ppf, so it cannot be '
+                    'inverted from the unit cube. Use a kernel that draws through rvs (e.g. SMC).')
+            return self.conditioner.inverse(jnp.asarray(ppf(sample)))
+        cumsize = _cumsize_params(self.varied_params)
+        parts = [jnp.atleast_1d(param.prior.ppf(sample[cumsize[i]:cumsize[i + 1]]))
+                 for i, param in enumerate(self.varied_params)]
         return self.conditioner.inverse(jnp.concatenate(parts))
+
+    def prior_rvs(self, size, rng):
+        """Draw *size* points from the prior (or from the proposal, when one is set).
+
+        Returns points in the sampler's *rescaled* working space, so they can be fed
+        straight to the pooled evaluators. Draws come from the proposal's own ``rvs``
+        when it has one -- the only route for proposals with no closed-form inverse CDF,
+        such as a set of chain rows -- and otherwise from the unit cube through
+        :meth:`_prior_ppf_one`. Either way, points outside the hard prior box are
+        rejected and redrawn: the target density is zero there, and samplers that
+        logit-transform bounded dimensions turn such points into NaNs that poison their
+        preconditioner.
+
+        Parameters
+        ----------
+        size : int
+            Number of points to draw.
+        rng : numpy.random.Generator
+            Random-number generator.
+
+        Returns
+        -------
+        numpy.ndarray, shape ``(size, ndim)``
+        """
+        rvs = getattr(self._proposal_custom, 'rvs', None) if self._proposal_custom is not None else None
+        if callable(rvs):
+            def draw(ndraws):
+                draws = np.asarray(rvs(ndraws, rng))
+                if draws.shape != (ndraws, self.ndim):
+                    raise ValueError(f'proposal.rvs returned shape {draws.shape}, '
+                                     f'expected {(ndraws, self.ndim)}.')
+                return np.asarray(self.conditioner.inverse(draws))
+        else:
+            def draw(ndraws):
+                return np.asarray(self.prior_ppf(rng.random((ndraws, self.ndim))))
+
+        bounds = np.asarray(self.prior_bounds)
+        accepted, ndraws = [], 0
+        for _ in range(100):
+            candidates = draw(2 * size)
+            mask = np.all((candidates >= bounds[:, 0]) & (candidates <= bounds[:, 1]), axis=1)
+            accepted.append(candidates[mask])
+            ndraws += int(mask.sum())
+            if ndraws >= size:
+                # Shuffle before truncating: draws are over-generated, and some proposals
+                # return them in a meaningful order (systematic resampling of a chain hands
+                # back ascending indices), so keeping the first `size` would keep a slice of
+                # the chain rather than a sample of it.
+                candidates = np.concatenate(accepted)
+                return candidates[rng.permutation(len(candidates))[:size]]
+        raise RuntimeError(f'prior_rvs: only {ndraws} of {size} draws fell inside the prior bounds '
+                           'after 100 attempts.')
 
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        When a Gaussian proposal is set, evaluates the unconstrained multivariate-Gaussian
-        logpdf for the Gaussian-group params and sums the individual per-param logpdfs
-        for the remaining params.
-        Without a Gaussian proposal, evaluates each original prior's logpdf after mapping
-        to original space via :meth:`AffineConditioner.forward`.
+        When a proposal is set it supplies the density instead. Either way the sample is
+        mapped to original space via :meth:`AffineConditioner.forward` first.
         """
         x_orig = self.conditioner.forward(sample)
         if self._proposal_custom is not None:
             return self._proposal_custom.logpdf(x_orig)
-        if self._gauss_mu_orig is not None:
-            # Gaussian group: unconstrained multivariate Gaussian logpdf
-            x_gauss = x_orig[self._gauss_flat_cols]
-            d = x_gauss - self._gauss_mu_orig
-            log_gauss = -0.5 * (d @ self._gauss_precision @ d) - self._gauss_log_norm
-            # Individual group
-            result = log_gauss
-            for param, size, col in self._indiv_param_sizes:
-                if param.prior is None:
-                    continue
-                chunk = x_orig[col:col + size]
+        cumsize = _cumsize_params(self.varied_params)
+        result = jnp.array(0.)
+        for i, param in enumerate(self.varied_params):
+            if param.prior is not None:
+                chunk = x_orig[cumsize[i]:cumsize[i + 1]]
                 chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
                 result = result + param.prior.logpdf(chunk)
-            return result
-        result = jnp.array(0.)
-        for param, size, col in _param_sizes(self.varied_params):
-            if param.prior is None:
-                continue
-            chunk = x_orig[col:col + size]
-            chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
-            result = result + param.prior.logpdf(chunk)
         return result
 
     def _posterior_logpdf_one(self, sample):
@@ -759,16 +694,15 @@ class BaseSampler(ABC):
         samples = np.asarray(self.conditioner.forward(samples))
         data = []
         # ── varied params ─────────────────────────────────────────────────────
-        for param, size, col in _param_sizes(self.varied_params):
-            slice_arr  = samples[..., col:col + size].reshape(samples.shape[:-1] + param.shape)
+        cumsize = _cumsize_params(self.varied_params)
+        for i, param in enumerate(self.varied_params):
+            slice_arr = samples[..., cumsize[i]:cumsize[i + 1]].reshape(samples.shape[:-1] + param.shape)
             data.append(param.clone(value=slice_arr))
         # ── derived params ────────────────────────────────────────────────────
-        col = 0
-        for param in self.derived_params:
-            size = int(np.prod(param.shape)) if param.shape else 1
-            slice_arr  = derived[..., col:col + size].reshape(derived.shape[:-1] + param.shape)
+        cumsize = _cumsize_params(self.derived_params)
+        for i, param in enumerate(self.derived_params):
+            slice_arr = derived[..., cumsize[i]:cumsize[i + 1]].reshape(derived.shape[:-1] + param.shape)
             data.append(param.clone(value=slice_arr))
-            col += size
 
         new_samples = MCSamples(data)
         for key, value in kwargs.items():
@@ -809,6 +743,8 @@ class StaticSampler(BaseSampler):
         self.kernel = kernel
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
                          conditioner=conditioner, batch_size=batch_size)
+        if self.kernel is not None:
+            self.kernel.rng = self.rng
 
     def get_samples(self, **kwargs):
         """Return an ``(n_samples, ndim)`` array of points in original parameter space."""
@@ -816,10 +752,22 @@ class StaticSampler(BaseSampler):
             return self.kernel.get_samples(self.varied_params, **kwargs)
         raise NotImplementedError('Subclasses must implement get_samples() or provide a kernel.')
 
-    def run(self, **kwargs):
-        """Evaluate the posterior on the sample grid and return a MCSamples."""
+    def run(self, reuse=None, **kwargs):
+        """Evaluate the posterior on the sample grid and return a MCSamples.
+
+        Parameters
+        ----------
+        reuse : bool or None, optional
+            Whether to return the samples already held by the sampler (read back from
+            ``output_dir``, or produced by an earlier :meth:`run`) instead of evaluating
+            again. ``None`` (default) reuses them only when this call passes no
+            run-time options, so that ``run(samples=other)`` re-evaluates rather than
+            silently returning a previous, unrelated result.
+        """
+        if reuse is None:
+            reuse = not kwargs
         if self.pool.main:
-            if self.samples is None:
+            if self.samples is None or not reuse:
                 # get_samples returns original-space points; the cores and
                 # array_to_samples work in the rescaled space, so map once here.
                 grid      = np.asarray(self.conditioner.inverse(self.get_samples(**kwargs)))
@@ -985,13 +933,15 @@ class MCMCSampler(BaseSampler):
                     batch_shape = shape or (1,)
                     batch_samples = np.zeros(batch_shape + (self.ndim,))
                     key = jax.random.PRNGKey(int(rng_local.integers(2**32)))
-                    for param, size, col in _param_sizes(self.varied_params):
+                    cumsize = _cumsize_params(self.varied_params)
+                    for i, param in enumerate(self.varied_params):
+                        sl = slice(cumsize[i], cumsize[i + 1])
                         if param.ref is not None and param.ref.is_proper():
                             key, subkey = jax.random.split(key)
                             drawn = np.asarray(param.ref.sample(subkey, shape=batch_shape))
-                            batch_samples[..., col:col + size] = drawn.reshape(batch_shape + (size,))
+                            batch_samples[..., sl] = drawn.reshape(batch_shape + (param.size,))
                         else:
-                            batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
+                            batch_samples[..., sl] = np.asarray(param.value).ravel()
 
                     batch_samples = np.asarray(self.conditioner.inverse(batch_samples))
 
@@ -1363,9 +1313,10 @@ class PopulationSampler(BaseSampler):
             kernel_output_dir.mkdir(parents=True, exist_ok=True)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
-            (self.prior_logpdf, self.prior_ppf, self.prior_bounds),
+            (self.prior_logpdf, self.prior_ppf, self.prior_rvs, self.prior_bounds),
             self.rng,
             pool=self.pool, ndim=self.ndim, output_dir=kernel_output_dir,
+            proposal=proposal,
         )
 
     def _kernel_output_dir(self, local_idx):
@@ -1527,7 +1478,7 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
                    batch_size=batch_size, proposal=proposal)
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
-                   conditioner=conditioner)
+                   conditioner=conditioner, batch_size=batch_size)
     return cls(posterior, kernel=kernel, nparallel=nparallel,
                rng=rng, output_dir=output_dir, conditioner=conditioner,
                batch_size=batch_size)

@@ -10,9 +10,12 @@ from .numpyro import NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA, Numpyr
 from .dynesty import Dynesty
 from .nautilus import Nautilus
 from .pocomc import PocoMC
+from .smc import SMC
 from .grid import Grid
 from .qmc import QMC
 from .importance import Importance
+from .proposals import (BaseProposal, PriorProposal, SamplesProposal, GaussianProposal,
+                        ProductProposal)
 
 __all__ = [
     'Sampler',
@@ -39,7 +42,13 @@ __all__ = [
     'Dynesty',
     'Nautilus',
     'PocoMC',
+    'SMC',
     'Grid',
     'QMC',
     'Importance',
+    'BaseProposal',
+    'PriorProposal',
+    'SamplesProposal',
+    'GaussianProposal',
+    'ProductProposal',
 ]

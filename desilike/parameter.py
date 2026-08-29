@@ -133,6 +133,8 @@ class ParameterEncoder(NumpyEncoder):
     """
 
     def default(self, obj):
+        if isinstance(obj, ParameterFiniteDifference):
+            return {'__class__': 'ParameterFiniteDifference', **obj.__getstate__()}
         if isinstance(obj, ParameterPrior):
             lo, hi = obj.limits
             d = {'__class__': 'ParameterPrior',
@@ -147,7 +149,12 @@ class ParameterEncoder(NumpyEncoder):
 
 
 def _parameter_object_hook(d):
-    """``object_hook`` for :func:`json.loads` that reconstructs :class:`ParameterPrior`."""
+    """``object_hook`` for :func:`json.loads` that reconstructs :class:`ParameterPrior` and
+    :class:`ParameterFiniteDifference`."""
+    if d.get('__class__') == 'ParameterFiniteDifference':
+        d = dict(d)
+        d.pop('__class__')
+        return ParameterFiniteDifference(**d)
     if d.get('__class__') == 'ParameterPrior':
         d = dict(d)
         d.pop('__class__')
@@ -402,12 +409,8 @@ class Variable(Node):
 
     # Minimal FD defaults so external (_is_external=True) calculators work when Variable is a dep.
     @property
-    def fd_eps(self):
-        return None
-
-    @property
-    def fd_acc(self):
-        return 2
+    def fd(self):
+        return ParameterFiniteDifference()
 
     @property
     def dtype(self):
@@ -772,6 +775,88 @@ class ParameterPrior:
         return self.clone()
 
 
+
+class ParameterFiniteDifference:
+    """Finite-difference specification for a parameter (``param.fd``).
+
+    Parameters
+    ----------
+    eps : float or (float, float), optional
+        Step size; a pair means asymmetric (below, above) steps.  ``None`` falls back to
+        ``param.ref.std()`` at the consumer.
+    acc : int, default=2
+        Derivative accuracy (number of extra stencil points).
+    transform : str, optional
+        Named expansion-variable transform (see ``base._FD_TRANSFORMS``, e.g. ``'sqrt'``);
+        with a transform, ``eps`` and ``center`` are in transformed units and
+        transform-aware consumers (``differentiate(fd_transform=True)``)
+        take derivatives w.r.t. the transformed variable.
+    center : float, optional
+        Preferred expansion anchor (transformed units when ``transform`` is set); used by
+        the default fit center (desilike_bak's ``param.delta`` semantics).
+    limits : (float, float), optional
+        Chebyshev COLLOCATION range, in PARAMETER units (mapped through ``transform``
+        internally): the order-n stencil then uses n + 1 Chebyshev-Lobatto nodes spanning
+        this range, with every derivative taken from the full node set -- the resulting
+        order-n Taylor is identically the degree-n Chebyshev interpolant over the range
+        (near-minimax over the range instead of anchor-local).  Mutually exclusive with
+        ``eps``; ``acc`` is ignored in this mode.  ``center`` (or the range midpoint)
+        still sets the default expansion anchor.
+    """
+
+    def __init__(self, eps=None, acc=2, transform=None, center=None, limits=None):
+        if eps is not None and limits is not None:
+            raise ValueError('eps and limits are mutually exclusive: eps sets a step-based '
+                             '(Taylor) stencil, limits a Chebyshev collocation range')
+        if eps is not None:
+            if hasattr(eps, '__len__'):
+                eps_below, eps_above = (float(value) for value in eps)
+                eps = eps_below if eps_below == eps_above else (eps_below, eps_above)
+            else:
+                eps = float(eps)
+        self.eps = eps
+        self.acc = int(acc)
+        self.transform = str(transform) if transform is not None else None
+        self.center = float(center) if center is not None else None
+        self.limits = tuple(float(value) for value in limits) if limits is not None else None
+
+    def __getstate__(self):
+        return {'eps': list(self.eps) if isinstance(self.eps, tuple) else self.eps,
+                'acc': self.acc, 'transform': self.transform, 'center': self.center,
+                'limits': list(self.limits) if self.limits is not None else None}
+
+    def __setstate__(self, state):
+        self.__init__(**state)
+
+    def __eq__(self, other):
+        return (type(other) is type(self) and self.eps == other.eps and self.acc == other.acc
+                and self.transform == other.transform and self.center == other.center
+                and self.limits == other.limits)
+
+    def __repr__(self):
+        parts = [f'{name}={getattr(self, name)!r}' for name in ('eps', 'acc', 'transform', 'center', 'limits')
+                 if getattr(self, name) is not None and not (name == 'acc' and self.acc == 2)]
+        return f'ParameterFiniteDifference({", ".join(parts)})'
+
+    def clone(self, **kwargs):
+        """Return a new ParameterFiniteDifference with selected attributes overridden."""
+        state = self.__getstate__()
+        state.update(kwargs)
+        return ParameterFiniteDifference(**state)
+
+    def copy(self):
+        return self.clone()
+
+    @classmethod
+    def from_legacy(cls, fd_eps=None, fd_acc=2, fd_transform=None):
+        """Build from the legacy kwargs; a 3-tuple ``fd_eps`` is (center, eps_below, eps_above)."""
+        eps, center = fd_eps, None
+        if fd_eps is not None and hasattr(fd_eps, '__len__'):
+            center, eps_below, eps_above = fd_eps
+            eps = (eps_below, eps_above)
+        return cls(eps=eps, acc=fd_acc, transform=fd_transform, center=center)
+
+
 class Parameter(Variable):
     """A single named parameter with prior, value, and metadata.
 
@@ -782,7 +867,7 @@ class Parameter(Variable):
     _solved_values = frozenset(['best', 'marg'])
 
     def __init__(self, name, value=None, prior=None, ref=None, latex=None, fixed=None,
-                 derived=False, shape=None, fd_eps=None, fd_acc=2,
+                 derived=False, shape=None, fd=None,
                  namespace=None, depends=None):
         """
         Parameters
@@ -806,10 +891,10 @@ class Parameter(Variable):
         shape : tuple or None
             Array shape; () for scalars. None (default) infers shape from value when provided,
             falling back to () when value is absent.
-        fd_eps : float, optional
-            Finite-difference step. Defaults to ref.std().
-        fd_acc : int, optional
-            Finite-difference accuracy order (must be a positive even integer). Defaults to 2.
+        fd : ParameterFiniteDifference, dict or None
+            Finite-difference specification (step ``eps``, accuracy ``acc``, expansion-variable
+            ``transform``, anchor ``center``); a dict of those fields also works.
+            None means defaults (``eps`` falls back to ``ref.std()`` at the consumer).
         namespace : str, optional
             Namespace prefix prepended to the parsed name.
         depends : dict or list, optional
@@ -891,16 +976,17 @@ class Parameter(Variable):
                 setattr(self, attr, p.clone(shape=self.shape))
             elif p.shape != self.shape:
                 raise ValueError(f'{attr} shape {p.shape} inconsistent with parameter shape {self.shape}')
-        if fd_eps is not None:
-            if hasattr(fd_eps, '__len__'):
-                # 3-tuple (center, eps_below, eps_above) — same convention as desilike_bak delta.
-                center_val, eps_below, eps_above = fd_eps
-                self._fd_eps = (float(center_val), float(eps_below), float(eps_above))
-            else:
-                self._fd_eps = float(fd_eps)
+        # Finite-difference spec: None (defaults), a dict of ParameterFiniteDifference
+        # fields, or a ParameterFiniteDifference instance.
+        if fd is None:
+            fd = ParameterFiniteDifference()
+        elif isinstance(fd, dict):
+            fd = ParameterFiniteDifference(**fd)
+        elif isinstance(fd, ParameterFiniteDifference):
+            fd = fd.copy()
         else:
-            self._fd_eps = None
-        self._fd_acc = int(fd_acc)
+            raise TypeError(f'fd must be None, a dict or a ParameterFiniteDifference; got {type(fd)}')
+        self._fd = fd
 
     # ── derived property (overrides Variable.derived; read-only after init) ──────
 
@@ -953,16 +1039,9 @@ class Parameter(Variable):
     # basename / namespace / latex() are inherited from Variable.
 
     @property
-    def fd_eps(self):
-        """Finite-difference step; falls back to ref.std()."""
-        if self._fd_eps is not None:
-            return self._fd_eps
-        return self.ref.std()
-
-    @property
-    def fd_acc(self):
-        """Finite-difference accuracy order."""
-        return self._fd_acc
+    def fd(self):
+        """Finite-difference specification (:class:`ParameterFiniteDifference`)."""
+        return self._fd
 
     def sample(self, key, shape=None):
         """Draw a sample from the prior; shape defaults to self.shape via prior.shape."""
@@ -1011,6 +1090,7 @@ class Parameter(Variable):
         new.depends = dict(self.depends)
         new.prior = self.prior.copy()
         new.ref = self.ref.copy()
+        new._fd = self._fd.copy()
         return new
 
     def __getstate__(self, to_file=False):
@@ -1022,8 +1102,7 @@ class Parameter(Variable):
             'fixed': self.fixed,
             'derived': self._derived,
             'shape': list(self.shape) if to_file else self.shape,
-            'fd_eps': self._fd_eps,
-            'fd_acc': self._fd_acc,
+            'fd': self._fd if to_file else self._fd.__getstate__(),
             'depends': {k: dep.name for k, dep in self.depends.items()} if to_file else dict(self.depends),
         }
         if to_file:
@@ -1047,8 +1126,9 @@ class Parameter(Variable):
                 latex=meta.get('latex'), fixed=meta.get('fixed', True),
                 derived=meta.get('derived', False),
                 shape=tuple(meta.get('shape', [])),
-                fd_eps=meta.get('fd_eps'),
-                fd_acc=meta.get('fd_acc', 2), depends={})
+                fd=meta.get('fd') if meta.get('fd') is not None else ParameterFiniteDifference.from_legacy(
+                    fd_eps=meta.get('fd_eps'), fd_acc=meta.get('fd_acc', 2), fd_transform=meta.get('fd_transform')),
+                depends={})
             # depends resolved later by VariableCollection.__setstate__
         else:
             # in-memory format: feed directly to __init__

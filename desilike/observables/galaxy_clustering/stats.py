@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import lsstypes as types
 from matplotlib import pyplot as plt
 
-from ...base import Calculator, Parameter, compile, copy, replace, get_params as _get_params
+from ...base import Calculator, Parameter, build, copy, replace, get_params as _get_params
 from ...base import _iter_calculators
 from ...theories.galaxy_clustering.template import Spectrum2Template
 from ... import plotting
@@ -44,7 +44,7 @@ def _compute_flattheory_nobao(observable):
     template_node = next(calc for calc in _iter_calculators(nobao_observable.theory)
                          if isinstance(calc, Spectrum2Template))
     replace(nobao_observable, template_node, template_node.clone(only_now=True))
-    nobao_graph = compile(nobao_observable)
+    nobao_graph = build(nobao_observable)
     current_params = {param.name: param._value for param in _get_params(nobao_graph)
                       if param._value is not None}
     nobao_graph(current_params)

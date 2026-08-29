@@ -10,6 +10,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from ..base import build, CompiledGraph
 from ..parameter import VariableCollection
 from ..samples import Profiles, Covariance
 from ..distributed import default_mpicomm, get_mpicomm
@@ -191,9 +192,9 @@ class Profiler:
 
     Parameters
     ----------
-    likelihood : CompiledGraph
+    likelihood : CompiledGraph or Calculator
         Compiled pipeline whose ``__call__(params_dict)`` returns the
-        log-posterior scalar.
+        log-posterior scalar.  A calculator is compiled here.
     kernel : Kernel
         Optimisation kernel (e.g. ``Minuit()``, ``Scipy()``, ``BOBYQA()``).
     rng : np.random.Generator or int, optional
@@ -235,7 +236,9 @@ class Profiler:
                  profiles=None, conditioner=None,
                  output_fn=None, mpicomm=None):
 
-        self.likelihood = likelihood
+        # a Calculator is built here; an already-built graph is taken as is, never rebuilt
+        self.likelihood = likelihood = (likelihood if isinstance(likelihood, CompiledGraph)
+                                        else build(likelihood))
         self.kernel     = kernel
         self.max_tries  = int(max_tries)
         self.output_fn    = output_fn

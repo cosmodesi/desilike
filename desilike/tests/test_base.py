@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap, differentiate, jacfwd, hessian
+from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, build, compile, pmap, differentiate, jacfwd, hessian
 from desilike.parameter import Parameter
 
 
@@ -603,13 +603,13 @@ def test_fd_acc():
     large_eps = 1e-2
 
     for acc, tol in [(2, 2e-4), (4, 1e-8)]:
-        om = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=acc)
+        om = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=acc))
         pipe = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
         g = float(jax.grad(pipe)({'omega_m': jnp.array(x0)})['omega_m'])
         assert abs(g - analytic_grad) < tol, f'fd_acc={acc}: grad error {abs(g - analytic_grad):.2e} >= tol {tol:.2e}'
 
-    om2 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=2)
-    om4 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=4)
+    om2 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=2))
+    om4 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=4))
     pipe2 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
     pipe4 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
     err2 = abs(float(jax.grad(pipe2)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
@@ -1988,7 +1988,7 @@ def test_differentiate_hessian_tree(pipeline):
     """hessian(graph, params=...) returns the nested dict {n1: {n2: d²/dn1 dn2}} like jax.hessian on a dict input."""
     p0 = {name: jnp.asarray(value) for name, value in DIFF_PARAMS0.items()}
     ref = jax.hessian(_analytic_logL_dict)(p0)
-    hess = hessian(pipeline, params=DIFF_NAMES, fd_eps=1e-3)(DIFF_PARAMS0)
+    hess = hessian(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
     for name_1 in DIFF_NAMES:
         for name_2 in DIFF_NAMES:
             got, want = float(hess[name_1][name_2]), float(ref[name_1][name_2])
@@ -1998,7 +1998,7 @@ def test_differentiate_hessian_tree(pipeline):
         for name_2 in DIFF_NAMES:
             assert abs(float(hess[name_1][name_2]) - float(hess[name_2][name_1])) < 1e-8
     # scalar FD diagonal uses the same direct order-2 stencil as the legacy dict form
-    single = differentiate(pipeline, {'omega_m': 2}, fd_eps=1e-3)(DIFF_PARAMS0)
+    single = differentiate(pipeline, {'omega_m': 2}, fd=dict(eps=1e-3))(DIFF_PARAMS0)
     assert abs(float(hess['omega_m']['omega_m']) - float(single)) < 1e-8
 
 
@@ -2065,11 +2065,11 @@ def test_differentiate_hessian_array_param():
     pipe = compile(JaxScale(ExtCubic(x), a))
     x0, x1, a0 = 1.5, 2.5, 2.0  # f(a, x) = a x0² x1
 
-    jac = jacfwd(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    jac = jacfwd(pipe, params=['a', 'x'], fd=dict(eps=1e-4))()
     assert abs(float(jac['a']) - x0 ** 2 * x1) < 1e-6
     assert np.allclose(np.asarray(jac['x']), a0 * np.array([2 * x0 * x1, x0 ** 2]), atol=1e-6)
 
-    hess = hessian(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    hess = hessian(pipe, params=['a', 'x'], fd=dict(eps=1e-4))()
     assert np.asarray(hess['x']['x']).shape == (2, 2)
     expected_xx = a0 * np.array([[2 * x1, 2 * x0], [2 * x0, 0.0]])
     assert np.allclose(np.asarray(hess['x']['x']), expected_xx, atol=1e-4), f"H[x,x] = {np.asarray(hess['x']['x'])}"
@@ -2140,3 +2140,44 @@ if __name__ == '__main__':
     print('grad =', jax.grad(pipe)(params))
     batch = {'omega_m': jnp.linspace(0.25, 0.35, 4), 'z': jnp.full(4, 0.5), 'A': jnp.ones(4), 'ns': jnp.full(4, 0.96)}
     print('vmap logL =', jax.vmap(pipe)(batch))
+
+
+# ── build: the main entry point, `compile` its legacy name ───────────────────
+
+def test_compile_is_the_legacy_name_for_build():
+    assert compile is build
+
+
+def test_build_returns_a_compiled_graph():
+    graph = build(_make_nodes()[-1])
+    assert isinstance(graph, CompiledGraph)
+    assert 'omega_m' in [param.name for param in graph.params]
+
+
+def test_the_derivative_helpers_accept_an_uncompiled_calculator():
+    """`jacfwd`/`hessian` route through `differentiate`, so one coercion serves all three."""
+    from_calculator = jacfwd(_make_nodes()[-1], params=['A'])()['A']
+    from_graph = jacfwd(compile(_make_nodes()[-1]), params=['A'])()['A']
+    assert np.allclose(np.asarray(from_calculator), np.asarray(from_graph), rtol=1e-12)
+
+
+def test_fd_spec_is_accepted_as_a_dict(pipeline):
+    """`fd=dict(eps=...)` is the same spelling as `Parameter(fd=...)`; the flat `fd_eps=` is the
+    older one and wins where both are given."""
+    spelled_as_dict = hessian(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
+    spelled_flat = hessian(pipeline, params=DIFF_NAMES, fd_eps=1e-3)(DIFF_PARAMS0)
+    for name in DIFF_NAMES:
+        assert abs(float(spelled_as_dict[name][name]) - float(spelled_flat[name][name])) < 1e-8
+
+
+def test_an_unknown_fd_field_raises_rather_than_being_dropped(pipeline):
+    with pytest.raises(ValueError, match='unknown fd field'):
+        jacfwd(pipeline, params=['A'], fd=dict(epsilon=1e-3))
+
+
+def test_per_parameter_steps_go_through_the_flat_kwarg(pipeline):
+    """`fd=` is a single spec; per-parameter values are what `fd_eps=` already took."""
+    per_param = jacfwd(pipeline, params=DIFF_NAMES,
+                       fd_eps={'omega_m': 1e-3, 'z': 1e-3})(DIFF_PARAMS0)
+    broadcast = jacfwd(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
+    assert abs(float(per_param['omega_m']) - float(broadcast['omega_m'])) < 1e-8

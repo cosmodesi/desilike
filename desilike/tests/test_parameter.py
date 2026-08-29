@@ -171,14 +171,14 @@ class TestParameter:
         p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
         assert p.ref == p.prior
 
-    def test_fd_eps_from_ref(self):
+    def test_fd_defaults(self):
         p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
-        assert abs(p.fd_eps - p.ref.std()) < 1e-10
-        assert abs(p.fd_eps - 0.01) < 1e-10
+        # eps unset: consumers fall back to ref.std()
+        assert p.fd.eps is None and p.fd.acc == 2 and p.fd.transform is None and p.fd.center is None
 
-    def test_fd_eps_explicit(self):
-        p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01}, fd_eps=0.05)
-        assert abs(p.fd_eps - 0.05) < 1e-10
+    def test_fd_explicit(self):
+        p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01}, fd=dict(eps=0.05))
+        assert abs(p.fd.eps - 0.05) < 1e-10
 
     def test_derived_bool(self):
         p = Parameter('logL', derived=True)
@@ -239,7 +239,7 @@ class TestParameter:
 
     def test_getstate_setstate_roundtrip(self):
         p = Parameter('galaxy.omega_m', value=0.3, prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01},
-                      latex=r'\Omega_m', fixed=False, derived=False, fd_eps=0.01)
+                      latex=r'\Omega_m', fixed=False, derived=False, fd=dict(eps=0.01))
         state = p.__getstate__()
         q = Parameter.__new__(Parameter)
         q.__setstate__(state)

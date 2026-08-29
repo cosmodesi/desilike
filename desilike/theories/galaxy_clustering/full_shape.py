@@ -20,6 +20,8 @@ TNSTracerCorrelation2Poles
 import os
 import warnings
 
+import itertools
+
 import numpy as np
 from scipy import constants
 import jax
@@ -27,10 +29,12 @@ import jax.numpy as jnp
 import interpax
 
 from ...base import Calculator, get_params
+from cosmoprimo.emulators.tools.utils import cardinal_cubic_weights, lagrange_weights
 from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog
 from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
+from ...emulators.api import CalculatorEmulator, DERIVED
 from ._multitracer import propose_params_multitracer, assign_params
 
 
@@ -469,7 +473,7 @@ class KaiserPTSpectrum2Poles(Calculator):
         self.template = template
         k_min = min(1e-4, self.k[0] / 2.)
         k_max = max(1., self.k[-1] * 2.)
-        self.template.update(k=np.geomspace(k_min, k_max, 500))
+        self.template.update(k=np.geomspace(k_min, k_max, int(kwargs.get('nk_template', 500))))
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=8, **kwargs):
         # Non-node setup only.
@@ -678,7 +682,7 @@ class TNSPTSpectrum2Poles(Calculator):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory."""
         return propose_params_multitracer([
             Parameter('sigmav', value=3., prior=dict(dist='norm', loc=0., scale=20., limits=[0., 10.]),
-                      ref=dict(dist='norm', loc=0., scale=0.5), fd_eps=2., latex=r'\sigma_v'),
+                      ref=dict(dist='norm', loc=0., scale=0.5), fd=dict(eps=2.), latex=r'\sigma_v'),
         ], tracers)
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=8, fog='lorentzian', tracers=None, params=None, **kwargs):
@@ -806,7 +810,7 @@ class TNSTracerSpectrum2Poles(Calculator):
             Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
                       ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
             Parameter('sigmav', value=3., prior=dict(dist='norm', loc=0., scale=20., limits=[0., 10.]),
-                      ref=dict(dist='norm', loc=0., scale=0.5), fd_eps=2., latex=r'\sigma_v'),
+                      ref=dict(dist='norm', loc=0., scale=0.5), fd=dict(eps=2.), latex=r'\sigma_v'),
         ], tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, nbar=1e-4, tracers=None, params=None, **kwargs):
@@ -1885,6 +1889,9 @@ def _fold_window_into_emulator(pt, matrix):
     contracted = getattr(emulator, '_contracted_window', None)
     if contracted is None:
         for child_index, naxes in pt._window_children:
+            # NOTE: `contract_child` does not exist -- `Emulator.contract(name, matrix)` is the
+            # real API and takes no `naxes`.  Pre-existing: this raises AttributeError whenever
+            # it is reached, so nothing exercises it.
             emulator.contract_child(child_index, matrix, naxes=naxes)
         emulator._contracted_window = matrix
     elif contracted.shape != matrix.shape or not np.allclose(contracted, matrix):
@@ -1902,6 +1909,8 @@ def _check_output(output):
     if output not in (None, 'monomials'):
         raise ValueError(f"output must be None (direct evaluation) or 'monomials', got {output!r}")
     return output
+
+
 
 
 class FOLPSPTSpectrum2Poles(Calculator):
@@ -1935,16 +1944,23 @@ class FOLPSPTSpectrum2Poles(Calculator):
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
         # Set here as well as in __post_init__ so that a downstream calculator can ask what this
-        # pt produces before compile() has run.
+        # pt produces before build() has run.
         self._output = _check_output(output)
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
         self.template.update(with_now='peakaverage')
+        if hasattr(self.template, 'cosmo'):
+            # Share the cosmology's h Parameter with this node: the exact-scaling emulated
+            # classes precondition their children in h at fit time, inside the traced stencil
+            # path, where reading another node's params is stale -- sharing makes the graph
+            # thread the current value here.  Harmless otherwise (one extra threaded input).
+            self.params = {name: self.template.cosmo.params[name] for name in ('h',)
+                           if name in self.template.cosmo.params}
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, output=None, damping_method='tree+loop',
-                      use_GTNS=None, fixed_bias=None, **kwargs):
+                      use_GTNS=None, fixed_bias=None, nfftlog=128, **kwargs):
         # Non-node setup only.
         self._kernels = str(kernels)
         self._rbao = float(rbao)
@@ -1953,7 +1969,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         self._output = _check_output(output)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         folpsv2 = _import_folps()
-        self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
+        self._matrices = folpsv2.MatrixCalculator(nfftlog=int(nfftlog), A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
         if self._output == 'monomials':
             # These shape the tables, so they are needed at build time, not only when the bias
             # terms are combined.
@@ -2088,6 +2104,23 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj._to_poles.wmu = aux['wmu']
         obj._to_poles.ells = aux['ells']
         return obj
+
+    def get_emulator_cls(self):
+        """The exact-scaling emulator for this pt, which depends on ``output``.
+
+        ``output=None`` gives :class:`FOLPSDEmulator`, which routes
+        (w0_fld, wa_fld, logA) exactly through the background scalars instead of expanding them --
+        measured median max|dP/P| 3.6e-05 against 2.1e-02 for the plain expansion, at half the
+        nodes.  ``output='monomials'`` gives
+        :class:`FOLPSD2PolesMonomialsEmulator` instead: those
+        tables bake the AP transform, the growth and the IR resummation in, so the same channels
+        are reached through collocation axes rather than scalar factors.
+
+        An instance method, not a classmethod, precisely so it can see ``output``.
+        :func:`desilike.emulators.Emulator` picks the result up on its own; pass
+        ``cls=CalculatorEmulator`` to force the generic expansion.
+        """
+        return FOLPSD2PolesMonomialsEmulator if self._output == 'monomials' else FOLPSDEmulator
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
                                            redshift_smearing=None, window_operator=None):
@@ -2246,7 +2279,7 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
     def __post_init__(self, k=None, template=None, ells=None, mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, output=None, model='FOLPSD', damping='lor',
                       precision=(8, 10, 10), renormalized=True, interpolation_method='linear',
-                      n_lambda=12, fixed_bias=None, **kwargs):
+                      n_lambda=12, fixed_bias=None, scaling=None, nfftlog=128, **kwargs):
         # Non-node setup only.  Deliberately not the parent's: that builds a ProjectToPoles over
         # ``ells``, which this calculator never uses and which cannot even be constructed when
         # ``ells`` are bispectrum triplets.
@@ -2256,7 +2289,7 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         self._remove_DeltaP = bool(remove_DeltaP)
         self._output = _check_output(output)
         folpsv2 = _import_folps()
-        self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
+        self._matrices = folpsv2.MatrixCalculator(nfftlog=int(nfftlog), A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
         if self._output == 'monomials':
             self._model = str(model)
             self._damping = str(damping)
@@ -2282,6 +2315,7 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         # Same four rows FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles builds from
         # table / table_now: get_linear's 'f_k' is f0 * Fkoverf0, i.e. its 'table[2] * f0'.
         self.k_pkl_pklnw_fk = jnp.array([linear['k'], linear['pk_l'], linear['pk_l_NW'], linear['f_k']])
+        self.f = self.template.f
         self.f0 = self.template.f0
         self.qpar = self.template.qpar
         self.qper = self.template.qper
@@ -2290,6 +2324,20 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         self.sigma8_fid = self.template.sigma8_fid
         if self._output == 'monomials':
             self._compute_monomials()
+
+    def get_emulator_cls(self):
+        """The exact-scaling emulator for this pt, which depends on ``output``.
+
+        ``output=None`` gives :class:`FOLPSD3PolesEmulator`;
+        ``output='monomials'`` gives
+        :class:`FOLPSD3PolesMonomialsEmulator`, whose tables bake
+        in what the former routes and so reach it through collocation axes instead.
+
+        An instance method, not a classmethod, precisely so it can see ``output``.  Overridden
+        here rather than inherited: the power spectrum's would deploy the wrong reconstruction.
+        """
+        return (FOLPSD3PolesMonomialsEmulator if self._output == 'monomials'
+                else FOLPSD3PolesEmulator)
 
     def _compute_monomials(self):
         r"""Replace the linear inputs by bias-monomial tables, with Finger-of-God factorized out.
@@ -2308,7 +2356,7 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
 
         The tables' trailing ``(n_multipoles, n_pairs)`` axes are meant to be contracted with the
         window matrix into the Taylor coefficients afterwards
-        (:meth:`~desilike.emulators.TaylorEmulator.contract_child`), which is exact and is what
+        (:meth:`~cosmoprimo.emulators.tools.Emulator.contract`), which is exact and is what
         keeps them small.
         """
         folpsv2 = _import_folps()
@@ -2328,13 +2376,14 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
     def tree_flatten(self):
         if self._output == 'monomials':
             children = [self.undamped, self.damped, self.correction, self.sigma2v,
-                        self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid]
+                        self.f, self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8,
+                        self.sigma8_fid]
             aux = {'k': self.k, 'ells': self.ells, 'output': self._output,
                    'monomials': self._monomials, 'lambda_nodes': self._lambda_nodes,
                    'damping': self._damping, 'provided': self._provided,
                    'folps_multipoles': self._folps_multipoles, 'model': self._model}
             return children, aux
-        children = [self.k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
+        children = [self.k_pkl_pklnw_fk, self.f, self.f0, self.qpar, self.qper,
                     self.sigma8, self.fsigma8, self.sigma8_fid]
         aux = {'k': self.k, 'ells': self.ells, 'output': self._output}
         return children, aux
@@ -2345,13 +2394,13 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         obj.k, obj.ells = aux['k'], aux['ells']
         obj._output = aux.get('output')
         if obj._output == 'monomials':
-            (obj.undamped, obj.damped, obj.correction, obj.sigma2v,
+            (obj.undamped, obj.damped, obj.correction, obj.sigma2v, obj.f,
              obj.f0, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
             obj._monomials, obj._lambda_nodes = aux['monomials'], aux['lambda_nodes']
             obj._damping, obj._provided = aux['damping'], aux['provided']
             obj._folps_multipoles, obj._model = aux['folps_multipoles'], aux['model']
             return obj
-        (obj.k_pkl_pklnw_fk, obj.f0, obj.qpar, obj.qper,
+        (obj.k_pkl_pklnw_fk, obj.f, obj.f0, obj.qpar, obj.qper,
          obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         return obj
 
@@ -3429,6 +3478,9 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.sigma8_fid = self.template.sigma8_fid
         self.f0 = self._table_state.f0
         self.fk = self._table_state.fk
+        # the template's growth rate, so an emulator can route f0 against it: f0 comes from
+        # fkpt's own growth (an ODE in Omega_m) and the two are not the same number
+        self.f = self.template.f
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
@@ -3546,9 +3598,20 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
 
         return correction
 
+    @classmethod
+    def get_emulator_cls(cls):
+        """The exact-scaling emulator for the fkpt pt:
+        :class:`FKPTEmulator`.
+
+        Amplitude only: fkpt's growth is derived internally from (z, Omega_m) and is blind to
+        w0/wa, so it must NOT be rescaled.  See that class for the beyond-EdS caveat.
+        """
+        return FKPTEmulator
+
     def tree_flatten(self):
         kernel_constants = self._kernel_constants
-        children = ([self.jac, self.kap, self.muap, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid]
+        children = ([self.jac, self.kap, self.muap, self.qpar, self.qper, self.sigma8,
+                     self.fsigma8, self.sigma8_fid, self.f, self.f0]
                     + list(self._table_w) + list(self._table_now) + list(kernel_constants or ()))
         aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
                'n_table_w': len(self._table_w), 'n_table_now': len(self._table_now),
@@ -3569,10 +3632,15 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         obj.sigma8 = next(it)
         obj.fsigma8 = next(it)
         obj.sigma8_fid = next(it)
+        obj.f = next(it)
+        f0 = next(it)
         obj._table_w = tuple(next(it) for _ in range(aux['n_table_w']))
         obj._table_now = tuple(next(it) for _ in range(aux['n_table_now']))
         obj._kernel_constants = tuple(next(it) for _ in range(4)) if aux['has_kernel_constants'] else None
         obj._table_state = make_table_state(obj._table_w, obj._table_now, kernel_constants=obj._kernel_constants)
+        # after `make_table_state`, which derives its own f0 from the tables: the child is the
+        # routed one, and the two agree only if both were rescaled by the same growth ratio
+        obj.f0 = f0
         obj.k = aux['k']
         obj.ells = aux['ells']
         obj.f0 = obj._table_state.f0
@@ -5086,3 +5154,1064 @@ class COMETTracerSpectrum3Poles(Calculator):
         obj = object.__new__(cls)
         obj.poles = children[0]
         return obj
+
+
+# ── the exact-scaling emulators ───────────────────────────────────────────────
+#
+# Full-shape emulators that know what their theory knows.
+#
+# A plain Taylor expansion of a FOLPSD pt over ``(w0_fld, wa_fld, logA)`` fails badly -- measured
+# raw dchi2 ~ 1e4 of the lrg mock covariance across the (w0, wa) plane -- and no amount of extra
+# nodes fixes it cheaply, because the dependence is not polynomial. But it is not arbitrary
+# either: those three parameters reach the one-loop tables only through four background scalars,
+#
+# - the amplitude, through :math:`\sigma_8(z)`: every loop column is homogeneous in the linear-pk
+#   amplitude (loop terms as :math:`A^2`, ``pk_l`` and the :math:`\sigma^2`-type scalars as
+#   :math:`A`, ``kTout`` and ``Fkoverf0`` not at all -- measured integer to 1e-13);
+# - the growth rate :math:`f`, which the tables are invariant under at fixed :math:`f_k/f_0` shape;
+# - Alcock-Paczynski, through :math:`(q_\parallel, q_\perp)`, closed-form in the AP grid.
+#
+# So they can be divided out at fit time and put back exactly at prediction, leaving the grid to
+# expand only the shape parameters. That is :class:`FOLPSDEmulator`: three hooks, no new
+# machinery. Validated in the previous framework to raw dchi2 ~ 1e-5 over the same plane.
+#
+#     from desilike.emulators import Emulator
+#     FOLPSDEmulator
+#
+#     emu = Emulator(pt, space, cls=FOLPSDEmulator)
+#     emu.train(budget=3, checkpoint='pt.npz', chunk='30min')
+#     fast_pt = emu.to_calculator()
+#
+# ``h`` is handled by a fourth mechanism, since the dilation it induces is not a scalar factor: the
+# tables are dilated back to a reference frame at fit time (:attr:`FOLPSDEmulator.precondition`),
+# and the folps-convention nuisances are divided by their dilation powers at run time -- s^2 for
+# alpha0/2/4, s^3 and s^5 for the shot terms -- through :meth:`~CalculatorEmulator.emulator_namespace`,
+# which is the hook that lets a routing reach outside the state into
+# ``combine_bias_terms_spectrum2_poles``.
+#
+# With that in place ``h`` can be FROZEN as well as preconditioned -- routed exactly, off the grid
+# altogether, rather than expanded over.  Measured over h in [0.62, 0.76] at budget 1, that is free:
+# median max|dP/P| 7.2e-05 frozen against 6.9e-05 expanded, for one fewer expansion dimension.
+#
+# None of this is specific to a direct template.  *Which* parameters reach the tables only through
+# the scalars, and *how* the scalars are obtained once the emulated pipeline has pruned the template
+# away, are both facts about the template, so both are asked of it --
+# :meth:`~desilike.theories.galaxy_clustering.template.Spectrum2Template.get_scaling_params` and
+# ``get_emulator_cls(quantities='scaling')``.  For a direct template the answers are
+# ``(w0_fld, wa_fld, logA)`` and an emulated
+# :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`, since the scalars there
+# cost a Boltzmann call.  For a ShapeFit template they are ``(qpar, qper, df, dA)`` and the template
+# itself, whose scalars are closed-form: ``df`` scales ``f``, ``f0`` and ``fk`` alike so the
+# :math:`f_k/f_0` shape does not move with it, and ``dA`` cancels between ``pk_dd`` and
+# :math:`(\sigma_8/\sigma_8^\mathrm{fid})^2`.  That leaves ``dm`` and ``dn`` as the only expanded
+# parameters, and no Boltzmann call anywhere.  Measured (``claude_taylor_w0wa/check_shapefit_scaling.py``):
+# at budget 0, rms(diff)/rms(ref) 4.1e-16 against the exact pipeline at the corners of the box and
+# 3.8e-16 well OUTSIDE it -- the routing is not an interpolation, so it does not degrade with
+# distance.
+
+
+def _compile_scalars(provider):
+    """The graph :meth:`_ScaledEmulator.compute_scalars` runs.
+
+    ``(qpar, qper, f, sigma8, fsigma8, sigma_mpc)`` out of any provider that has them.
+    ``sigma_mpc`` only exists on a :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`;
+    every other provider is asked for ``sigma8`` in its place, which is what it equals at the
+    fiducial ``h``.
+
+    Module level: it takes nothing from the emulator, only the provider it compiles over.
+    """
+    import jax
+    from desilike.base import build
+
+    graph = build(provider, output=lambda provider=provider: (
+        provider.qpar, provider.qper, provider.f, provider.sigma8, provider.fsigma8,
+        # only a ScalingScalars has these two.  A template's scalars are closed-form, so it is
+        # never preconditioned and never asked for either: `sigma_mpc` is `sigma8` at the
+        # fiducial h, and its own fiducial h is the h that gives a dilation of exactly 1.
+        getattr(provider, 'sigma_mpc', provider.sigma8),
+        getattr(provider, 'h', provider._fiducial.h)))
+    # jitted: the analytic core walks a cosmoprimo background, which is many small JAX ops --
+    # ~0.5 s dispatched one by one against ~0.5 ms traced.  `set_grid_axes` alone calls this
+    # 128 times.
+    jitted = jax.jit(graph)
+    jitted.params = graph.params
+    return jitted
+
+
+def _sigma_tophat(k, pk, radius):
+    """Top-hat sigma_R from a linear pk on grid *k* (trapezoid in ln k).
+
+    Module level: it takes no state, and the base's `compute` calls it -- while it lived on
+    `FOLPSDEmulator` that worked only because no other subclass sets `precondition`.
+    """
+    x = k * radius
+    window = 3. * (jnp.sin(x) - x * jnp.cos(x)) / x**3
+    return jnp.sqrt(jnp.trapezoid(k**3 * pk * window**2 / (2. * np.pi**2), x=jnp.log(k)))
+
+
+class _ScaledEmulator(CalculatorEmulator):
+    r"""Emulate a FOLPSD pt with the background scalars routed exactly.
+
+    Parameters
+    ----------
+    calculator : FOLPSPTSpectrum2Poles
+        Emulated through its pytree state, as any calculator is.
+    space : Space
+        Where accuracy is required. It must still cover the frozen parameters -- they leave the
+        grid, not the problem, and the scalar provider is queried at their actual values.
+    frozen : tuple, default=None
+        The parameters routed exactly, which therefore cost no nodes. Being exact, they are also
+        unbounded: the routing is not an interpolation, so they may be varied outside the box.
+
+        The template's own declaration by default
+        (:meth:`~desilike.theories.galaxy_clustering.template.Spectrum2Template.get_scaling_params`),
+        since which parameters reach the tables only through the scalars is a fact about the
+        template and not about emulation: ``(w0_fld, wa_fld, logA)`` for a direct template,
+        ``(qpar, qper, df, dA)`` for a ShapeFit one.
+    scalars : Calculator, default=None
+        Provides :math:`(q_\parallel, q_\perp, f, \sigma_8, f\sigma_8)` at run time. Taken
+        from the template by default, in whichever of the two ways it asks for -- see
+        ``get_emulator_cls(quantities='scaling')``:
+
+        - closed-form scalars (ShapeFit, BAO, fixed): the template itself, run exactly. Nothing
+          is fitted and nothing is approximated.
+        - scalars needing a Boltzmann call (direct): a
+          :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`, which
+          :meth:`train` emulates -- it is seven scalars against the pt's tables, so it is cheap
+          to fit, and left un-emulated every prediction pays for that call, which is the cost
+          the pt emulator exists to remove.
+
+    Notes
+    -----
+    ``output='monomials'`` is refused: its tables are contracted against a (qpar, qper)
+    collocation that the AP recomputation here would silently invalidate.
+    """
+    #: Parameters kept on the grid but with an analytic baseline divided out first. Empty here:
+    #: only the power-spectrum pt has one, and `compute` must stay usable by the others.
+    precondition = ()
+
+    def _check_output(self, calculator):
+        """Refuse a pt whose tables this class cannot route.  Overridden, not repeated."""
+        if getattr(calculator, '_output', None) == 'monomials':
+            raise NotImplementedError(
+                f"output='monomials' bakes the AP transform, the growth rate and the amplitude "
+                f"into its tables, so they are reached through node grids rather than the "
+                f"analytic factors this class applies. `get_emulator_cls` returns "
+                f"{type(self).__name__} for every pt, so pass `cls=CalculatorEmulator` "
+                f"explicitly to emulate a monomials pt with the generic expansion, or use "
+                f"output=None.")
+
+    def __init__(self, calculator, space, frozen=None, scalars=None, **options):
+        self._check_output(calculator)
+        template = calculator.template
+        # The template is the only place that knows which parameters reach the tables through the
+        # scalars alone: it is a statement about what its parameters do, not about emulation.
+        self.frozen = tuple(frozen if frozen is not None else template.get_scaling_params())
+        # How the run-time scalars are obtained, which only the template can say: a class means
+        # they cost a Boltzmann call and are emulated; None means the template computes them in
+        # closed form, and is simply run.
+        self._emulator_cls_scalars = template.get_emulator_cls(quantities='scaling')
+        # What the caller supplied, kept so `train` knows not to build one of its own.
+        self.input_scalars, self._state_scalars = scalars, None
+        CalculatorEmulator.__init__(self, calculator, space, **options)
+        # A supplied provider is a calculator already, so its graph can be compiled now: `build`
+        # has run the pipeline's `__post_init__`, which is what a provider needs to exist against.
+        # Otherwise `train` builds it -- from the template, or from the provider it fits.
+        self.graph_scalars = _compile_scalars(scalars) if scalars is not None else None
+        # `build` ran the pipeline to trace it, so the calculator carries real state here and the
+        # routing's constants can be read off it once -- rather than on the first `compute`,
+        # which a training restored entirely from a checkpoint never reaches.
+        import jax
+
+        children = jax.tree_util.tree_leaves(calculator.tree_flatten()[0])
+        self._set_fiducial(
+            {name: np.asarray(leaf) for name, leaf in zip(self.children_leafnames, children)},
+            {param.name: param.value for param in self.graph.params if not param.derived})
+        # Resolve the preconditioning against the space, shadowing the class attribute.  A
+        # template that does not vary `h` has none to precondition, and leaving the class value
+        # standing is not merely wasteful: `emulator_namespace` reads the parameter, which is a
+        # KeyError at the first prediction of an emulated ShapeFit or BAO pt.  Matched by
+        # QUANTITY, not by name: a pipeline varying `H0` preconditions the same dilation, and
+        # comparing names would silently switch it off.
+        from desilike.theories.primordial_cosmology import find_conflicts
+
+        self.precondition = tuple(name for name in type(self).precondition
+                                  if find_conflicts(name, self.space.params))
+
+    def to_calculator(self, *args, **kwargs):
+        """As the base, plus the run-time scalar provider when the caller supplies a template.
+
+        A saved emulator has no calculator to take one from, and the closed-form routing needs
+        one -- the template passed here is exactly it.  Cloned, because the deployed pt is
+        constructed with that same object and compiling one calculator twice corrupts the
+        pure_callback layout.  An emulated provider travels in the state and wins over this.
+        """
+        template = kwargs.get('template')
+        if template is not None and self.graph_scalars is None and self._state_scalars is None:
+            self.graph_scalars = _compile_scalars(template.clone())
+        return super().to_calculator(*args, **kwargs)
+
+    # ── the hooks ─────────────────────────────────────────────────────────────
+    def select_params(self, names):
+        frozen = [name for name in self.frozen if name in names]
+        template = type(self.calculator.template).__name__
+        expanded = [name for name in names if name not in frozen]
+        if not expanded:
+            # The opposite degenerate case, which a template with no shape parameters of its own
+            # reaches: everything is routed, so there is nothing left to interpolate and the pt
+            # is a single evaluation.  `Emulator.__init__` would raise `select_params left
+            # nothing to expand`; say what it means here instead.
+            raise ValueError(
+                f'{template} routes every parameter of the space ({list(names)}) exactly, so '
+                f'there is nothing left to expand: the pt is one evaluation, and caching it is '
+                f'what you want rather than emulating it.')
+        return expanded
+
+    # ── the run-time scalars ──────────────────────────────────────────────────
+    def compute_scalars(self, params):
+        r"""``(qpar, qper, f, sigma8, fsigma8, sigma_mpc)`` at ``params``.
+
+        ``sigma_mpc`` is the fixed-Mpc amplitude :math:`\sigma_R(R = 8 h_\mathrm{fid} / h)`, which
+        the ``h`` routing needs: the :math:`\sigma_8` window itself moves with :math:`h` and would
+        double-count the dilation. It equals ``sigma8`` at the fiducial :math:`h`.
+
+        Only the names the provider knows are passed on: a compiled graph silently ignores the
+        rest, and the pt's nuisance parameters are exactly that.
+        """
+        if self.graph_scalars is None:
+            if self._state_scalars is None:
+                raise ValueError(
+                    'no run-time scalar provider: a saved emulator whose scalars are closed-form '
+                    'carries none, because a Calculator is not part of the state. Deploy it with '
+                    '`to_calculator(template=...)`, or set `emulator.graph_scalars` yourself.')
+            # A saved emulator carries the fitted provider, not a calculator -- but the provider
+            # gives one back, which is what keeps this a single path.
+            from cosmoprimo.emulators.tools import Emulator as _Emulator
+
+            self.graph_scalars = _compile_scalars(
+                _Emulator.from_state(self._state_scalars).to_calculator())
+        names = self.graph_scalars.params.names(derived=False)
+        known = {name: value for name, value in params.items() if name in names}
+        qpar, qper, growth, sigma8, fsigma8, sigma_mpc, h = self.graph_scalars(known)
+        return {'qpar': qpar, 'qper': qper, 'f': growth, 'sigma8': sigma8,
+                'fsigma8': fsigma8, 'sigma_mpc': sigma_mpc, 'h': h}
+
+    def train(self, *args, scalars_budget=2, **kwargs):
+        r"""Train the emulator, and the run-time scalar provider with it.
+
+        Automatic, because otherwise it is a trap: the routing needs
+        :math:`(q_\parallel, q_\perp, f, \sigma_8)` at the parameters actually asked for, and an
+        UNemulated provider computes them with a Boltzmann call on every prediction -- exactly
+        the cost the pt emulator exists to remove. Pass ``scalars=`` to supply your own instead,
+        and ``scalars_budget`` to set its resolution (2 by default: it fits only the corrections
+        to an analytic core, which are smooth and ~1 by construction).
+
+        A no-op when the template computes its scalars in closed form: there is no Boltzmann
+        call to remove, and running the template exactly beats any fit of it.
+        """
+        self.set_graph_scalars()
+        trained = super().train(*args, **kwargs)
+        if self.input_scalars is None:
+            if self._emulator_cls_scalars is not None:
+                from .api import Emulator as _build
+
+                self.logger.info('training the run-time scalar provider, over the full space')
+                provider = self._emulator_cls_scalars.calculator_from_template(
+                    self.calculator.template)
+                emulator = _build(provider, self.space,
+                                  cls=self._emulator_cls_scalars).train(budget=scalars_budget)
+                # The fitted provider is what travels in the state; the graph runs over the
+                # calculator it gives back, so predictions cost no Boltzmann call.
+                self._state_scalars = emulator.__getstate__()
+                self.graph_scalars = _compile_scalars(emulator.to_calculator())
+        return trained
+
+    def set_graph_scalars(self):
+        """Compile ``self.graph_scalars`` over the UNemulated provider, if it has none yet.
+
+        Wanted before the training grid, not after: the monomials routing reaches the scalars at
+        every node it evaluates, so a provider that only appeared once training was done would be
+        too late.  It costs a provider evaluation per node -- which is what the nodes cost anyway
+        -- and :meth:`train` replaces it with the fitted one for prediction.
+        """
+        if self.graph_scalars is not None:
+            return
+        template = self.calculator.template
+        self.graph_scalars = _compile_scalars(
+            template.clone() if self._emulator_cls_scalars is None
+            else self._emulator_cls_scalars.calculator_from_template(template))
+
+    def _set_fiducial(self, values, params):
+        """Latch what the routing needs, from the state `build` left on the calculator.
+
+        The fiducial normalisation and the fiducial h are constants of the emulator -- the same
+        at every node by construction -- so they are read once and kept.  Taking `sigma8_fid` from
+        the run-time provider instead would pair two conventions that need not agree.
+        """
+        self._sigma8_fid = values['sigma8_fid']
+        self._h_fid = float(self.calculator.template._fiducial.h)
+
+    def compute(self, params):
+        values = super().compute(params)
+        if self.precondition:
+            # The fit-time amplitude anchor: sigma8 times the (scheme-cancelling) window-shift
+            # ratio sigma_{8s} / sigma_8 of the template's own pk. Read off the calculator after
+            # the graph ran -- it is not a child, and the run-time factor
+            # (sigma_mpc / anchor)^2d then composes to exactly the fixed-Mpc amplitude, reducing
+            # to the validated sigma8 anchoring at s = 1.
+            template = self.calculator.template
+            scale = template.cosmo['h'] / self._h_fid
+            values['sigma_mpc_anchor'] = np.asarray(
+                self.calculator.sigma8 * (_sigma_tophat(template.k, template.pk_dd, 8. * scale)
+                                          / _sigma_tophat(template.k, template.pk_dd, 8.)))
+        return values
+
+    # ── state ─────────────────────────────────────────────────────────────────
+    def __getstate__(self):
+        state = super().__getstate__()
+        state['frozen'] = list(self.frozen)
+        # resolved against the space at construction, and a loaded emulator has no space to
+        # re-derive it from -- while `transform` / `inverse_transform` key off it at every call
+        state['precondition'] = list(self.precondition)
+        state['sigma8_fid'] = self._sigma8_fid
+        # captured at construction, and the h preconditioning needs it at every prediction
+        state['h_fid'] = getattr(self, '_h_fid', None)
+        # nested: without the provider a loaded emulator cannot predict at all, since the routing
+        # needs the run-time scalars and a Calculator is not part of any state
+        state['emulator_scalars'] = self._state_scalars
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self.frozen = tuple(state['frozen'])
+        self.precondition = tuple(state['precondition'])
+        self._sigma8_fid = state['sigma8_fid']
+        self._h_fid = state['h_fid']
+        self._layout_cache = self.graph_scalars = self.input_scalars = None
+        # No calculator in a saved emulator, so no template to ask; the fitted provider travels
+        # in the state instead, and `compute_scalars` compiles its graph on first use.
+        self._emulator_cls_scalars = None
+        self._state_scalars = state['emulator_scalars']
+
+    def _ap_kmu(self, qpar, qper):
+        """``(jac, kap, muap)`` on the calculator's own (k, mu) grid.
+
+        Identical for every pt that keeps a distorted grid, so it lives here rather than being
+        repeated -- it was, verbatim, in the power-spectrum and fkpt emulators.
+        """
+        aux = self.aux
+        return _ap_k_mu(np.asarray(aux['k'])[:, None], np.asarray(aux['mu']), qpar, qper)
+
+    def transform(self, values, params):
+        raise NotImplementedError
+
+    def inverse_transform(self, values, params):
+        """Put the true background scalars back, at the parameters actually asked for.
+
+        Shared by the power-spectrum and fkpt routings.  fkpt declares no ``precondition``, so its
+        dilation scale is 1 and the q's go in undistorted, and its layout has no ``f`` -- those
+        two facts are what the branches below key off, rather than a per-class copy.
+        """
+        layout = self._layout()
+        scalars = self.compute_scalars(params)
+        scale = scalars['h'] / self._h_fid if self.precondition else 1.
+        # The same function of the parameters as the fit-time divisor, both normalised by the
+        # constant sigma8_fid, so the two cancel node by node.  With the h preconditioning that is
+        # the fixed-Mpc amplitude, not sigma8: the sigma8 window itself moves with h, and pairing
+        # the two conventions leaves exactly (sigma8 / sigma_mpc)^2d -- measured 1.1575 per
+        # amplitude degree at h = 0.75, i.e. the whole error the routing had.
+        anchor = scalars['sigma_mpc'] if self.precondition else scalars['sigma8']
+        amplitude = (anchor / self._sigma8_fid)**2
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        children = set(self.children_leafnames)
+        for name, value in values.items():
+            if name not in children:     # derived entries, and carried scalars (f0_over_f, ...)
+                continue
+            degree = layout['degrees'].get(name, 0)
+            out[name] = value * amplitude**degree if degree else value
+        for name in layout.get('f0_entries', ()):
+            out[name] = out[name] * scalars['f']
+        # The grid q's carry the dilation; the exposed qpar / qper stay at the engine values --
+        # the physical_aap normalization reads those, and feeding it dilated q's injects a
+        # spurious s^3.
+        jac, kap, muap = self._ap_kmu(scalars['qpar'] / scale, scalars['qper'] / scale)
+        placed = {'kap': kap, 'muap': muap, 'jac': jac,
+                  'qpar': scalars['qpar'], 'qper': scalars['qper'],
+                  'sigma8': scalars['sigma8'], 'fsigma8': scalars['fsigma8'],
+                  'sigma8_fid': self._sigma8_fid}
+        placed.update(f=scalars['f'], f0=values['f0_over_f'] * scalars['f'])
+        out.update(placed)
+        return out
+
+    def _layout(self):
+        """What the leaf names cannot say: which leaves are table columns, and what folps'
+        column ORDER implies about each -- its amplitude degree, its k row, whether it is a
+        trailing ``f0``.  The children name themselves, so nothing else belongs here.
+        """
+        return {}
+
+
+class FOLPSDEmulator(_ScaledEmulator):
+    r"""The FOLPSD power-spectrum pt: one-loop tables plus a distorted AP grid.
+
+    See :class:`_ScaledEmulator` for the arguments and the physics.
+    """
+    # Powers of the dilation scale dividing each folps-convention nuisance parameter, applied at
+    # run time by `emulator_namespace`. Measured, not derived:
+    # routed-vs-exact response ratios at h = 0.74 are pure scalars (shape correlation 1.000000)
+    # matching s^2 (alpha0/2/4), s^3 (alphashot0), s^5 (alphashot2) to 5 digits, while ctilde
+    # and the FoG damping are exactly invariant and must not be rescaled. The channels
+    # anticorrelate at typical bias values, so a partial rescaling is worse than none.
+    _nuisance_scale_powers = {'alpha0': 2, 'alpha2': 2, 'alpha4': 2,
+                              'alphashot0': 3, 'alphashot2': 5}
+    # Keyed by name on purpose: a positional tuple applies silently wrong powers if folps ever
+    # reorders or inserts a parameter, and exactly that cost real debugging time.
+    _nuisance_names = ('b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde',
+                       'alphashot0', 'alphashot2', 'PshotP', 'X_FoG')
+
+    #: ``h`` preconditioning: dilate the tables back to the reference frame and divide out the
+    #: fixed-Mpc amplitude, so ``h``'s expansion carries only the residual. ``h`` stays expanded
+    #: either way -- this changes what it expands, not whether it is expanded.
+    #:
+    #: Measured over h in [0.62, 0.76] at budget 1, everything else at the space centre, median
+    #: max|dP/P|: 1.1e-03 with this on, 2.8e-03 with it off, 3.1e-03 for the plain emulator.
+    #:
+    #: The amplitude here must be the fixed-Mpc one (``sigma_mpc``), not ``sigma8``: the sigma8
+    #: window itself moves with h, so pairing the fit-time anchor with a run-time sigma8 leaves
+    #: exactly (sigma8 / sigma_mpc)^2d -- 1.1575 per amplitude degree at h = 0.75, a
+    #: k-independent 17% that looks like a dilation failure and is not.
+    precondition = ('h',)
+
+    def transform(self, values, params):
+        r"""Divide the shape-frame background scalars out of the tables.
+
+        What is left is a function of the shape parameters alone, which is what makes a low-order
+        expansion work. The scalars needed here -- :math:`\sigma_8` and :math:`f` at this node --
+        are children of the calculator itself, so no cosmology is evaluated a second time.
+
+        The AP arrays and the scalars are dropped entirely rather than fitted: they are
+        recomputed exactly in :meth:`inverse_transform`, and ``kap``/``muap``/``jac`` are
+        ``(n_k, n_mu)`` each, so fitting them would be the largest part of the emulator and all
+        of it discarded.
+        """
+        import interpax
+
+        layout = self._layout()
+        growth = values['f']
+        # derived quantities are outputs of the pipeline, not part of the state this routes:
+        # carry them through untouched, or an emulated calculator loses them
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        scale = self.calculator.template.cosmo['h'] / self._h_fid if self.precondition else 1.
+        if self.precondition:
+            amplitude = (values['sigma_mpc_anchor'] / values['sigma8_fid'])**2
+        else:
+            amplitude = (values['sigma8']
+                         / values['sigma8_fid'])**2
+        k_rows = layout['k']
+        for name, degree in layout['degrees'].items():
+            column = values[name]
+            # a k row IS the k grid, and a child with no k row at all (fkpt's kernel constants)
+            # is not on one: neither is dilated, and neither carries the amplitude
+            if k_rows.get(name, name) == name:
+                out[name] = column
+                continue
+            if self.precondition and np.ndim(column) > 0:
+                # Dilate back to the reference frame in value space, on the fixed k grid:
+                # c(k) = col_h(k / s) / (A^d s^3). The children are then smooth functions of h
+                # -- reference tables plus the physics residual -- which is what makes their
+                # low-order expansion work; a k-shift representation is exact but samples
+                # the BAO wiggles at h-moving positions, defeating any polynomial. Cubic keeps
+                # the resampling noise at ~1e-6 through the wiggles (linear costs ~0.2%).
+                k_row = values[k_rows[name]]
+                column = interpax.interp1d(np.asarray(k_row) / scale, np.asarray(k_row),
+                                           np.asarray(column), method='cubic', extrap=True)
+                out[name] = column / (amplitude**degree * scale**3) if degree else column
+            elif degree:
+                # sigma^2-type scalars: the dilated run-time grid supplies the s^2 back
+                out[name] = column / (scale**2 * amplitude**degree if self.precondition
+                                      else amplitude**degree)
+            else:
+                out[name] = column
+        for name in layout['f0_entries']:
+            out[name] = out[name] / growth
+        # f0 itself, normalised the same way, is the only scalar worth keeping: the run-time
+        # provider gives f at data scales, and f0 = Fkoverf0-consistent k -> 0 rate is fitted
+        out['f0_over_f'] = values['f0'] / growth
+        return out
+
+    def emulator_namespace(self):
+        """Divide the run-time nuisance parameters by their dilation s-powers.
+
+        The dilation identity converts the terms descending from the linear spectrum exactly (the
+        tables carry ``A^d s^3``), but counterterms and stochastic terms are built at run time
+        from explicit powers of the dilated k and the AP jacobian: alpha0/2/4 pick up s^2, the
+        constant shot s^3, the k^2 shot s^5. Dividing the corresponding folps-convention
+        parameters cancels this exactly. The channels anticorrelate at typical bias values, so
+        the powers only work as A set -- a partial rescaling is worse than none.
+        """
+        if not self.precondition:
+            return {}
+        emulator, h_fid = self, self._h_fid
+        from desilike.theories.primordial_cosmology import find_conflicts
+
+        # whatever this pipeline calls h: `emulator_params` is keyed by ITS names
+        h_name = find_conflicts('h', self.space.params)[0]
+        powers = [self._nuisance_scale_powers.get(name, 0)
+                  for name in self._nuisance_names]
+        order = self._nuisance_names
+
+        def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, **kwargs):
+            folpsv2 = _import_folps()
+            pars = list(folpsv2.RSDMultipolesPowerSpectrumCalculator(
+                model='FOLPSD').set_bias_scheme(pars=pars, bias_scheme=bias_scheme))
+            if len(pars) != len(order):
+                raise ValueError(
+                    f'folps returned {len(pars)} nuisance parameters, expected {len(order)} '
+                    f'{order}. The s-powers are matched to that ordering; applying them to a '
+                    f'different one would rescale the wrong terms silently.')
+            scale = self.emulator_params[h_name].value / h_fid
+            pars = [par / scale**power if power else par for par, power in zip(pars, powers)]
+            return FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles(
+                self, pars, 'folps', damping, **kwargs)
+
+        return {'combine_bias_terms_spectrum2_poles': combine_bias_terms_spectrum2_poles}
+
+    def set_children_leafnames(self):
+        """``kap, muap, jac``, the two tables column by column, then the scalars."""
+        calculator = self.calculator
+        self.children_leafnames = (
+            ['kap', 'muap', 'jac']
+            + [f'table.{index}' for index in range(len(calculator.table))]
+            + [f'table_now.{index}' for index in range(len(calculator.table_now))]
+            + ['f', 'f0', 'qpar', 'qper', 'sigma8', 'fsigma8', 'sigma8_fid'])
+
+    # ── the child layout ──────────────────────────────────────────────────────
+    def _layout(self):
+        """Which child is which, and each table column's amplitude degree.
+
+        The pt flattens to a dict, so the children name themselves and only the per-column
+        degrees are left to work out -- those are positional because folps' column order is.
+        """
+        if getattr(self, '_layout_cache', None) is not None:
+            return self._layout_cache
+        names = self.children_leafnames
+        # leaf ORDER within a list child is its own, so these come out in table order
+        table = [name for name in names if name.startswith('table.')]
+        table_now = [name for name in names if name.startswith('table_now.')]
+        if not table or not table_now:
+            raise RuntimeError(f'no table columns among the children {names[:8]}...; this pt does '
+                               f'not flatten the way this emulator routes')
+
+        def table_degrees(columns, n_trailing_sigma2):
+            # folps table layout (see folps combine_loop_terms):
+            #   [kTout, pk_l, Fkoverf0, <loop columns>, sigma2w, f0]
+            # for the wiggle table, with [sigma2_NW, delta_sigma2_NW] inserted before f0 for the
+            # no-wiggle one. The trailing f0 entry gets degree 0 and is rescaled by the growth
+            # ratio instead.
+            return ([0, 1, 0] + [2] * (len(columns) - 4 - n_trailing_sigma2)
+                    + [1] * n_trailing_sigma2 + [0])
+
+        degrees = dict(zip(table, table_degrees(table, 1)))
+        degrees.update(zip(table_now, table_degrees(table_now, 3)))
+        # the k row each column is sampled on: the kTout row of its own table
+        k = {name: table[0] for name in table}
+        k.update({name: table_now[0] for name in table_now})
+        layout = {name: name for name in ('kap', 'muap', 'jac', 'f', 'f0', 'qpar', 'qper',
+                                          'sigma8', 'fsigma8', 'sigma8_fid')}
+        layout.update(k=k, degrees=degrees, f0_entries=(table[-1], table_now[-1]))
+        self._layout_cache = layout
+        return layout
+
+
+class FOLPSD3PolesEmulator(_ScaledEmulator):
+    r"""The FOLPSD bispectrum pt: the linear inputs only.
+
+    Much simpler than the power-spectrum case, because the bispectrum applies AP per call from
+    the ``(qpar, qper)`` scalars -- there is no distorted grid to rebuild. The state is one
+    ``(4, n_k)`` array of ``(k, pk_l, pk_l_NW, f_k)`` rows plus six scalars, so the routing
+    reduces to:
+
+    - the two linear-pk rows carry the amplitude (the :math:`\sigma^2` damping integrals are
+      computed per call from those rows, so they inherit it exactly);
+    - the ``f_k`` row and the ``f0`` scalar carry the growth rate;
+    - ``qpar``, ``qper``, ``sigma8``, ``fsigma8`` come from the run-time provider.
+
+    See :class:`_ScaledEmulator` for the arguments.
+    """
+    def set_children_leafnames(self):
+        self.children_leafnames = ['k_pkl_pklnw_fk', 'f', 'f0', 'qpar', 'qper', 'sigma8',
+                                   'fsigma8', 'sigma8_fid']
+
+    def transform(self, values, params):
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        amplitude = (values['sigma8'] / values['sigma8_fid'])**2
+        growth = values['f']
+        rows = np.asarray(values['k_pkl_pklnw_fk'])
+        out['k_pkl_pklnw_fk'] = np.stack(
+            [rows[0], rows[1] / amplitude, rows[2] / amplitude, rows[3] / growth])
+        out['f0'] = values['f0'] / growth
+        # qpar, qper, sigma8, fsigma8 are supplied live; sigma8_fid is a constant
+        return out
+
+    def inverse_transform(self, values, params):
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        scalars = self.compute_scalars(params)
+        amplitude = (scalars['sigma8'] / self._sigma8_fid)**2
+        rows = jnp.asarray(values['k_pkl_pklnw_fk'])
+        out.update({'k_pkl_pklnw_fk': jnp.stack([rows[0], rows[1] * amplitude,
+                                               rows[2] * amplitude, rows[3] * scalars['f']]),
+                    'f0': values['f0'] * scalars['f'],
+                    'f': scalars['f'],
+                    'qpar': scalars['qpar'], 'qper': scalars['qper'],
+                    'sigma8': scalars['sigma8'], 'fsigma8': scalars['fsigma8'],
+                    'sigma8_fid': self._sigma8_fid})
+        return out
+
+
+class FKPTEmulator(FOLPSDEmulator):
+    r"""The FKPT pt: :class:`FOLPSDEmulator` with the ``h`` preconditioning off.
+
+    fkpt's tables are laid out like folps' -- a k row, a linear-pk row, loop columns, some
+    :math:`\sigma^2` scalars, a trailing :math:`f_0` -- so the routing is the same one, and the
+    theory side already says as much: ``FKPTJAXTracerSpectrum2Poles`` subclasses
+    ``FOLPSTracerSpectrum2Poles`` and only swaps the pt.  What is fkpt's own is the column
+    ordering (its own recipe below), the kernel constants it carries alongside the tables, and
+    the absence of preconditioning.
+
+    ``emulator_namespace`` comes with the inheritance and is inert: it returns ``{}`` when
+    nothing is preconditioned, so the folps-convention nuisance s-powers never fire here.
+
+    Two caveats with no FOLPS analogue.  With ``growth_source='ode'`` fkpt derives its growth
+    from an internal ODE in :math:`(z, \Omega_m)`: cosmoprimo's solver accepts ``w0``/``wa`` but
+    ``Kfuncs_to_tables*`` never passes them, so the exact model's growth is blind to w0 and wa
+    while the routed one is not.  That difference is fkptjax's to fix, not this class's -- and it
+    vanishes for LCDM, where the frozen parameters do not move the growth.  Second, with
+    ``beyond_eds=True`` the kernels depend on the growth history through that same ODE; the
+    residual is the (percent-of-loops) beyond-EdS kernel difference between the true and
+    fiducial histories -- quantify it before relying on this far from the fiducial.
+    """
+    precondition = ()
+    _SCALARS = ('jac', 'kap', 'muap', 'qpar', 'qper', 'sigma8', 'fsigma8', 'sigma8_fid',
+                'f', 'f0')
+
+    def set_children_leafnames(self):
+        """The scalars, then the two tables, then the kernel constants if there are any."""
+        calculator = self.calculator
+        self.children_leafnames = (
+            list(self._SCALARS)
+            + [f'table_w.{index}' for index in range(len(calculator._table_w))]
+            + [f'table_now.{index}' for index in range(len(calculator._table_now))]
+            + [f'kernel_constants.{index}'
+               for index in range(len(calculator._kernel_constants or ()))])
+
+    def _layout(self):
+        """The children name themselves; only the per-column degrees are left to work out."""
+        if getattr(self, '_layout_cache', None) is not None:
+            return self._layout_cache
+        names = self.children_leafnames
+        table_w = [name for name in names if name.startswith('table_w.')]
+        table_now = [name for name in names if name.startswith('table_now.')]
+
+        def column_degrees(columns):
+            # measured exact to machine precision for both beyond_eds settings:
+            # [k, pk_l, fk_norm, 23 loop columns, 2 zero pads, sigma^2 scalars, f0]
+            return [0, 1, 0] + [2] * 23 + [0, 0] + [1] * (len(columns) - 29) + [0]
+
+        degrees = dict(zip(table_w, column_degrees(table_w)))
+        degrees.update(zip(table_now, column_degrees(table_now)))
+        # the kernel constants ride along at degree 0 and with no k row, which is how the base
+        # transform carries them through untouched
+        degrees.update({name: 0 for name in names
+                        if name.startswith('kernel_constants.')})
+        k_rows = {name: table_w[0] for name in table_w}
+        k_rows.update({name: table_now[0] for name in table_now})
+        layout = {name: name for name in self._SCALARS}
+        layout.update(degrees=degrees, k=k_rows,
+                      # the trailing column of each table is f0, degree 0 and rescaled by the
+                      # growth ratio instead -- as in the folps recipe
+                      f0_entries=(table_w[-1], table_now[-1]))
+        self._layout_cache = layout
+        return layout
+
+
+class FOLPSD2PolesMonomialsEmulator(_ScaledEmulator):
+    r"""The FOLPSD power-spectrum pt with ``output='monomials'``: node axes, not scalar factors.
+
+    The direct-output pt keeps its loop tables in a frame the run-time scalars can be multiplied
+    into, which is why :class:`FOLPSDEmulator` routes them with per-column powers. The monomials
+    tables cannot: ``folps.get_rsd_pkmu_monomials_tables`` bakes the AP transform, the growth
+    rate and the IR resummation into the ``(monomial, k, mu)`` grid, so those channels are
+    reached through **collocation axes** carried alongside the shape expansion, contracted at
+    prediction against weights built from the same run-time scalars.
+
+    Each axis is set by measurement (``claude_taylor_w0wa/check_s2_monomial_scaling.py``):
+    amplitude is not homogeneous (``damped_wiggle``'s exponent is off by 4.16 -- the baked IR
+    resummation is exponential in it), so it gets a Lagrange axis rather than a per-column power;
+    growth is polynomial of degree ~8, so ``nf = 9`` is exact to ~1e-11; ``(qpar, qper)`` collocate
+    at 7.0e-5 / 6.1e-6 / 3.1e-6 for ``nq`` 4 / 6 / 8.  The ``fk`` shape gets ``fk_rank`` axes of
+    its own -- see :meth:`fk_basis`.
+
+    Size is the price, paid deliberately: un-windowed, the tables are ~56 MB per shape node at the
+    defaults, and the window is applied per call as on the un-emulated path.
+
+    Parameters
+    ----------
+    namplitude, nf, nq, nfk : int
+        Node counts for the amplitude, growth, each AP axis and each fk shape axis.
+    fk_rank : int
+        Shape directions given their own axes.  DEFAULT 0 -- the channel off, freezing the node's
+        shape -- because as it stands it is a net REGRESSION: measured at the frozen shifts,
+        2.37e-05 off against 4.35e-04 on, and no node count moves it (see NOTES).  The basis
+        itself is sound (it reproduces the shape ~600x better than freezing), so this is expected
+        to become the default once that is resolved; until then it is opt-in.
+    margin : float
+        Fractional padding on the node ranges, which are measured over *space*, not assumed.
+    """
+    #: Child index of each entry of ``FOLPSPTSpectrum2Poles.tree_flatten`` under
+    #: ``output='monomials'``. Named rather than positional: an index would silently point at a
+    #: different array the moment the pt's layout changes.
+    def set_children_leafnames(self):
+        self.children_leafnames = ['undamped', 'damped_wiggle', 'damped_nowiggle', 'lam',
+                                   'sigma2w', 'sigma2w_nowiggle', 'jac', 'f', 'f0', 'qpar',
+                                   'qper', 'sigma8', 'fsigma8', 'sigma8_fid']
+
+    #: The arrays carried on the node grid. The rest are run-time scalars, written straight in.
+    _TABLES = ('undamped', 'damped_wiggle', 'damped_nowiggle', 'lam', 'sigma2w',
+               'sigma2w_nowiggle')
+
+    def _check_output(self, calculator):
+        """The base's requirement inverted: these tables are the monomials ones."""
+        if getattr(calculator, '_output', None) != 'monomials':
+            raise ValueError(f"{type(self).__name__} is for output='monomials'; this pt has "
+                             f"output={getattr(calculator, '_output', None)!r}, so use "
+                             f'FOLPSDEmulator')
+
+    def __init__(self, calculator, space, frozen=None, scalars=None,
+                 namplitude=3, nf=9, nq=6, nfk=3, fk_rank=0, margin=0.05, **options):
+        self.namplitude, self.nf, self.nq, self.margin = int(namplitude), int(nf), int(nq), float(margin)
+        self.nfk, self.fk_rank = int(nfk), int(fk_rank)
+        self._axes = self._fk_basis = self._fk_emulator = None
+        super().__init__(calculator, space, frozen=frozen, scalars=scalars, **options)
+
+    def _set_fiducial(self, values, params):
+        """The base's, plus the amplitude anchor and the f0 / f ratio.
+
+        The growth axis spans f0 -- what folps' loop table is built with -- while the provider
+        gives f at data scales.  They are NOT the same number, and using f where f0 belongs is a
+        per-node constant offset: invisible to every node count, which is exactly how it hid.
+        Both pts carry the two as children, so the ratio is read off the node itself.
+        """
+        super()._set_fiducial(values, params)
+        self._sigma8_ref = float(np.asarray(values['sigma8']))
+        growth = np.asarray(values['f'])
+        self._f0_over_f = float(np.asarray(values['f0']) / growth)
+
+    def train(self, *args, fk_budget=3, **kwargs):
+        """Train the emulator, the scalar provider, and the fk shape coefficients.
+
+        The coefficients index the shape axes at prediction, and reading them off the template
+        costs a Boltzmann call per evaluation -- the cost this class exists to remove.  Two smooth
+        numbers, so a small budget suffices.
+        """
+        # the provider first: the axes are spanned over the scalars it gives
+        self.set_graph_scalars()
+        if self.fk_rank:
+            # then the basis, whose coefficients the fk axes span
+            self.set_fk_basis()
+        # ... and the axes before the grid: `compute` builds a table at every node of them
+        self.set_grid_axes()
+        trained = super().train(*args, **kwargs)
+        if self._fk_emulator is None and self.fk_rank:
+            from cosmoprimo.emulators.tools import Emulator as _Emulator
+
+            mean, directions, _, _ = self._fk_basis
+            from desilike.base import build, copy
+
+            template = copy(self.calculator.template, level=2)
+            graph = build(template, output=lambda template=template: (template.fk, template.f0))
+            names = [param.name for param in graph.params if not param.derived]
+
+            def coefficients(point):
+                fk, f0 = graph({name: value for name, value in point.items() if name in names})
+                shape = np.asarray(fk) / float(np.asarray(f0))
+                return {'coefficients': (shape / mean - 1.) @ directions.T}
+
+            self.logger.info(f'training the fk shape coefficients (rank {self.fk_rank})')
+            self._fk_emulator = _Emulator(coefficients, self.space)
+            self._fk_emulator.train(budget=fk_budget)
+        return trained
+
+    # ── the scale-dependent growth shape ──────────────────────────────────────
+    def set_fk_basis(self):
+        r"""Build ``self._fk_basis``: ``(mean, directions, coefficients, points)`` for the
+        ``fk(k) / f_0`` shape.
+
+        The growth axis rescales fk's normalisation, but (w0, wa) also deform its k shape, and
+        that is the whole residual the frozen shifts leave -- 7.3e-4 at wa +0.25, immune to every
+        other node count.  Measured rank 2 over the space: one component leaves 3.6e-4, two leave
+        2.3e-5, three hit a 3.7e-6 floor.  Written ``mean(k) (1 + sum_i c_i v_i(k))``, so the axes
+        are in the ``c_i`` -- which are not linear in the parameters (2.2e-1 against a linear
+        fit), hence their own emulator rather than a formula.
+        """
+        from desilike.base import build, copy
+
+        # a COPY: compiling a second pipeline over nodes the emulator's own graph already
+        # owns corrupts the pure_callback layout, and the corruption is silent -- it does not
+        # raise, it just returns wrong tables.  That is what made the channel a net regression
+        # while the tables themselves interpolate to 1e-6 (check_s2_fk_nodes.py).
+        template = copy(self.calculator.template, level=2)
+        graph = build(template, output=lambda template=template: (template.fk, template.f0))
+        names = [param.name for param in graph.params if not param.derived]
+        points = self.space.draw(size=128, seed=2)
+        shapes = []
+        for point in points:
+            fk, f0 = graph({name: value for name, value in point.items() if name in names})
+            shapes.append(np.asarray(fk / f0))
+        shapes = np.array(shapes)
+        mean = shapes.mean(axis=0)
+        residual = shapes / mean - 1.
+        left, _, right = np.linalg.svd(residual, full_matrices=False)
+        directions = right[:self.fk_rank]
+        self._fk_basis = (mean, directions, residual @ directions.T, points)
+
+    # ── the node axes ─────────────────────────────────────────────────────────
+    def set_grid_axes(self):
+        """Build ``self._axes``: ``{name: nodes}`` for amplitude, growth and the two AP scalars.
+
+        Measured, not assumed: the scalar provider is evaluated over the space, and the axes span
+        what the frozen parameters actually produce there, padded by ``margin``. Guessing the
+        ranges is the one way this class fails silently -- a prediction outside them is clamped
+        by the cardinal weights rather than refused.
+        """
+        points = self.space.draw(size=128, seed=0)
+        reached = [self.compute_scalars(point) for point in points]
+        span = {}
+        for name, key in [('amplitude', 'sigma8'), ('f', 'f'), ('qpar', 'qpar'), ('qper', 'qper')]:
+            values = np.array([float(entry[key]) for entry in reached])
+            if name == 'amplitude':
+                values = (values / float(self._sigma8_ref))**2
+            elif name == 'f':
+                values = values * self._f0_over_f
+            low, high = values.min(), values.max()
+            pad = self.margin * (high - low) if high > low else self.margin * abs(high)
+            span[name] = (low - pad, high + pad)
+        counts = {'amplitude': self.namplitude, 'f': self.nf, 'qpar': self.nq, 'qper': self.nq}
+        coefficients = self._fk_basis[2] if self.fk_rank else None
+        for index in range(self.fk_rank):
+            values = coefficients[:, index]
+            pad = self.margin * (values.max() - values.min())
+            span[f'fk{index}'] = (values.min() - pad, values.max() + pad)
+            counts[f'fk{index}'] = self.nfk
+        self._axes = {name: np.linspace(low, high, counts[name])
+                      for name, (low, high) in span.items()}
+
+    # ── build ─────────────────────────────────────────────────────────────────
+    def compute(self, params):
+        """The tables over the whole node grid, at this shape node.
+
+        The loop is shared with the bispectrum; only the two build steps differ, and they are
+        split so that whatever does not depend on the AP pair is done once per (amplitude,
+        growth, shape) rather than ``nq**2`` times -- for the power spectrum that is the one-loop
+        table, which is where the time would otherwise go.
+        """
+        values = CalculatorEmulator.compute(self, params)
+        pt, template = self.calculator, self.calculator.template
+        k_lin = np.asarray(template.k)
+        pk_lin, pk_now = np.asarray(template.pk_dd), np.asarray(template.pknow_dd)
+        # `kernels='fk'` builds from the SCALE-DEPENDENT growth rate fk(k), not from the scalar
+        # f0.  Substituting f0 is a ~1% error on the tables that no node count can remove -- it is
+        # a different model, not a coarse grid.  Moving along the growth axis therefore rescales
+        # fk, keeping its k shape.
+        node_shape = np.asarray(template.fk) / float(np.asarray(values['f0']))
+        # the amplitude axis is relative to THIS node's own linear spectrum
+        node_amplitude = (float(np.asarray(values['sigma8'])) / self._sigma8_ref)**2
+        axes = self._axes
+
+        if self.fk_rank:
+            mean, directions, _, _ = self._fk_basis
+            fk_shapes = [mean * (1. + np.dot(combination, directions))
+                         for combination in itertools.product(
+                             *[axes[f'fk{index}'] for index in range(self.fk_rank)])]
+        else:
+            fk_shapes = [node_shape]
+
+        stacked = {name: [] for name in self._TABLES}
+        for amplitude in axes['amplitude']:
+            scale = amplitude / node_amplitude
+            for growth in axes['f']:
+                # the shape channel REPLACES the node's own fk shape; the growth axis then only
+                # sets its normalisation.  At rank 0 -- the default -- the channel is off and the
+                # node keeps its own shape, which is what the class did before it existed.
+                for shape in fk_shapes:
+                    stage = self.compute_pt(pt, (k_lin, scale * pk_lin, scale * pk_now),
+                                             growth, shape)
+                    for qpar in axes['qpar']:
+                        for qper in axes['qper']:
+                            built = self.compute_tables(pt, stage, qpar, qper)
+                            for name in self._TABLES:
+                                stacked[name].append(np.asarray(built[name]))
+
+        # Node counts in BUILD order: amplitude, growth, fk shape, then the two AP scalars.
+        # fk shapes the loop table, so it is built outside the AP loop and its axes sit before
+        # them; the weights and the contraction in `inverse_transform` follow the same order.
+        grid_shape = tuple(len(self._axes[name]) for name in
+                           ['amplitude', 'f'] + [f'fk{i}' for i in range(self.fk_rank)]
+                           + ['qpar', 'qper'])
+        for name in self._TABLES:
+            grid = np.array(stacked[name])
+            values[name] = grid.reshape(grid_shape + grid.shape[1:])
+        return values
+
+    def compute_pt(self, pt, linear, growth, shape):
+        """The one-loop table: everything that does not depend on the AP pair."""
+        import folps
+        import folps.folps as _folps_module
+
+        _folps_module.A_full_status = pt._A_full
+        _folps_module.use_TNS_model_status = pt._remove_DeltaP
+        k_lin, pk_lin, pk_now = linear
+        inputs = {'pkttlin': pk_lin * (shape * growth)**2, 'f0': growth}
+        nlps = folps.NonLinearPowerSpectrumCalculator(
+            mmatrices=pt._matrices, kernels=pt._kernels, rbao=pt._rbao, **inputs)
+        table, table_now = nlps.calculate_loop_table(k=k_lin, pklin=pk_lin, pknow=pk_now,
+                                                     **inputs)
+        return (folps.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD'),
+                tuple(table), tuple(table_now))
+
+    def compute_tables(self, pt, stage, qpar, qper):
+        """The monomial tables at one AP pair."""
+        rsd, table, table_now = stage
+        return rsd.get_rsd_pkmu_monomials_tables(
+            np.asarray(pt.k), qpar, qper, table, table_now, nmu=pt._nmu, ells=pt.ells,
+            IR_resummation=True, damping_method=pt._damping_method, use_GTNS=pt._use_GTNS,
+            fixed_bias=pt._fixed_bias)
+
+    # ── the hooks ─────────────────────────────────────────────────────────────
+    def transform(self, values, params):
+        """The node axes carry the dependence, so nothing is divided out -- except the one scalar
+        that has to travel: f0 / f, which the run-time provider cannot give (it knows f at data
+        scales, not the k -> 0 rate the tables were built with).
+
+        Both pts carry an ``f`` child, so the denominator is theirs -- no provider call, and
+        nothing to get wrong at a node whose parameters differ from the prediction's.
+        """
+        growth = jnp.asarray(values['f'])
+        out = dict(values)
+        out['f0_over_f'] = jnp.asarray(values['f0']) / growth
+        return out
+
+    def inverse_transform(self, values, params):
+        """Contract the node axes, and write the run-time scalars in."""
+        from cosmoprimo.emulators.tools.utils import lagrange_weights, cardinal_cubic_weights
+
+        scalars = self.compute_scalars(params)
+        # f0, not f: the axis is in the quantity the tables were built with
+        growth = values['f0_over_f'] * scalars['f']
+        # the shape coefficients, from the model `train` fits above rank 0.  Nothing to read
+        # at rank 0 -- the default -- and nothing asks: the fk weights below are built
+        # `range(self.fk_rank)` times.
+        coefficients = None
+        if self.fk_rank:
+            known = {name: value for name, value in params.items()
+                     if name in self._fk_emulator.space.params}
+            coefficients = jnp.asarray(self._fk_emulator.predict(**known)['coefficients'])
+        axes = self._axes
+        weights = [lagrange_weights(axes['amplitude'],
+                                    (scalars['sigma8'] / self._sigma8_ref)**2),
+                   lagrange_weights(axes['f'], growth)]
+        weights += [lagrange_weights(axes[f'fk{index}'], coefficients[index])
+                    for index in range(self.fk_rank)]
+        weights += [cardinal_cubic_weights(axes['qpar'], scalars['qpar']),
+                    cardinal_cubic_weights(axes['qper'], scalars['qper'])]
+        letters = 'abcdef'[:len(weights)]
+        subscripts = ','.join(letters) + ',' + letters + '...->...'
+        out = dict(values)
+        for name in self._TABLES:
+            key = name
+            out[key] = jnp.einsum(subscripts, *weights, jnp.asarray(values[key]))
+        out.pop('f0_over_f', None)
+        placed = {'f0': growth, 'qpar': scalars['qpar'], 'qper': scalars['qper'],
+                  'sigma8': scalars['sigma8'], 'fsigma8': scalars['fsigma8'],
+                  'sigma8_fid': self._sigma8_fid}
+        placed['f'] = scalars['f']
+        if 'jac' in self.children_leafnames:   # the bispectrum applies AP per call, with no grid
+            placed['jac'] = 1. / (scalars['qpar'] * scalars['qper']**2)
+        out.update(placed)
+        return out
+
+    # ── state ─────────────────────────────────────────────────────────────────
+    def __getstate__(self):
+        state = super().__getstate__()
+        state.update({'namplitude': self.namplitude, 'nf': self.nf, 'nq': self.nq,
+                      'margin': self.margin, 'sigma8_ref': self._sigma8_ref,
+                      'f0_over_f': self._f0_over_f, 'nfk': self.nfk, 'fk_rank': self.fk_rank,
+                      'fk_mean': self._fk_basis[0] if self._fk_basis else None,
+                      'fk_directions': self._fk_basis[1] if self._fk_basis else None,
+                      'fk_emulator': (self._fk_emulator.__getstate__()
+                                      if self._fk_emulator is not None else None),
+                      'axes': {name: np.asarray(nodes) for name, nodes in self._axes.items()}})
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self.namplitude, self.nf = state['namplitude'], state['nf']
+        self.nq, self.margin = state['nq'], state['margin']
+        self._sigma8_ref = state['sigma8_ref']
+        self._f0_over_f = state['f0_over_f']
+        self.nfk, self.fk_rank = state['nfk'], state['fk_rank']
+        from cosmoprimo.emulators.tools import Emulator as _Emulator
+
+        self._fk_emulator = (_Emulator.from_state(state['fk_emulator'])
+                             if state['fk_emulator'] is not None else None)
+        self._fk_basis = (None if state['fk_mean'] is None
+                          else (state['fk_mean'], state['fk_directions'], None, None))
+        self._axes = {name: np.asarray(nodes) for name, nodes in state['axes'].items()}
+
+
+class FOLPSD3PolesMonomialsEmulator(FOLPSD2PolesMonomialsEmulator):
+    r"""The FOLPSD bispectrum pt with ``output='monomials'``.
+
+    The same collocation-axis machinery as :class:`FOLPSD2PolesMonomialsEmulator` -- and a
+    subclass of it for the same reason :class:`FOLPSPTSpectrum3Poles` subclasses the power
+    spectrum pt -- over a cheaper build: the bispectrum needs only ``get_linear``, not the
+    one-loop table, so a node costs a fraction of the power spectrum's.
+
+    Two differences that matter:
+
+    - the state is ``(undamped, damped, correction, sigma2v)`` plus scalars: no ``lam``, no
+      ``jac``, and no ``f`` child (only ``f0``), so ``f0 / f`` is taken from the provider at the
+      node rather than from a sibling child.
+    - the ``Lambda`` axis is a collocation built by ``folps.fog_lambda_nodes`` from the ``(k1, k2)``
+      pairs alone -- it does NOT depend on the growth rate -- so every f node shares one basis and
+      plain Lagrange interpolation of the tables in f is well defined. (``NOTES.md`` 3b describes
+      a sharper scheme that rescales each node's Lambda positions by ``(f_true / f_node)**2`` and
+      concatenates the blocks; that buys accuracy per f node, and is the thing to add if the f
+      axis turns out to dominate the residual.)
+    """
+    _TABLES = ('undamped', 'damped', 'correction', 'sigma2v')
+
+    def set_children_leafnames(self):
+        # `f` since the bispectrum pt carries it too now, and in tree_flatten's order
+        self.children_leafnames = ['undamped', 'damped', 'correction', 'sigma2v', 'f', 'f0',
+                                   'qpar', 'qper', 'sigma8', 'fsigma8', 'sigma8_fid']
+
+    def compute_pt(self, pt, linear, growth, shape):
+        """The linear rows: the bispectrum needs no loop table, which is why a node is cheap."""
+        import folps
+
+        k_lin, pk_lin, pk_now = linear
+        inputs = {'pkttlin': pk_lin * (shape * growth)**2, 'f0': growth}
+        nlps = folps.NonLinearPowerSpectrumCalculator(
+            mmatrices=pt._matrices, kernels=pt._kernels, rbao=pt._rbao, **inputs)
+        rows = nlps.get_linear(k=k_lin, pklin=pk_lin, pknow=pk_now, **inputs)
+        return (folps.BispectrumCalculator(model=pt._model), growth,
+                np.array([rows['k'], rows['pk_l'], rows['pk_l_NW']]))
+
+    def compute_tables(self, pt, stage, qpar, qper):
+        """The monomial tables at one AP pair."""
+        bispectrum, growth, k_pkl_pklnw = stage
+        return bispectrum.Sugiyama_Bell_monomials(
+            f=growth, k_pkl_pklnw=k_pkl_pklnw, k1k2pairs=pt.k, qpar=qpar, qper=qper,
+            precision=pt._precision, multipoles=pt._folps_multipoles,
+            renormalize=pt._renormalized, interpolation_method=pt._interpolation_method,
+            lambda_nodes=pt._lambda_nodes, fixed_bias=pt._fixed_bias)

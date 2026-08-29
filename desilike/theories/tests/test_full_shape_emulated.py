@@ -2,7 +2,7 @@
 
 Pattern (mirrors benchmark.py::build_posterior_folps with emulator_order set):
   1. Build the theory with its real PT sub-calculator.
-  2. Compile the PT sub-graph and fit a degree-1 TaylorEmulator on it.
+  2. Emulate the PT sub-graph over its parameters ref box.
   3. Replace the real PT with the emulated version (via replace()).
   4. Compile the full tracer pipeline and compare against an exact reference.
 
@@ -20,7 +20,8 @@ import jax
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike import compile, TaylorEmulator
+from desilike import compile
+from desilike.emulators import Emulator, Space
 from desilike.base import replace
 
 
@@ -33,15 +34,44 @@ _EMU_ORDER = 1
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+def _fd_box(calculator, width=3.):
+    """A box `value +- width * fd.eps` per varied parameter.
+
+    The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
+    the emulated region comparable. not the `ref` box: these parameters have none, and the
+    prior is far too wide to evaluate.
+    """
+    from desilike.base import compile
+    limits = {}
+    for param in compile(calculator).params:
+        # varied only. A fixed parameter does not move, so emulating over it buys nothing and
+        # costs an axis -- 11 axes instead of 5 for a FOLPS pt -- and it is how the box came to
+        # ask for a negative neutrino mass: m_ncdm is fixed, with a leftover fd step.
+        if param.derived or not getattr(param, 'varied', True):
+            continue
+        value = float(np.sum(np.atleast_1d(param.value)))
+        eps = getattr(getattr(param, 'fd', None), 'eps', None) or max(abs(value), 1.) * 0.02
+        low, high = value - width * eps, value + width * eps
+        # A varied parameter sitting at a prior edge is still possible; skip it rather than clip.
+        # `differentiate` handles the same situation by shifting its stencil inside the prior and
+        # keeping the expansion centre put, which a Taylor expansion can do and a collocation grid
+        # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
+        # the node `_check` asserts the emulator is exact at.
+        bounds = getattr(getattr(param, 'prior', None), 'limits', None)
+        if bounds is not None and np.isfinite(bounds).all():
+            if low < float(bounds[0]) or high > float(bounds[1]):
+                continue
+        limits[param.name] = (low, high)
+    return limits
+
+
 def _emulate(theory, inner_pt=None):
     """Emulate ``inner_pt`` (default: ``theory.pt``) in-place; return compiled pipeline."""
     if inner_pt is None:
         inner_pt = theory.pt
-    pt_pipe = compile(inner_pt)
-    emu = TaylorEmulator(pt_pipe, order=_EMU_ORDER)
-    emu.fit()
-    emulated_pt = emu.to_calculator()
-    replace(theory, inner_pt, emulated_pt)
+    emu = Emulator(inner_pt, Space(limits=_fd_box(inner_pt)))
+    emu.train(budget=_EMU_ORDER)
+    replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)
 
 
@@ -50,7 +80,10 @@ def _check(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     center = {p.name: p.value for p in pipe_exact.params}
     exact_center = np.asarray(pipe_exact(center))
     emu_center = np.asarray(pipe_emu(center))
-    np.testing.assert_allclose(emu_center, exact_center, atol=1e-8, rtol=0.,
+    # rtol as well as atol: "exact at the centre" means to machine precision, and an
+    # absolute-only tolerance says something different at every scale -- on the bispectrum,
+    # whose values are ~1e9, atol=1e-8 demands a relative 1e-17 and fails on rounding alone.
+    np.testing.assert_allclose(emu_center, exact_center, atol=1e-8, rtol=1e-10,
                                err_msg='emulator mismatch at expansion center')
     if shift_param in center:
         shifted = {**center, shift_param: center[shift_param] * 1.05}
@@ -99,7 +132,7 @@ def test_kaiser_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
 
-# ── TNS ────────────────────────────────────────────────────────────────────────
+# ── tns ────────────────────────────────────────────────────────────────────────
 
 def test_tns_spectrum_emulated():
     """TNSPTSpectrum2Poles emulated as pt= in TNSTracerSpectrum2Poles."""
@@ -126,7 +159,7 @@ def test_tns_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
 
-# ── LPT Velocileptors ──────────────────────────────────────────────────────────
+# ── lpt Velocileptors ──────────────────────────────────────────────────────────
 
 def test_lpt_spectrum_emulated():
     """LPTVelocileptorsPTSpectrum2Poles emulated as pt= in LPTVelocileptorsTracerSpectrum2Poles."""
@@ -157,7 +190,7 @@ def test_lpt_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1p')
 
 
-# ── REPT Velocileptors ─────────────────────────────────────────────────────────
+# ── rept Velocileptors ─────────────────────────────────────────────────────────
 
 def test_rept_spectrum_emulated():
     """REPTVelocileptorsPTSpectrum2Poles emulated as pt= in REPTVelocileptorsTracerSpectrum2Poles."""
@@ -285,7 +318,7 @@ def test_folps_correlation_emulated():
 def test_folps_spectrum3_poles_prior_bases():
     """FOLPSTracerSpectrum3Poles: each prior_basis compiles and produces the right output shape.
 
-    Uses a TaylorEmulator on the PT sub-graph to avoid the memory-intensive
+    Uses an emulator on the PT sub-graph to avoid the memory-intensive
     combine_bias_terms_spectrum3_poles call while still exercising the full
     bias-parameter conversion path for every prior_basis variant.
     """

@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.special import logsumexp
 
+from ..base import build, CompiledGraph
 from ..parameter import VariableCollection
 from ..samples import MCSamples, Covariance, diagnostics
 from ..distributed import default_mpicomm, get_mpicomm
@@ -367,8 +368,8 @@ class BaseSampler(ABC):
         """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
+        posterior : CompiledGraph or Calculator
+            Compiled pipeline returning the log-posterior.  A calculator is compiled here.
         rng : numpy.random.Generator, int, or None
             Random number generator.  Default is ``None``.
         mpicomm : MPI communicator, optional
@@ -386,6 +387,12 @@ class BaseSampler(ABC):
             ``0`` — evaluate one task at a time (no batching).
             ``N > 0`` — group tasks into chunks of N.
         """
+        # A Calculator is built here rather than being rejected -- but only the no-argument
+        # form: `build(root, output=...)` is a choice about what the pipeline returns, and a
+        # sampler cannot guess it. An already-built graph is taken as is: building runs the whole
+        # pipeline once.
+        posterior = posterior if isinstance(posterior, CompiledGraph) else build(posterior)
+
         # ── parameter sets ────────────────────────────────────────────────────
         self.varied_params = posterior.params.select(varied=True, derived=False)
         if not self.varied_params:
@@ -858,8 +865,8 @@ class MCMCSampler(BaseSampler):
         """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
+        posterior : CompiledGraph or Calculator
+            Compiled pipeline returning the log-posterior.  A calculator is compiled here.
         kernel : Kernel
             Algorithm kernel, e.g. ``BlackjaxHMC()``, ``Emcee()``.
         nparallel : int or sequence
@@ -1468,8 +1475,8 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
 
     Parameters
     ----------
-    posterior : CompiledGraph
-        Compiled pipeline returning the log-posterior scalar.
+    posterior : CompiledGraph or Calculator
+        Compiled pipeline returning the log-posterior scalar.  A calculator is compiled for you.
     kernel : Kernel, PopulationKernel, or StaticKernel
         Algorithm instance, e.g. ``BlackjaxHMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
         ``Dynesty(dynamic=True)``, ``Grid()``, ``QMC()``, ``Importance()``.

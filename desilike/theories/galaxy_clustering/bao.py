@@ -133,7 +133,7 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
             Parameter('b1', value=1.5, prior=dict(limits=[0.2, 4.]),
                       ref=dict(limits=[1.4, 1.6]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
-                      ref=dict(limits=[0.9, 1.1]), fd_eps=0.02, latex=r'\delta\beta'),
+                      ref=dict(limits=[0.9, 1.1]), fd=dict(eps=0.02), latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
                       ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
             Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0.1, 10.]),
@@ -304,7 +304,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
             Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
                       ref=dict(limits=[1.5, 2.]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
-                      ref=dict(limits=[0.95, 1.05]), fd_eps=0.02, latex=r'\delta\beta'),
+                      ref=dict(limits=[0.95, 1.05]), fd=dict(eps=0.02), latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
                       ref=dict(limits=[0., 1.]), latex=r'\Sigma_s'),
             Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 4.]),
@@ -493,14 +493,14 @@ def _bb_spectrum_auto_params(ells, broadband):
                 fixed = (broadband == 'power3') and (pow not in (-2, -1, 0))
                 auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1.),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{pow}}}'))
     else:
         for ell in ells:
             for ik in _BB_SPECTRUM_KERNEL_IKS:
                 auto_params.append(Parameter(f'al{ell}_{ik}', value=0.,
                                              prior=dict(dist='norm', loc=0., scale=1e4),
                                              ref=dict(dist='norm', loc=0., scale=1e-2),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}'))
     return auto_params
 
 
@@ -515,19 +515,19 @@ def _bb_correlation_auto_params(ells, broadband):
                         ((broadband == 'even-power') and (pow not in (0, 2)))
                 auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1.),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{pow}}}'))
     else:
         for ell in ells:
             for ik in _BB_CORRELATION_KERNEL_IKS:
                 fixed = (broadband == 'pcs2') and (ell == 0 or ik not in (0, 1))
                 auto_params.append(Parameter(f'al{ell}_{ik}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-1),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}'))
         for ell in ells:
             for pow in _BB_CORRELATION_BL_POWS:
                 auto_params.append(Parameter(f'bl{ell}_{pow}', value=0.,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
-                                             fd_eps=0.005, latex=f'b_{{{ell},{pow}}}'))
+                                             fd=dict(eps=0.005), latex=f'b_{{{ell},{pow}}}'))
     return auto_params
 
 

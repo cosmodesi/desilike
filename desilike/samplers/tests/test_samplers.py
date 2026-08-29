@@ -528,3 +528,35 @@ def test_kernel_nparallel_batches(likelihood, key):
             values = np.asarray(results[name])
             assert values.size, f'{key}: no samples returned'
             assert np.all(np.isfinite(values)), f'{key}: non-finite samples'
+
+
+def test_sampler_accepts_an_uncompiled_calculator():
+    """`Sampler(posterior)` compiles a Calculator rather than failing on `.params` -- but only the
+    no-argument form; `compile(root, output=...)` is a choice a sampler cannot make.  An already
+    compiled graph is stored as-is: compiling runs the whole pipeline, so a needless recompile is
+    a real cost, not a formality.
+    """
+    from desilike.base import CompiledGraph
+
+    class Toy(BaseGaussianLikelihood):
+
+        def __init__(self, a):
+            self.a = a
+            self.flatdata = jnp.array([0.4])
+            self.precision = jnp.diag(jnp.array([100.]))
+
+        def __call__(self):
+            self.flattheory = jnp.array([self.a])
+            return super().__call__()
+
+    def posterior():
+        a = Parameter('a', prior=dict(dist='uniform', limits=[-10., 10.]),
+                      ref=dict(dist='norm', loc=0.4, scale=0.1))
+        return Posterior(Toy(a), Prior(a))
+
+    sampler = samplers.Sampler(posterior(), samplers.Grid())
+    assert [param.name for param in sampler.varied_params] == ['a']
+    assert isinstance(sampler.posterior, CompiledGraph)
+
+    already = compile(posterior())
+    assert samplers.Sampler(already, samplers.Grid()).posterior is already

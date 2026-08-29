@@ -58,14 +58,46 @@ def _compile(theory):
     return run
 
 
+def _fd_box(calculator, width=3.):
+    """A box `value +- width * fd.eps` per varied parameter.
+
+    The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
+    the emulated region comparable.  NOT the `ref` box: these parameters have none, and the
+    prior is far too wide to evaluate.
+    """
+    from desilike.base import compile
+    limits = {}
+    for param in compile(calculator).params:
+        # VARIED only.  A fixed parameter does not move, so emulating over it buys nothing and
+        # costs an axis -- 11 axes instead of 5 for a FOLPS pt -- and it is how the box came to
+        # ask for a negative neutrino mass: m_ncdm is fixed, with a leftover fd step.
+        if param.derived or not getattr(param, 'varied', True):
+            continue
+        value = float(np.sum(np.atleast_1d(param.value)))
+        eps = getattr(getattr(param, 'fd', None), 'eps', None) or max(abs(value), 1.) * 0.02
+        low, high = value - width * eps, value + width * eps
+        # A varied parameter sitting AT a prior edge is still possible; skip it rather than clip.
+        # `differentiate` handles the same situation by shifting its stencil inside the prior and
+        # keeping the expansion centre put, which a Taylor expansion can do and a collocation grid
+        # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
+        # the node `_check` asserts the emulator is exact at.
+        bounds = getattr(getattr(param, 'prior', None), 'limits', None)
+        if bounds is not None and np.isfinite(bounds).all():
+            if low < float(bounds[0]) or high > float(bounds[1]):
+                continue
+        limits[param.name] = (low, high)
+    return limits
+
+
 def _emulate(theory, inner_pt=None):
-    """Fit a degree-1 TaylorEmulator on ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
-    from desilike import compile, TaylorEmulator
+    """Emulate ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
+    from desilike import compile
     from desilike.base import replace
+    from desilike.emulators import Emulator, Space
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = TaylorEmulator(compile(inner_pt), order=1)
-    emu.fit()
+    emu = Emulator(inner_pt, Space(limits=_fd_box(inner_pt)))
+    emu.train(budget=1, verbose=False)
     replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)
 
@@ -73,8 +105,11 @@ def _emulate(theory, inner_pt=None):
 def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     """Center: exact match (atol=1e-8). Shifted by 5 %: relative error < tol."""
     center = {p.name: p.value for p in pipe_exact.params}
+    # rtol as well as atol: "exact at the centre" means to MACHINE precision, and an
+    # absolute-only tolerance says something different at every scale.
     np.testing.assert_allclose(np.asarray(pipe_emu(center)), np.asarray(pipe_exact(center)),
-                               atol=1e-8, rtol=0., err_msg='emulator mismatch at expansion center')
+                               atol=1e-8, rtol=1e-10,
+                               err_msg='emulator mismatch at expansion center')
     if shift_param in center:
         shifted = {**center, shift_param: center[shift_param] * 1.05}
         exact_s = np.asarray(pipe_exact(shifted))

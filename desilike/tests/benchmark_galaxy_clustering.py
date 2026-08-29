@@ -11,13 +11,13 @@ FOLPS full-shape:
     → FOLPSTracerSpectrum2Poles → Spectrum2PolesObservable
     → ObservablesGaussianLikelihood → Posterior.
 
-FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
+FOLPS full-shape with an emulator on FOLPSPTSpectrum2Poles:
     Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
     fitted once before timing.
 
-FOLPS eisenstein_hu vs TaylorEmulator (``folps_vs_emu``):
+FOLPS eisenstein_hu vs emulated (``folps_vs_emu``):
     Head-to-head: ``engine='eisenstein_hu'`` (JAX-native, no emulator) vs
-    ``engine='camb'`` + ``TaylorEmulator(order=1)`` on the PT sub-graph.
+    ``engine='camb'`` + ``an emulator (budget=1)`` on the PT sub-graph.
 
 COMET full-shape (GP-emulator-based):
     COMETTracerSpectrum2Poles (+ COMETTracerSpectrum3Poles, optionally) →
@@ -39,7 +39,7 @@ import jax
 import jax.numpy as jnp
 
 from desilike.base import compile, get_params, Posterior, Prior, replace, SumLikelihood
-from desilike import TaylorEmulator
+from desilike.emulators import Emulator, Space
 from desilike.theories import ACECosmology
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
@@ -182,10 +182,10 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         theory.update(params=params)
 
         if emulator_order is not None:
-            print(f'  fitting TaylorEmulator (order={emulator_order}) on PT sub-graph …', end=' ', flush=True)
+            print(f'  fitting an emulator (budget={emulator_order}) on PT sub-graph …', end=' ', flush=True)
             t0 = time.perf_counter()
-            pt_emulator = TaylorEmulator(compile(theory.pt), order=emulator_order)
-            pt_emulator.fit()
+            pt_emulator = Emulator(theory.pt, Space(theory.pt))
+            pt_emulator.train(budget=emulator_order, verbose=False)
             print(f'done ({(time.perf_counter() - t0) * 1e3:.0f} ms)')
             replace(theory, theory.pt, pt_emulator.to_calculator())
 
@@ -439,7 +439,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -448,7 +448,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_noemu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + TaylorEmulator(order=1)')
+        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + an emulator (budget=1)')
         print(f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -465,7 +465,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu_3poles' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -474,7 +474,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
     if 'folps_multi_emu' in test:
         tracers = TRACERS_FOLPS
         print(f'\n{"─" * 60}')
-        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + TaylorEmulator(order=1) on PT: '
+        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + an emulator (budget=1) on PT: '
             f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size per tracer={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')

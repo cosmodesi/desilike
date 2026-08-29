@@ -19,8 +19,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from cosmoprimo import CosmologyInputError, CosmologyComputationError
+from cosmoprimo.cosmology import Cosmology
 
 from ..base import Calculator
+from ..emulators.api import CalculatorEmulator, DERIVED
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
@@ -337,6 +339,30 @@ def _get_cosmoprimo_fiducial(fiducial):
     raise ValueError(f'Cannot parse fiducial cosmology: {fiducial!r}')
 
 
+def find_conflicts(name, names):
+    """Those of *names* that conflict with *name* -- i.e. set the same physical quantity.
+
+    cosmoprimo's own word: ``Cosmology._conflict_parameters`` groups ``('h', 'H0')``,
+    ``('A_s', 'logA', 'sigma8')``, ``('Omega_cdm', 'omega_cdm', 'Omega_m', ...)`` precisely
+    because setting two of a group is contradictory, and it raises when you do.  So a
+    well-formed pipeline gives at most one and the caller can unpack it; more than one is a
+    pipeline worth complaining about rather than choosing between.
+
+    This answers WHICH NAME, and nothing else.  Conflicting parameters do not share a VALUE --
+    H0 is 100 h, and Omega_m differs from omega_cdm by h^2 and by the neutrino and baryon
+    content -- so it must never be used to read one under another's name.  Values come from the
+    cosmology (``CosmoprimoCosmology.__getitem__`` converts) or from the scalar provider.
+
+        find_conflicts('h', ['H0', 'A_s'])       # ['H0']
+        find_conflicts('w0_fld', ['H0', 'A_s'])  # []
+    """
+    from cosmoprimo import Cosmology
+
+    group = next((conflicts for conflicts in Cosmology._conflict_parameters
+                  if name in conflicts), (name,))
+    return [other for other in names if other in group]
+
+
 def _get_fiducial(fiducial, calculator=None):
     """Return a cosmoprimo Cosmology, or (if calculator is given) the fiducial computed
     through calculator's own pipeline.
@@ -350,14 +376,14 @@ def _get_fiducial(fiducial, calculator=None):
     import cosmoprimo
     fiducial = _get_cosmoprimo_fiducial(fiducial)
     if calculator is not None:
-        from desilike.base import compile
+        from desilike.base import build
         params = {}
         for param in calculator.params:
             try:
                 params[param.name] = fiducial[param.basename]
             except cosmoprimo.CosmologyError:
                 params[param.name] = param.value
-        pipe = compile(calculator, output=lambda: calculator)
+        pipe = build(calculator, output=lambda: calculator)
         return pipe(params)
     return fiducial
 
@@ -484,6 +510,13 @@ class CosmoprimoCosmology(PrimordialCosmology):
     """
 
     @classmethod
+    def get_emulator_cls(cls):
+        """:class:`CMBEmulator`: the Cl amplitude and optical depth are
+        analytic, so they are divided out rather than expanded.  `Emulator(cosmo, space)` picks
+        this up on its own; pass `cls=CalculatorEmulator` to force the generic expansion."""
+        return CMBEmulator
+
+    @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
@@ -512,52 +545,64 @@ class CosmoprimoCosmology(PrimordialCosmology):
         params.set(Parameter('h', value=fiducial['h'],
                              prior=dict(limits=[0.1, 10.]),
                              ref=dict(dist='norm', loc=fiducial['h'], scale=0.005),
-                             fd_eps=0.03, latex='h'))
+                             fd=dict(eps=0.03), latex='h'))
         params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
                              prior=dict(limits=[0.01, 0.99]),
                              ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.0012),
-                             fd_eps=0.007, latex=r'\omega_{\mathrm{cdm}}'))
+                             fd=dict(eps=0.007), latex=r'\omega_{\mathrm{cdm}}'))
         params.set(Parameter('omega_b', value=fiducial['omega_b'],
                              prior=dict(limits=[0.005, 0.1]),
                              ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.00015),
-                             fd_eps=0.0015, latex=r'\omega_b'))
+                             fd=dict(eps=0.0015), latex=r'\omega_b'))
         params.set(Parameter('logA', value=fiducial['logA'],
                              prior=dict(limits=[1.61, 3.91]),
                              ref=dict(dist='norm', loc=fiducial['logA'], scale=0.014),
-                             fd_eps=0.05, latex=r'\ln(10^{10} A_s)'))
+                             fd=dict(eps=0.05), latex=r'\ln(10^{10} A_s)'))
         params.set(Parameter('n_s', value=fiducial['n_s'],
                              prior=dict(limits=[0.8, 1.2]),
                              ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.0042),
-                             fd_eps=0.005, latex=r'n_s'))
+                             fd=dict(eps=0.005), latex=r'n_s'))
         params.set(Parameter('tau_reio', value=fiducial['tau_reio'], fixed=True,
                              prior=dict(limits=[0.01, 0.8]),
                              ref=dict(dist='norm', loc=fiducial['tau_reio'], scale=0.01),
-                             fd_eps=0.01, latex=r'\tau'))
+                             fd=dict(eps=0.01), latex=r'\tau'))
         params.set(Parameter('m_ncdm', value=fiducial['m_ncdm_tot'], fixed=True,
                              prior=dict(limits=[0., 5.]),
                              ref=dict(dist='norm', loc=fiducial['m_ncdm_tot'], scale=0.12, limits=[0., 10.]),
-                             fd_eps=(0.31, 0.15, 0.15), latex=r'm_{\mathrm{ncdm}}'))
+                             # sqrt(m) is the natural expansion variable (free-streaming
+                             # scale ~ sqrt(m)); Chebyshev collocation over the DESI prior
+                             # range: the order-n fit is the degree-n interpolant in sqrt(m)
+                             # (raw dchi2 <= 4e-4 over m in [0, 0.4] at order 4).
+                             fd=dict(limits=(0., 0.45), transform='sqrt'),
+                             latex=r'm_{\mathrm{ncdm}}'))
         params.set(Parameter('N_eff', value=fiducial['N_eff'], fixed=True,
                              prior=dict(limits=[0.01, 10.]),
                              ref=dict(dist='norm', loc=fiducial['N_eff'], scale=0.16),
-                             fd_eps=0.2, latex=r'N_{\mathrm{eff}}'))
+                             fd=dict(eps=0.2), latex=r'N_{\mathrm{eff}}'))
         params.set(Parameter('w0_fld', value=fiducial['w0_fld'], fixed=True,
                              prior=dict(limits=[-3., 1.]),
                              ref=dict(dist='norm', loc=fiducial['w0_fld'], scale=0.08),
-                             fd_eps=0.1, latex=r'w_0'))
+                             fd=dict(eps=0.1), latex=r'w_0'))
         params.set(Parameter('wa_fld', value=fiducial['wa_fld'], fixed=True,
                              prior=dict(limits=[-3., 2.]),
                              ref=dict(dist='norm', loc=fiducial['wa_fld'], scale=0.3),
-                             fd_eps=0.3, latex=r'w_a'))
+                             fd=dict(eps=0.3), latex=r'w_a'))
         params.set(Parameter('Omega_k', value=fiducial['Omega_k'], fixed=True,
                              prior=dict(limits=[-0.3, 0.3]),
                              ref=dict(dist='norm', loc=fiducial['Omega_k'], scale=0.0065),
-                             fd_eps=0.05, latex=r'\Omega_k'))
+                             fd=dict(eps=0.05), latex=r'\Omega_k'))
         return params
 
     def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', **kwargs):
-        self._engine = str(engine)
-        self._is_external = self._engine not in _JAX_ENGINES
+        # ``engine`` may be a cosmoprimo engine CLASS as well as a name -- notably
+        # ``EmulatedEngine.read(fn)``, the documented way to use a trained cosmoprimo
+        # emulator (e.g. an emulated harmonic section shared by CMB / FS / SN likelihoods).
+        # str() would turn such a class into "<class '...'>" and cosmoprimo would then fail
+        # with 'Unknown engine'.
+        self._engine = str(engine) if isinstance(engine, str) else engine
+        # A non-string engine is a JAX-traceable emulator unless it says otherwise; named
+        # engines are looked up in the JAX list as before.
+        self._is_external = isinstance(self._engine, str) and self._engine not in _JAX_ENGINES
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
         # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
@@ -1350,3 +1395,88 @@ class ACECosmology(PrimordialCosmology):
         # Here set derived_params
         for param, getter in self._get_derived.items():
             self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
+
+
+# ── emulating a cosmology for its Cl ──────────────────────────────────────────
+#
+# Emulating the CMB spectra a likelihood asks a cosmology for.
+#
+# The cut is the cosmology, not the likelihood: :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
+# flattens to its registered requirement results, so emulating it replaces exactly the Boltzmann
+# call and leaves every foreground, calibration and window downstream untouched. Those nuisance
+# parameters are cheap and numerous -- emulating them would be paying to interpolate arithmetic.
+#
+# What this class adds over the generic :class:`~desilike.emulators.CalculatorEmulator` is the two
+# things a :math:`C_\ell` is analytic in, divided out before the fit and put back at prediction:
+#
+# - the amplitude, :math:`C_\ell \propto A_s`. Exact for the primary anisotropies; not once lensing
+#   is applied, since the deflection power is itself proportional to it (measured residual 1.0e-3
+#   over a 10% amplitude change). So it flattens the dependence but the parameter stays on the
+#   grid -- which is the honest outcome, not a compromise: what remains is a much smaller thing to
+#   interpolate.
+# - the optical depth, one :math:`e^{-\tau}` per screened leg: ``tt`` and ``ee`` carry
+#   :math:`e^{-2\tau}`, ``tp`` and ``ep`` one factor, ``pp`` none. Also a flattening rather than a
+#   removal -- below :math:`\ell \sim 30` reionization puts power back, which no prefactor
+#   describes.
+#
+# Getting the per-leg count wrong is a silent factor of :math:`e^{\tau}`, which is why the legs are
+# counted from the spectrum's own name rather than listed.
+
+
+def amplitude(params):
+    """:math:`A_s` in whatever spelling was given, or None if the space varies no amplitude.
+
+    The spellings come off `Cosmology`'s own alias table rather than a list here, so one added
+    there is not silently missed -- which would put the amplitude on the grid instead of scaling
+    it: quietly worse, not failing.
+    """
+    for name in ('A_s', 'logA') + tuple(Cosmology._alias_parameters['logA']):
+        if name in params:
+            return params[name] if name == 'A_s' else 1e-10 * np.exp(params[name])
+    return None
+
+
+class CMBEmulator(CalculatorEmulator):
+    r"""A cosmology emulated for its :math:`C_\ell`, with the amplitude and optical depth routed.
+
+    Declared by :meth:`CosmoprimoCosmology.get_emulator_cls`, so ``Emulator(cosmo, space)`` uses
+    it without being told. A cosmology with no harmonic requirement is unaffected: nothing is
+    then recognised as a spectrum and every leaf passes through.
+    """
+
+    def spectra(self):
+        """``{leaf key: spectrum name}`` for the leaves that are spectra.
+
+        A leaf whose name ends in one of these is a spectrum; any other leaf (a parameter value,
+        a derived quantity) is passed through untouched.
+        """
+        spectra = ('tt', 'ee', 'bb', 'te', 'pp', 'tp', 'ep')
+        return {name: name.rsplit('.', 1)[-1]
+                for name in getattr(self, 'children_leafnames', [])
+                if name.rsplit('.', 1)[-1] in spectra}
+
+    def scaling(self, params):
+        r"""``{leaf key: factor}`` divided out at training and multiplied back at prediction."""
+        value = amplitude(params)
+        tau = params.get('tau_reio', None)
+        factors = {}
+        for key, spectrum in self.spectra().items():
+            factor = 1. if value is None else value
+            if tau is not None:
+                # one e^{-tau} per screened leg: 'tt' 2, 'tp' 1, 'pp' 0
+                factor = factor * np.exp(-tau * sum(leg != 'p' for leg in spectrum))
+            factors[key] = factor
+        return factors
+
+    def transform(self, values, params):
+        factors = self.scaling(params)
+        return {name: value / factors[name] if name in factors else value
+                for name, value in values.items()}
+
+    def inverse_transform(self, values, params):
+        factors = self.scaling(params)
+        # derived quantities and the parameter leaves are not spectra; they pass through, which
+        # `factors` not naming them already achieves
+        assert not any(name.startswith(DERIVED) for name in factors)
+        return {name: value * factors[name] if name in factors else value
+                for name, value in values.items()}

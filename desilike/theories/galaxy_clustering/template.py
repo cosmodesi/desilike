@@ -53,9 +53,11 @@ time ``__call__`` returns (and include them in ``tree_flatten``/``tree_unflatten
 """
 
 import numpy as np
+import jax
 import jax.numpy as jnp
 
 from ...base import Calculator
+from ...emulators.api import CalculatorEmulator, DERIVED
 from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 from ._multitracer import propose_params_multitracer, assign_params
@@ -67,12 +69,65 @@ _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)  # cosmoprimo pk_interpolator k
 # ── Base class ────────────────────────────────────────────────────────────────
 
 class Spectrum2Template(Calculator):
-    """Marker base class for all 2-point power-spectrum template calculators.
+    """Base class for all 2-point power-spectrum template calculators.
 
     Subclassed by :class:`BAOSpectrum2Template`, :class:`ShapeFitSpectrum2Template`,
     and :class:`DirectSpectrum2Template` so that code can use ``isinstance`` checks
     rather than duck-typing on constructor kwargs.
+
+    It also carries the *scaling* protocol, which is what lets an exact-scaling emulator
+    (:class:`_ScaledEmulator` and its subclasses) work over any
+    template rather than only the direct one.  A pt reaches several of its template's parameters
+    only through the background scalars ``(qpar, qper, f, f0, sigma8, fsigma8)``, so those
+    parameters can be divided out at fit time and put back exactly at prediction -- costing no
+    grid nodes, and unbounded, since nothing about them is interpolated.  Two questions decide
+    that, and only the template can answer either:
+
+    - **which parameters** those are -- :meth:`get_scaling_params`;
+    - **how the scalars are obtained** at deploy time, once the template itself has been pruned
+      out of the emulated pipeline -- ``get_emulator_cls(quantities='scaling')``.
+
+    The defaults here say "all of my scalars are closed-form in my own parameters, so run me",
+    which is true of every template but :class:`DirectSpectrum2Template`.
     """
+    #: AP parameter names, whichever ``apmode`` produced them.  A template that has any of these
+    #: reaches a pt through the AP grid alone, which an exact-scaling emulator rebuilds exactly.
+    _ap_scaling_params = ('qpar', 'qper', 'qiso', 'qap')
+    #: Parameters other than the AP ones that reach a pt only through the background scalars.
+    _extra_scaling_params = ()
+
+    @classmethod
+    def get_emulator_cls(cls, quantities=None):
+        """The emulator class for this template, or ``None`` for "nothing special to declare".
+
+        ``quantities=None`` asks about the whole pytree state -- today's meaning, and the only
+        one :func:`desilike.emulators.Emulator` asks about.
+
+        ``quantities='scaling'`` asks instead how the background scalars are to be obtained at
+        deploy time.  ``None`` then reads "my scalars are closed-form in my own parameters, so
+        run me": an exact-scaling emulator compiles a graph over the template and evaluates it,
+        which is exact and costs nothing.  A template whose scalars need a Boltzmann call --
+        :class:`DirectSpectrum2Template` -- names an emulator class instead, since evaluating it
+        per prediction is the very cost the pt emulator exists to remove.  Whatever it names must
+        offer ``from_template(template, space)``.
+        """
+        if quantities == 'scaling':
+            return None
+        return super().get_emulator_cls()
+
+    def get_scaling_params(self):
+        r"""The parameters that reach a pt ONLY through the background scalars.
+
+        An exact-scaling emulator routes these rather than expanding them, so they cost no nodes
+        and may be varied outside the trained box.  Returned in full: the emulator intersects
+        them with the space it was given, so naming a parameter this template does not vary is
+        harmless.
+        """
+        params = getattr(self, 'params', None)
+        if params is None:
+            return ()
+        return tuple(name for name in self._ap_scaling_params + self._extra_scaling_params
+                     if name in params)
 
 
 # ── AP distortion ─────────────────────────────────────────────────────────────
@@ -100,15 +155,15 @@ def _ap_auto_params(apmode):
     _ap_ref = dict(dist='norm', loc=1., scale=0.05)
     _ap_fd = 0.008
     if apmode == 'qparqper':
-        return [Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\parallel}'),
-                Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\perp}')]
+        return [Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\parallel}'),
+                Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\perp}')]
     if apmode == 'qisoqap':
-        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{iso}}'),
-                Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{ap}}')]
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\mathrm{iso}}'),
+                Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\mathrm{ap}}')]
     if apmode == 'qiso':
-        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{iso}}')]
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\mathrm{iso}}')]
     if apmode == 'qap':
-        return [Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_{\mathrm{ap}}')]
+        return [Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd=dict(eps=_ap_fd), latex=r'q_{\mathrm{ap}}')]
     raise ValueError(f"apmode must be one of 'qparqper', 'qisoqap', 'qiso', 'qap'; got {apmode!r}")
 
 
@@ -161,6 +216,10 @@ class BAOSpectrum2Template(Spectrum2Template):
         BAO distance ratios scaled by the AP parameters.
     """
 
+    #: ``df`` scales f, f0 and fk alike; the spectra themselves are pinned to the fiducial, so
+    #: an exact-scaling emulator has nothing left to expand -- see `get_scaling_params`.
+    _extra_scaling_params = ('df',)
+
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
@@ -181,7 +240,7 @@ class BAOSpectrum2Template(Spectrum2Template):
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
                 Parameter('df', value=1., fixed=True, prior=dict(limits=[0., 2.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta f'),
             ], tracers=None)
 
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
@@ -469,6 +528,12 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         tracks the df-scaled growth rate.
     """
 
+    #: ``df`` scales f, f0 and fk alike, so the fk / f0 shape the loop tables are invariant
+    #: under does not move with it; ``dA`` multiplies pk_dd and (sigma8 / sigma8_fid)^2 by the
+    #: same factor, so it cancels in the amplitude division.  ``dm`` and ``dn`` tilt the
+    #: spectrum and are the only parameters an exact-scaling emulator has to expand.
+    _extra_scaling_params = ('df', 'dA')
+
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
@@ -489,13 +554,13 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
                 Parameter('df', value=1., prior=dict(limits=[0., 20.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta f'),
                 Parameter('dm', value=0., prior=dict(limits=[-0.5, 0.5]),
-                          ref=dict(dist='norm', loc=0., scale=0.05), fd_eps=0.01, latex=r'\delta m'),
+                          ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta m'),
                 Parameter('dn', value=0., fixed=True, prior=dict(limits=[-0.5, 0.5]),
-                          ref=dict(dist='norm', loc=0., scale=0.05), fd_eps=0.01, latex=r'\delta n'),
+                          ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta n'),
                 Parameter('dA', value=1., fixed=True, prior=dict(limits=[0., 20.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta A_{p}'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta A_{p}'),
             ], tracers=None)
 
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
@@ -664,6 +729,37 @@ class DirectSpectrum2Template(Spectrum2Template):
         """
         return CosmoprimoCosmology.propose_params(engine=engine, fiducial=fiducial)
 
+    #: The cosmological parameters a pt reaches only through the background scalars: dark energy
+    #: is smooth, so ``w0_fld`` and ``wa_fld`` move the background and the growth but not the
+    #: transfer-function shape, and ``logA`` is a pure amplitude.  ``h`` is NOT here by default:
+    #: the dilation it induces is not a scalar factor, so it is preconditioned rather than routed
+    #: (see :attr:`FOLPSDEmulator.precondition`); it can be added
+    #: explicitly through the emulator's ``frozen=`` argument, measured to cost nothing.
+    _cosmo_scaling_params = ('w0_fld', 'wa_fld', 'logA')
+
+    @classmethod
+    def get_emulator_cls(cls, quantities=None):
+        """The scalars here need a Boltzmann call, so they are emulated rather than run.
+
+        Left to a live template every prediction would pay for that call -- the very cost the pt
+        emulator exists to remove.  :class:`ScalingScalarsEmulator`
+        fits the corrections to an analytic w0waCDM core, so the expansion never sees the part
+        that is hard, and it is seven scalars against the pt's tables, so it is cheap.
+        """
+        if quantities == 'scaling':
+            return ScalingScalarsEmulator
+        return super().get_emulator_cls()
+
+    def get_scaling_params(self):
+        """The cosmological parameters, not template parameters: this template has none of its
+        own, and reads the cosmology node's instead."""
+        from ..primordial_cosmology import find_conflicts
+
+        # by QUANTITY: a pipeline sampling `A_s` routes the same amplitude that `logA` does,
+        # and matching names would leave it on the grid for nothing
+        return tuple(conflict for name in self._cosmo_scaling_params
+                     for conflict in find_conflicts(name, self.cosmo.params.names()))
+
     def __init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
@@ -790,7 +886,7 @@ class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
         return super().propose_params(apmode=apmode) + VariableCollection([
             Parameter('baoshift', value=1., prior=dict(limits=[0., 2.]),
                       ref=dict(dist='norm', loc=1., scale=0.1),
-                      fd_eps=0.01, latex=r'\phi_{\mathrm{BAO}}'),
+                      fd=dict(eps=0.01), latex=r'\phi_{\mathrm{BAO}}'),
         ])
 
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
@@ -904,14 +1000,14 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
                 Parameter('df', value=1., prior=dict(limits=[0., 2.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta f'),
                 Parameter('m', value=0.6, prior=dict(limits=[0., 3.]),
-                          ref=dict(dist='norm', loc=0.6, scale=0.1), fd_eps=0.05, latex=r'm'),
+                          ref=dict(dist='norm', loc=0.6, scale=0.1), fd=dict(eps=0.05), latex=r'm'),
                 Parameter('n', value=0.9, prior=dict(limits=[0., 3.]),
-                          ref=dict(dist='norm', loc=0.9, scale=0.1), fd_eps=0.05, latex=r'n'),
-                Parameter('qto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
+                          ref=dict(dist='norm', loc=0.9, scale=0.1), fd=dict(eps=0.05), latex=r'n'),
+                Parameter('qto', value=1., prior=_prior_pos, ref=_ref_tight, fd=dict(eps=0.005),
                           latex=r'q_{\mathrm{TO}}'),
-                Parameter('dpto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
+                Parameter('dpto', value=1., prior=_prior_pos, ref=_ref_tight, fd=dict(eps=0.005),
                           latex=r'\delta P_{\mathrm{TO}}'),
             ], tracers=None)
 
@@ -1058,10 +1154,10 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
         return VariableCollection([
             Parameter('qbao', value=1., prior=dict(limits=[0.5, 1.5]),
                       ref=dict(dist='norm', loc=1., scale=0.01),
-                      fd_eps=0.005, latex=r'q_{\mathrm{BAO}}'),
+                      fd=dict(eps=0.005), latex=r'q_{\mathrm{BAO}}'),
             Parameter('sigmabao', value=0., fixed=True, prior=dict(limits=[0., 30.]),
                       ref=dict(dist='norm', loc=0., scale=10.),
-                      fd_eps=1., latex=r'\Sigma_{\mathrm{BAO}}'),
+                      fd=dict(eps=1.), latex=r'\Sigma_{\mathrm{BAO}}'),
         ])
 
     def __init__(self, k=None, z=1., fiducial='DESI', engine='class',
@@ -1181,7 +1277,7 @@ class BAOTheory(Calculator):
         # since D(z) [Mpc/h] is h-independent by construction (see class notes).
         return VariableCollection([Parameter(
             'rs_drag', value=rd_fid, prior=dict(limits=[10., 1000.]),
-            ref=dict(dist='norm', loc=rd_fid, scale=1.), fd_eps=1., latex=r'r_{\mathrm{d}}')])
+            ref=dict(dist='norm', loc=rd_fid, scale=1.), fd=dict(eps=1.), latex=r'r_{\mathrm{d}}')])
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
         from cosmoprimo import constants
@@ -1511,7 +1607,7 @@ class ShapeFitTheory(BAOTheory):
         self.f_sqrt_Ap = fsigma8 / sigma8 * Ap ** 0.5
         self.df = self.f_sqrt_Ap / self._f_sqrt_Ap_fid
         self.dA = self.Ap / self._Ap_fid
-        
+
         return self
 
     def tree_flatten(self):
@@ -1529,3 +1625,338 @@ class ShapeFitTheory(BAOTheory):
 
 
 
+
+
+# ── exact-scaling scalar provider ─────────────────────────────────────────────
+# Analytic w0waCDM background + growth core: pure JAX (differentiable both modes,
+# vmappable, no training ranges), closed-form E(z), fixed-node quadrature for the comoving
+# distance, fixed-step RK4 scan for the scale-independent growth ODE.  Deliberately minimal
+# physics (flat, matter + w0wa fluid, no radiation): ScalingScalars below divides these out
+# of the engine's scalars and only the smooth residual correction is ever emulated -- the
+# core just has to carry the exponential-in-wa nonlinearity that defeats polynomials
+# (measured: corrections <= 3e-3 over w0 + wa < -0.25 with order-2 residuals <= 1e-3,
+# claude_taylor_w0wa/check_scalar_corrections.py).
+
+def get_ref_scalars_from_cosmo(z, cosmo):
+    """Baseline background scalars (invE, DM, D, f) from cosmoprimo's DefaultBackground.
+
+    The growth is taken from :meth:`DefaultBackground.growth_factor` / ``growth_rate``
+    EXPLICITLY, with ``mass='cb'``:
+
+    - explicitly, because engines may override those methods with fitting formulae (the
+      eisenstein_hu Background uses Carroll-Press-Turner for D and an Omega_m-power law for
+      f, and its docstring notes it does not treat neutrinos) -- going through the engine
+      attribute would silently swap the growth physics underneath the corrections;
+    - ``mass='cb'`` (Omega_cdm + Omega_b), because the pipeline's f is the cdm+baryon
+      quantity sigma8_z(theta_cb) / sigma8_z(delta_cb); with ``mass='m'`` the massive
+      neutrinos enter the source term and the correction is 25x less flat (measured,
+      claude_taylor_w0wa/check_growth_species.py).
+
+    ``growth_factor`` populates both cached interpolants, so ``growth_rate`` below is a
+    lookup rather than a second solve.
+    """
+    from cosmoprimo.cosmology import DefaultBackground
+    background = cosmo.get_background()
+    # znorm=0. keeps the EARLY-TIME normalisation of the ODE solution (D ~ a in matter
+    # domination).  The default (znorm=None) divides by D(z=0), which makes D a RELATIVE
+    # growth: the c_D / c_DM corrections then have to absorb the cosmology dependence of
+    # D(0) itself and their spread over the w0-wa box blows up from ~1e-3 to 12% (measured).
+    # sigma8(z) at fixed A_s tracks the absolute growth, so the baseline must too.
+    growth_d = DefaultBackground.growth_factor(background, z, mass='cb', znorm=0.)
+    return {'invE': 1. / background.efunc(z),
+            # TRANSVERSE, matching what `qper` is built from -- the correction it anchors is
+            # `qper / (analytic DM ratio)`, so a radial baseline would leave the difference in
+            # the correction for a non-flat fiducial, which is what the analytic core is for.
+            # Identical to the radial distance when the fiducial is flat.
+            'DM': background.comoving_transverse_distance(z),
+            'D': growth_d,
+            'f': DefaultBackground.growth_rate(background, z, mass='cb')}
+
+
+class ScalingScalars(Calculator):
+    r"""
+    Run-time scalar provider for the exact-scaling emulator protocol: cosmology in,
+    (qpar, qper, f, sigma8) out -- the quantities the emulated classes in
+    :mod:`~desilike.theories.galaxy_clustering.full_shape` consume.  Reached through
+    ``DirectSpectrum2Template.get_emulator_cls(quantities='scaling')``, which names
+    :class:`ScalingScalarsEmulator`; that class builds this
+    calculator itself (``calculator_from_template``), so nothing outside has to know it exists.
+    Only a direct template needs it -- every other template computes its scalars in closed form
+    and is simply run.
+
+    Model-agnostic by construction: each engine scalar is written as
+    ``analytic_w0waCDM x correction``, where the analytic core above carries the
+    exponential-in-wa nonlinearity exactly (plus the ``exp(dlogA / 2)`` amplitude factor)
+    and the *correction* -- smooth and ~1 by construction, carrying all remaining model
+    content (radiation, scale-dependent growth, engine details, non-w0waCDM physics) -- is
+    what a :class:`~desilike.emulators.Emulator` expands, in every varied
+    parameter, at low order.  Fitted and deployed with the same engine, so method offsets
+    cancel in the anchored ratios.
+
+    Once emulated (``get_emulator_cls()``), the deployed provider is fully self-contained:
+    parameter values in, scalars out, no cosmology node at run time.
+
+    Parameters
+    ----------
+    z : float
+        Effective redshift.
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology anchoring the (qpar, qper) ratios and the analytic core.
+    cosmo : CosmoprimoCosmology, optional
+        Cosmology dependency (fit time only); a fresh one is created by default.
+    engine : str, default='class'
+        Engine for the internally-created cosmology (ignored when *cosmo* is given).
+    """
+
+    def __init__(self, z=1., fiducial='DESI', engine='class', cosmo=None):
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
+        self.cosmo = cosmo
+        # The analytic core reads these parameter values directly, so share the cosmology's
+        # Parameter objects with this node: the compiled graph then threads the current
+        # (traced) values here too.  Reading another node's params through .value is stale
+        # under the jitted stencil path -- the fit would bake the expansion center into the
+        # analytic factor and the corrections would silently absorb the full engine ratios.
+        self.params = cosmo.params
+
+    #: What the analytic core moves: the fiducial is cloned with these, in canonical spellings,
+    #: and everything else stays at its fiducial value.  An emulated provider has to rebuild the
+    #: core the same way, so it reads this rather than listing them again.
+    _ref_update_names = ('h', 'omega_b', 'omega_cdm', 'm_ncdm', 'w0_fld', 'wa_fld')
+
+    # R nodes [Mpc/h] for the fixed-Mpc amplitude sigma_mpc = sigma_R(R = 8 h_fid / h):
+    # a static requirement set (requirements cannot depend on run-time h), interpolated by
+    # global Lagrange in ln R.  Covers h / h_fid in ~[0.8, 1.25].
+    _sigma_r_nodes = tuple(8. * np.linspace(0.8, 1.25, 5))
+
+    def __post_init__(self, z=1., fiducial='DESI', engine='class', cosmo=None):
+        from cosmoprimo import constants
+        self.z = float(z)
+        self.cosmo.add_requirements({
+            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}, {'of': 'theta_cb', 'z': self.z}],
+            'fourier.sigma_rz': [{'of': 'delta_cb', 'z': self.z, 'r': np.array(self._sigma_r_nodes)}],
+            'background.efunc': [{'z': self.z}],
+            'background.comoving_transverse_distance': [{'z': self.z}],
+        })
+        self._fiducial = _get_fiducial(fiducial)
+        self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
+        self._DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
+        fourier = self._fiducial.get_fourier()
+        self._sigma8_fid = float(fourier.sigma8_z(self.z, of='delta_cb'))
+        self._f_fid = float(fourier.sigma8_z(self.z, of='theta_cb')) / self._sigma8_fid
+        self._fiducial_h = float(self._fiducial.h)
+        self._logA_fid = float(np.log(1e10 * self._fiducial.A_s))
+        self._ref_fid = {name: float(value) for name, value
+                              in get_ref_scalars_from_cosmo(self.z, self._fiducial.clone(engine='eisenstein_hu')).items()}
+
+    def __call__(self):
+        from cosmoprimo import constants
+        fourier = self.cosmo.get_fourier()
+        self.sigma8 = fourier.sigma8_z(of='delta_cb', z=self.z)
+        self.fsigma8 = fourier.sigma8_z(of='theta_cb', z=self.z)
+        self.f = self.f0 = self.fsigma8 / self.sigma8
+        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
+        self.qpar = DH / self._DH_fid
+        self.qper = DM / self._DM_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
+        # `h` as an OUTPUT: the exact-scaling dilation is h / h_fid, and the emulator that
+        # needs it cannot read `h` out of the sampled parameters -- a pipeline may vary H0.
+        # Here it is resolved whatever the basis, and its emulated form is a function of
+        # whatever is actually sampled.
+        self.h = self.cosmo['h']
+        # The corrections: engine / analytic, everything anchored at the fiducial.  Values
+        # through `self.cosmo[...]`, which resolves them whatever the cosmology is
+        # parameterised in -- reading this node's own params would find nothing for a pipeline
+        # sampling `A_s` rather than `logA`, or `Omega_m` rather than `omega_cdm`, and silently
+        # fall back to the fiducial, leaving the whole engine ratio in the correction.
+        logA = self.cosmo['logA']
+        # the fiducial updated with the current values, so neutrino content, N_ur and the rest
+        # of its configuration carry over and only the sampled parameters move
+        updates = {name: self.cosmo[name] for name in self._ref_update_names}
+        analytic = get_ref_scalars_from_cosmo(
+            self.z, self._fiducial.clone(engine='eisenstein_hu', **updates))
+        fid = self._ref_fid
+        self.c_qpar = self.qpar / (analytic['invE'] / fid['invE'])
+        self.c_qper = self.qper / (analytic['DM'] / fid['DM'])
+        self.c_D = self.sigma8 / (self._sigma8_fid * (analytic['D'] / fid['D'])
+                                  * jnp.exp(0.5 * (logA - self._logA_fid)))
+        self.c_f = self.f / (self._f_fid * (analytic['f'] / fid['f']))
+        # Fixed-Mpc amplitude sigma_mpc = sigma_R(R = 8 h / h_fid [Mpc/h]): the amplitude
+        # anchor the exact-scaling h-routing needs (the sigma8 window moves with h and would
+        # double-count the dilation).  Engine values at the static R nodes, Lagrange in ln R;
+        # its correction is anchored to the same analytic denominator as c_D (the analytic
+        # growth ratio is window-free, i.e. already the fixed-Mpc prediction).
+        from cosmoprimo.emulators.tools.utils import lagrange_weights
+        sigma_r_values = jnp.ravel(self.cosmo.get_fourier().sigma_rz(of='delta_cb', z=self.z,
+                                                                     r=np.array(self._sigma_r_nodes)))
+        r_target = 8. * self.cosmo['h'] / self._fiducial_h
+        log_nodes = jnp.log(jnp.asarray(self._sigma_r_nodes))
+        weights_target = lagrange_weights(log_nodes, jnp.log(r_target))
+        weights_eight = lagrange_weights(log_nodes, jnp.log(8.))
+        # sigma8 x the window-shift ratio, both sides from the same engine sigma_R values:
+        # scheme-independent, and exactly sigma8 at h = h_fid.
+        self.sigma_mpc = self.sigma8 * jnp.sum(weights_target * sigma_r_values) / jnp.sum(weights_eight * sigma_r_values)
+        self.c_DM = self.sigma_mpc / (self._sigma8_fid * (analytic['D'] / fid['D'])
+                                      * jnp.exp(0.5 * (logA - self._logA_fid)))
+
+    def tree_flatten(self):
+        children = [self.c_qpar, self.c_qper, self.c_D, self.c_f, self.c_DM, self.sigma_mpc,
+                    self.qpar, self.qper, self.f, self.f0, self.sigma8, self.fsigma8,
+                    self.sigma8_fid, self.h]
+        return children, {'z': self.z}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        (obj.c_qpar, obj.c_qper, obj.c_D, obj.c_f, obj.c_DM, obj.sigma_mpc,
+         obj.qpar, obj.qper, obj.f, obj.f0, obj.sigma8, obj.fsigma8, obj.sigma8_fid,
+         obj.h) = children
+        obj.z = aux['z']
+        return obj
+
+    @classmethod
+    def get_emulator_cls(cls):
+        """Only the corrections are interpolated; the analytic w0waCDM core runs exactly at
+        evaluation time, so the exponential-in-wa never enters the expansion."""
+        return ScalingScalarsEmulator
+
+
+class ScalingScalarsEmulator(CalculatorEmulator):
+    r"""The run-time scalar provider, with its analytic core evaluated exactly.
+
+    :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars` writes each background
+    scalar as ``analytic_w0waCDM x correction``. The analytic core carries the
+    exponential-in-wa non-linearity (and the ``exp(dlogA / 2)`` amplitude) exactly; only the
+    correction -- smooth and ~1 by construction, carrying radiation, scale-dependent growth and
+    engine details -- is interpolated. So the expansion never sees the part that is hard.
+
+    This is what makes the provider cheap enough to deploy under
+    :class:`FOLPSDEmulator`: without it, every prediction pays for a Boltzmann call.
+
+        scalars = Emulator(ScalingScalars(z=0.8), space).train(budget=2).to_calculator()
+        pt = Emulator(theory.pt, space, scalars=scalars).train(budget=3).to_calculator()
+    """
+    @classmethod
+    def calculator_from_template(cls, template):
+        """The calculator carrying the scalars a *template* implies.
+
+        ``DirectSpectrum2Template.get_emulator_cls(quantities='scaling')`` names this class, so
+        the template declares only *that* its scalars need emulating; which calculator carries
+        them is this class's own business.  The exact-scaling emulators call this both to build
+        the provider they train and to build the un-emulated one they check against.
+        """
+        # On a CLONE of the template's own cosmology, not a fresh one: the provider has to be
+        # parameterised the way the pipeline is, or a pipeline varying `H0` and `A_s` hands the
+        # provider names its graph never exposed.  A clone rather than the object itself --
+        # one cosmology node shared by two separately compiled graphs is its own bug.
+        return ScalingScalars(z=template.z, fiducial=template._fiducial,
+                              cosmo=template.cosmo.clone())
+
+    #: child order of ``ScalingScalars.tree_flatten``
+    _CORRECTIONS = ('c_qpar', 'c_qper', 'c_D', 'c_f', 'c_DM')
+    _DERIVEDS = ('sigma_mpc', 'qpar', 'qper', 'f', 'f0', 'sigma8', 'fsigma8', 'sigma8_fid',
+                 'h')
+
+    def to_calculator(self, *args, **kwargs):
+        """As the base, but a saved provider can say what it was built with.
+
+        `to_calculator` takes the calculator's constructor arguments from its caller, because in
+        general they are the caller's -- but this class builds its own calculator
+        (`calculator_from_template`), and the two arguments that takes are already in the anchors.
+        Without this a saved provider would rebuild at the ScalingScalars defaults, z = 1 and the
+        DESI fiducial, and be quietly wrong rather than fail.
+        """
+        if not (args or kwargs) and getattr(self, 'calculator', None) is None:
+            from cosmoprimo import Cosmology
+
+            kwargs = {'z': self._anchors['z'],
+                      'fiducial': Cosmology.from_state(self._anchors['fiducial'])}
+        return super().to_calculator(*args, **kwargs)
+
+    def __init__(self, calculator, space, **options):
+        """As the base, plus the anchors the analytic core is written against.
+
+        They are set in ``__post_init__``, i.e. at compile, so they exist once the base has
+        built the graph -- and reading them here rather than on the first ``compute`` means a
+        training restored entirely from a checkpoint has them too.
+        """
+        super().__init__(calculator, space, **options)
+        root = self.calculator
+        self._anchors = {'z': float(root.z),
+                         'ref_fid': {name: float(value)
+                                    for name, value in root._ref_fid.items()},
+                         # its own state, which carries the ENGINE as well as the parameters:
+                         # a fiducial rebuilt without one raises on the first `efunc`
+                         'fiducial': root._fiducial.__getstate__(),
+                         'sigma8_fid': float(root._sigma8_fid),
+                         'f_fid': float(root._f_fid), 'logA_fid': float(root._logA_fid),
+                         'defaults': {name: float(np.sum(np.atleast_1d(
+                             root.cosmo.params[name].value)))
+                             for name in root.cosmo.params.names()}}
+        self.set_ref_fiducial()
+
+    def set_ref_fiducial(self):
+        """Rebuild ``self._ref_fiducial`` from the anchors, once.
+
+        Not per prediction: `inverse_transform` runs at every evaluation, and this is the
+        cosmology its analytic core is anchored on.
+        """
+        from cosmoprimo import Cosmology
+
+        self._ref_fiducial = Cosmology.from_state(self._anchors['fiducial'])
+
+    def transform(self, values, params):
+        """Keep the corrections; everything else is rebuilt from them and the analytic core."""
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        # the corrections are the leading children; everything after them is rebuilt at prediction
+        for name in self.children_leafnames[:len(self._CORRECTIONS)]:
+            out[name] = values[name]
+        return out
+
+    def inverse_transform(self, values, params):
+        out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
+        anchors = self._anchors
+        names = self.children_leafnames
+        corrections = [values[name] for name in names[:len(self._CORRECTIONS)]]
+        c_qpar, c_qper, c_D, c_f, c_DM = corrections
+        for name, value in zip(names, corrections):
+            out[name] = value
+
+        # The analytic core wants CANONICAL values, and a pipeline may vary `H0` or `A_s`.
+        # Reading them by name cannot work -- H0 is 100 h -- so the cosmology converts: clone the
+        # fiducial with whatever this pipeline calls its parameters, then read the canonical
+        # names off it.  Traceable, so a jitted prediction is fine.
+        cosmo = self._ref_fiducial.clone(
+            engine='eisenstein_hu',
+            **{name: params.get(name, value) for name, value in anchors['defaults'].items()})
+        # only the six the baseline moves; everything else stays at the fiducial, which is the
+        # recipe `ScalingScalars.__call__` fitted the corrections against
+        updates = {name: cosmo[name] for name in ScalingScalars._ref_update_names}
+        analytic = get_ref_scalars_from_cosmo(
+            anchors['z'], self._ref_fiducial.clone(engine='eisenstein_hu', **updates))
+        fid = anchors['ref_fid']
+        growth = c_D * anchors['sigma8_fid'] * (analytic['D'] / fid['D']) \
+            * jnp.exp(0.5 * (cosmo['logA'] - anchors['logA_fid']))
+        rebuilt = {'sigma_mpc': c_DM * anchors['sigma8_fid'] * (analytic['D'] / fid['D'])
+                   * jnp.exp(0.5 * (cosmo['logA'] - anchors['logA_fid'])),
+                   'qpar': c_qpar * analytic['invE'] / fid['invE'],
+                   'qper': c_qper * analytic['DM'] / fid['DM'],
+                   'sigma8': growth}
+        rebuilt['f'] = rebuilt['f0'] = c_f * anchors['f_fid'] * analytic['f'] / fid['f']
+        rebuilt['fsigma8'] = rebuilt['f'] * rebuilt['sigma8']
+        rebuilt['sigma8_fid'] = jnp.asarray(anchors['sigma8_fid'])
+        rebuilt['h'] = cosmo['h']
+        for offset, name in enumerate(self._DERIVEDS):
+            out[names[len(self._CORRECTIONS) + offset]] = rebuilt[name]
+        return out
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state['anchors'] = self._anchors
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._anchors = state['anchors']
+        self.set_ref_fiducial()

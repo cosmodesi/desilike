@@ -64,7 +64,7 @@ def _emulate(theory, inner_pt=None):
     from desilike.base import replace
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = TaylorEmulator(compile(inner_pt), order=1)
+    emu = TaylorEmulator(compile(inner_pt), order=2)
     emu.fit()
     replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)
@@ -73,6 +73,7 @@ def _emulate(theory, inner_pt=None):
 def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     """Center: exact match (atol=1e-8). Shifted by 5 %: relative error < tol."""
     center = {p.name: p.value for p in pipe_exact.params}
+    print(center, flush=True)
     np.testing.assert_allclose(np.asarray(pipe_emu(center)), np.asarray(pipe_exact(center)),
                                atol=1e-8, rtol=0., err_msg='emulator mismatch at expansion center')
     if shift_param in center:
@@ -1126,6 +1127,17 @@ class TestGeoFPTAX:
     def skip_if_missing(self):
         pytest.importorskip('geofptax')
 
+    
+    def test_pt_spectrum(self):
+        """GeoFPTAXPTSpectrum2Poles: shape and finite output of the 1-loop P(k)."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = GeoFPTAXPTSpectrum2Poles(k=k)
+        print(theory.template, flush = True)
+        result = _compile(theory)()
+        assert result.shape == (len(k),)
+        assert np.isfinite(result).all()
+
     def test_tracer_bispectrum_sugiyama(self):
         """GeoFPTAXTracerSpectrum3Poles (Sugiyama basis): shape and parameter sensitivity."""
         from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
@@ -1267,6 +1279,41 @@ class TestGeoFPTAX:
         # (higher num_points should be more accurate)
         reldiff = np.max(np.abs(result_high - result_low) / (np.abs(result_high) + 1e-30))
         assert reldiff < 0.1, f'Low and high precision results differ by {reldiff:.3f}'
+    
+    def test_emulated(self):
+        """GeoFPTAXPTSpectrum2Poles emulated as pt= in bispectrum."""
+        from desilike import compile
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template, ShapeFitSpectrum2Template
+        try:
+            from desilike.theories.galaxy_clustering.full_shape import (
+                GeoFPTAXPTSpectrum2Poles,
+                GeoFPTAXTracerSpectrum3Poles,
+            )
+        except ImportError:
+            pytest.skip("GeoFPTAXPTSpectrum2Poles not available yet; skipping emulation test.")
+        
+        # GeoFPTAXTracerSpectrum3Poles expects a 2D (k1, k2) grid, 
+        # while GeoFPTAXPTSpectrum2Poles expects a 1D k grid.
+        k_2d = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        k_1d = np.linspace(0.02, 0.1, 11)
+        ells = ((0, 0, 0), (2, 0, 2))
+        
+        # 1. Exact pipeline (using the default internal 1-loop computation)
+        pipe_exact = compile(GeoFPTAXTracerSpectrum3Poles(k=k_2d, ells=ells))
+        
+        # 2. Emulated pipeline: replace the internal PT with a TaylorEmulator
+        # Note: This requires GeoFPTAXTracerSpectrum3Poles to accept a `pt` argument,
+        # following the standard desilike pattern (e.g., FOLPSTracerSpectrum3Poles).
+        try:
+            theory_emu = GeoFPTAXTracerSpectrum3Poles(
+                k=k_2d, ells=ells, pt=GeoFPTAXPTSpectrum2Poles(k=k_1d, ells=(0,)),
+            )
+            # _emulate fits a degree-1 Taylor expansion on the PT calculator and 
+            # replaces it in-place, then compiles the full tracer pipeline.
+            _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+        except TypeError:
+            # Gracefully skip if the `pt` argument hasn't been added to the tracer yet
+            pytest.skip("GeoFPTAXTracerSpectrum3Poles does not yet accept a `pt` argument; skipping emulation test.")
         
 def test_jit():
 

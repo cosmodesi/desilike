@@ -143,7 +143,12 @@ class SamplesProposal(BaseProposal):
             Chain sampled under *density*. Its weights are honoured when drawing.
         """
         self.density = density
-        self.samples = self.params = samples
+        # RAVEL: draws are ROWS of the chain, and an ensemble chain is (nsteps, nwalkers), so its
+        # rows number nsteps * nwalkers. Left 2-D, `_particles` gets nsteps rows while `_weights`
+        # gets nsteps * nwalkers, and `rvs` indexes past the end of the particles (measured:
+        # IndexError, index 3410 into 3360 rows, bridging an emcee chain). A pocoMC chain is
+        # already flat, which is why this only ever showed up with an ensemble sampler.
+        self.samples = self.params = samples.ravel() if getattr(samples, 'ndim', 1) > 1 else samples
         self._particles = None
 
     def init(self, params):

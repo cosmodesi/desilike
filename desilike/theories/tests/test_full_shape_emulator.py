@@ -65,8 +65,18 @@ def test_the_frozen_parameters_leave_the_grid(emulators):
 
 
 def test_the_background_scalars_are_routed_exactly(emulators):
-    """sigma8, f, qpar and the AP grid must come out exact -- they are computed, not fitted.
-    A residual here means the routing is not reaching the prediction."""
+    """sigma8, f, qpar and the AP grid are computed by the run-time provider, not fitted over the
+    pt's grid. A residual against the PROVIDER means the routing is not reaching the prediction,
+    which is the bug this catches.
+
+    Against the exact pt they agree only to the provider's own accuracy, and asserting otherwise
+    was asking for something the construction cannot give: `ScalingScalarsEmulator` fits five
+    smooth corrections and rebuilds each scalar as `analytic_core x correction`. The core carries
+    (w0, wa) and the exp(dlogA/2) amplitude exactly -- measured, an UNfitted provider reproduces
+    the pt's sigma8 to every digit -- but the correction is interpolated, and at the default
+    `scalars_budget` that leaves 1.2e-6 on sigma8 here (still ~1e-6 at budget 3). So the exact
+    comparison below is a gross-error gate, and the tight one is against the provider.
+    """
     from desilike.theories.galaxy_clustering import FOLPSPTSpectrum2Poles
 
     emulator = emulators['folpsd'][0]
@@ -79,13 +89,18 @@ def test_the_background_scalars_are_routed_exactly(emulators):
     truth = reference.tree_flatten()[0]
 
     predicted = emulator.predict(**moved)
+    # The routing itself: what comes out must be the provider's value and not the interpolant's.
+    scalars = emulator.compute_scalars(moved)
+    for key in ('sigma8', 'fsigma8', 'f', 'qpar', 'qper'):
+        assert np.allclose(np.asarray(predicted[key]), np.asarray(scalars[key]),
+                           rtol=1e-12), key
     # not kap/jac: with the h preconditioning on, the AP grid carries the dilation (q / s) while
     # the tables live in the reference frame, so those children deliberately differ from the
     # undilated truth. What must match is the observable, which the accuracy test covers.
     for key in ('sigma8', 'f', 'qpar', 'qper'):
         assert np.allclose(np.asarray(predicted[key]),
                            np.asarray(truth[emulator.children_leafnames.index(key)]),
-                           rtol=1e-10), key
+                           rtol=1e-4), key
 
 
 def test_to_calculator_agrees_with_predict(emulators):
@@ -158,18 +173,11 @@ def test_every_folps_pt_declares_a_routing():
     same way, so nothing downstream has to know which is which."""
     from desilike.theories.galaxy_clustering import (FOLPSPTSpectrum2Poles, FOLPSPTSpectrum3Poles,
                                                      FKPTJAXPTSpectrum2Poles)
-    from desilike.theories.galaxy_clustering.full_shape import (FOLPSD3PolesEmulator, FKPTEmulator,
-                                               FOLPSD2PolesMonomialsEmulator,
-                                               FOLPSD3PolesMonomialsEmulator)
+    from desilike.theories.galaxy_clustering.full_shape import FOLPSD3PolesEmulator, FKPTEmulator
 
     assert FOLPSPTSpectrum2Poles().get_emulator_cls() is FOLPSDEmulator
     assert FOLPSPTSpectrum3Poles().get_emulator_cls() is FOLPSD3PolesEmulator
     assert FKPTJAXPTSpectrum2Poles.get_emulator_cls() is FKPTEmulator
-    # and the monomials pts route to the collocation-axis classes instead
-    assert (FOLPSPTSpectrum2Poles(output='monomials').get_emulator_cls()
-            is FOLPSD2PolesMonomialsEmulator)
-    assert (FOLPSPTSpectrum3Poles(output='monomials').get_emulator_cls()
-            is FOLPSD3PolesMonomialsEmulator)
     # fkpt routes the amplitude only: its growth comes from an internal ODE in (z, Omega_m),
     # which is blind to w0/wa, so rescaling it would be wrong (measured: dchi2 ~ 14 worse)
     assert 'growth' not in FKPTEmulator.transform.__doc__ if FKPTEmulator.transform.__doc__ else True
@@ -186,6 +194,10 @@ def test_every_routing_predicts(label):
     from desilike.theories.galaxy_clustering import (FOLPSPTSpectrum3Poles,
                                                      FKPTJAXPTSpectrum2Poles)
 
+    if label == 'fkpt':
+        # fkptjax is an optional backend: without it there is nothing to exercise, and a failure
+        # here would say "the routing is broken" when the truth is "the package is not installed".
+        pytest.importorskip('fkptjax')
     make = {'3poles': FOLPSPTSpectrum3Poles, 'fkpt': FKPTJAXPTSpectrum2Poles}[label]
     pt = make(template=template())
     emulator = Emulator(pt, Space(limits=LIMITS))
@@ -246,38 +258,6 @@ def test_a_supplied_provider_is_used_as_is():
     emulator.train(budget=0)
     assert emulator._state_scalars is None, 'a supplied provider must not be re-fitted'
     assert emulator.input_scalars is provider
-
-
-@pytest.mark.parametrize('label', ['spectrum2', 'spectrum3'])
-def test_the_monomials_routings_run(label):
-    """The monomials emulators trained, predicted and deployed.
-
-    Everything else here only asserts which class gets DISPATCHED to, so without this the whole
-    suite passes with these two broken -- and they share one `compute`, so a change to it lands on
-    both at once.  The grid is the smallest that exercises every axis: 2 x 2 x 4 x 4 = 64 table
-    builds at one shape node, which is also what keeps the memory footprint small.
-    """
-    from desilike.theories.galaxy_clustering import FOLPSPTSpectrum2Poles, FOLPSPTSpectrum3Poles
-
-    make = {'spectrum2': FOLPSPTSpectrum2Poles, 'spectrum3': FOLPSPTSpectrum3Poles}[label]
-    pt = make(template=template(), output='monomials')
-    emulator = Emulator(pt, Space(limits=LIMITS), namplitude=2, nf=2, nq=4, fk_rank=0)
-    emulator.train(budget=0, scalars_budget=1)
-
-    predicted = emulator.predict(**CENTRE)
-    for name in emulator._TABLES:
-        value = np.asarray(predicted[name])
-        assert np.all(np.isfinite(value)), name
-        # the node axes must be contracted away, leaving the pt's own shape
-        assert value.ndim == np.ndim(np.asarray(getattr(pt, name))), name
-
-    # ONE compile: compiling the same calculator twice corrupts the pure_callback layout
-    # ("Incorrect output shape for return value #11: Expected (1, 401), Actual (1, 400)")
-    deployed = emulator.to_calculator()
-    graph = compile(deployed)
-    names = [param.name for param in graph.params if not param.derived]
-    graph({name: value for name, value in CENTRE.items() if name in names})
-    assert np.isfinite(np.asarray(deployed.f0)).all()
 
 
 # ── the template decides what is routed ───────────────────────────────────────

@@ -1310,6 +1310,12 @@ def _build_graph_call_fn(pipeline):
         for i, node in enumerate(nodes):
             if id(node) in skip_ids:
                 continue
+            # Every node, not just the External ones: a node that calls a non-jax library
+            # DIRECTLY (rather than through a pure_callback of its own) needs the same
+            # eager-raise / traced-NaN contract, and the only place able to observe the outer
+            # trace status is here. External nodes additionally stash it in `node_state` below,
+            # because their callback runs after this loop has finished.
+            node._is_tracing = is_tracing
             nvd = node_var_deps[id(node)]
             ncd = node_calc_deps[id(node)]
 

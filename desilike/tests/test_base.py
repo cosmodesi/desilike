@@ -2221,3 +2221,65 @@ def test_per_parameter_steps_go_through_the_flat_kwarg(pipeline):
                        fd_eps={'omega_m': 1e-3, 'z': 1e-3})(DIFF_PARAMS0)
     broadcast = jacfwd(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
     assert abs(float(per_param['omega_m']) - float(broadcast['omega_m'])) < 1e-8
+
+
+@pytest.mark.parametrize('kind', ['plain', 'custom', 'reparametrized'])
+def test_jit_then_eager_does_not_leak_tracers(kind):
+    """A jitted call must not leave a Tracer where the next EAGER call can read it.
+
+    This is the shape of a bug that recurred three times and was never covered: a profiler
+    maximises the posterior under `jax.jit`, then calls it EAGERLY with `return_derived=True` to
+    fill in the derived parameters (`profilers/base.py:_add_derived`). If anything the traced
+    call touched retains a Tracer -- a shared `Parameter._value`, a nested graph's memo, a node
+    attribute -- the eager call picks it up and raises `UnexpectedTracerError`, from wherever the
+    stale value is first USED rather than from where it came.
+
+    A Calculator prior is included because it makes `Posterior.__call__` re-enter a NESTED
+    CompiledGraph inside the trace, and the reparametrized variant because its `reparam_vals`
+    then flow onward into the likelihood's parameters.
+    """
+    A = Parameter('A', value=1.0, prior=dict(dist='norm', loc=1.0, scale=0.5))
+    ns = Parameter('ns', value=0.96, prior=dict(dist='norm', loc=0.96, scale=0.05))
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    likelihood = GaussianChi2(spectrum=PowerSpectrum(cosmo=Cosmology(omega_m=omega_m, z=z),
+                                                     A=A, ns=ns), data=DATA)
+
+    if kind == 'plain':
+        posterior = Posterior(likelihood)
+    elif kind == 'custom':
+
+        class CustomPrior(Prior):
+
+            def __call__(self):
+                logpdf = super().__call__()
+                self.logpdf = jnp.where(self.params['A'].value + self.params['ns'].value < 2.,
+                                        logpdf, -jnp.inf)
+                return self.logpdf
+
+        posterior = Posterior(likelihood, CustomPrior(A=A, ns=ns))
+    else:
+
+        class CustomPrior(Prior):
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.params['omega_m'].update(derived=True)
+
+            def __call__(self):
+                self.logpdf = super().__call__()
+                self.params['omega_m'].value = self.params['A'].value
+                return self.logpdf
+
+        posterior = Posterior(likelihood, CustomPrior(A=A, ns=ns, omega_m=omega_m))
+
+    pipe = compile(posterior)
+    point = {name: value for name, value in [('omega_m', 0.3), ('z', 0.5), ('A', 1.0), ('ns', 0.96)]
+             if name in pipe.params}
+    jitted = float(jax.jit(lambda params: pipe(params))(point))
+    # the eager call is the one that used to raise
+    eager, derived = pipe(point, return_derived=True)
+    assert np.isfinite(jitted) and np.isfinite(float(eager))
+    assert abs(float(eager) - jitted) < 1e-8
+    # and again, to catch state that only goes wrong on a second pass
+    assert abs(float(pipe(point)) - jitted) < 1e-8

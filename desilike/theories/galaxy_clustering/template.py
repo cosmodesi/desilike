@@ -1855,8 +1855,23 @@ class ScalingScalarsEmulator(CalculatorEmulator):
 
     #: child order of ``ScalingScalars.tree_flatten``
     _CORRECTIONS = ('c_qpar', 'c_qper', 'c_D', 'c_f', 'c_DM')
+
     _DERIVEDS = ('sigma_mpc', 'qpar', 'qper', 'f', 'f0', 'sigma8', 'fsigma8', 'sigma8_fid',
                  'h')
+
+    def select_params(self, names):
+        """Everything but ``(w0_fld, wa_fld)``: the analytic core carries those exactly.
+
+        :meth:`inverse_transform` rebuilds every scalar as ``correction x core``, and the core is
+        evaluated at the LIVE parameter values (the ``cosmo.clone(...)`` there), so their
+        dependence is exact whether or not the fitted correction ever saw them. Expanding them
+        as well spends nodes on something already exact -- measured on LRG3: with them in, a
+        7-parameter provider fitted sigma8 to 5.2e-4, against 4.9e-8 for the geometric scalars.
+
+        This is the hook's purpose exactly: what is left out costs no nodes and is handled by
+        the transform pair.
+        """
+        return [name for name in names if name not in ('w0_fld', 'wa_fld')]
 
     def to_calculator(self, *args, **kwargs):
         """As the base, but a saved provider can say what it was built with.
@@ -1927,9 +1942,20 @@ class ScalingScalarsEmulator(CalculatorEmulator):
         # Reading them by name cannot work -- H0 is 100 h -- so the cosmology converts: clone the
         # fiducial with whatever this pipeline calls its parameters, then read the canonical
         # names off it.  Traceable, so a jitted prediction is fine.
-        cosmo = self._ref_fiducial.clone(
-            engine='eisenstein_hu',
-            **{name: params.get(name, value) for name, value in anchors['defaults'].items()})
+        supplied = {name: params.get(name, value) for name, value in anchors['defaults'].items()}
+        # The eager-raise / traced-NaN contract, the same one `CosmoprimoCosmology` honours.
+        # This call is not a desilike node -- it goes to cosmoprimo directly -- so it gets the
+        # enclosing graph's trace status from `_is_tracing`, set on every node by `base.py` and
+        # handed to this emulator by the calculator `to_calculator` deploys.
+        #
+        # EAGER: leave the input alone and let cosmoprimo raise its own message
+        # ("w(a -> 0) = w0_fld + wa_fld > 1 / 3, violates radiation domination"), which is far
+        # more useful than a silent NaN.
+        # TRACED: cosmoprimo cannot honour the contract itself here (it sees concrete values
+        # inside a pure_callback, never a Tracer), and that raise aborts the callback for the
+        # WHOLE batch -- measured, one forbidden point NaN'd all 26 points of a vmapped batch.
+        # So keep the input physical and mask the output: per-point NaN, batch intact.
+        cosmo = self._ref_fiducial.clone(engine='eisenstein_hu', **supplied)
         # only the six the baseline moves; everything else stays at the fiducial, which is the
         # recipe `ScalingScalars.__call__` fitted the corrections against
         updates = {name: cosmo[name] for name in ScalingScalars._ref_update_names}

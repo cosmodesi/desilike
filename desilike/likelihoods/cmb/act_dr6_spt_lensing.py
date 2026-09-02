@@ -51,6 +51,7 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
 
     installer_section = 'ACTDR6SPTLensingLikelihood'
     version = 'v1.2'
+    T0_cmb = 2.7255
     trim_lmax = 2998
     nsims_act = 796
     nsims_planck = 400
@@ -66,8 +67,15 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
         import act_dr6_spt_lenslike as alike
 
         if data_dir is None:
-            from desilike.install import Installer
-            data_dir = os.path.join(Installer().data_dir(self.installer_section), self.version)
+            # act_dr6_spt_lenslike ships the bandpowers and like_corrs inside the package, so
+            # prefer those: they are always consistent with the installed code, and the
+            # Installer path only exists if someone has separately downloaded a copy.
+            packaged = os.path.join(os.path.dirname(alike.__file__), 'data', self.version)
+            if os.path.isdir(packaged):
+                data_dir = packaged
+            else:
+                from desilike.install import Installer
+                data_dir = os.path.join(Installer().data_dir(self.installer_section), self.version)
 
         only_spt = (variant == 'spt3g')
         if only_spt:
@@ -180,11 +188,17 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
         cl_kk_act = cl_kk_full[:self._nlen_act]
 
         if self._like_corrections:
+            # The like_corrs fiducial spectra are in muK^2 (they come from
+            # cosmo2017_10K_acc3_lensedCls.dat, a CAMB Dl file), while cosmoprimo returns
+            # dimensionless C_ell. Without this factor cl_specs - cl_fids is just -cl_fids and
+            # every correction is garbage: measured -7173.4 against cobaya's -20.5 on the same
+            # theory. C_ell^kk needs no such factor -- phiphi is dimensionless on both sides.
+            unit = (self.T0_cmb * 1e6) ** 2
             cl_lensed = harmonic.lensed_cl(ellmax=self._ellmax)
-            cl_tt = cl_lensed['tt'][:self._nlen_act]
-            cl_te = cl_lensed['te'][:self._nlen_act]
-            cl_ee = cl_lensed['ee'][:self._nlen_act]
-            cl_bb = cl_lensed['bb'][:self._nlen_act]
+            cl_tt = unit * cl_lensed['tt'][:self._nlen_act]
+            cl_te = unit * cl_lensed['te'][:self._nlen_act]
+            cl_ee = unit * cl_lensed['ee'][:self._nlen_act]
+            cl_bb = unit * cl_lensed['bb'][:self._nlen_act]
 
             cl_kk_corr_act = self._apply_corrections(
                 cl_kk_act, cl_tt, cl_ee, cl_bb, cl_te,

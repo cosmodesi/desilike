@@ -19,7 +19,7 @@ import numpy as np
 
 from cosmoprimo.emulators.tools import Emulator as _Emulator, Space as BaseSpace
 
-from desilike.base import Calculator
+from desilike.base import get_params
 from desilike.parameter import VariableCollection
 
 
@@ -123,6 +123,8 @@ class CalculatorEmulator(_Emulator):
         import jax.numpy as jnp
 
         self.calculator = calculator
+        # built on first use in `compute`, and kept: tracing a FOLPS-sized graph is not free
+        self._graph_jitted = None
         # The class outlives the instance: a Calculator is not state, but `to_calculator` only
         # ever needed the class, and that is a name a file can carry.
         self._calculator_cls = type(calculator)
@@ -186,7 +188,18 @@ class CalculatorEmulator(_Emulator):
         # `return_derived` as well: a derived parameter is an output of the pipeline (sigma8 from
         # a cosmology, say), and anything downstream that reads one off an emulated calculator
         # would otherwise get its construction-time default for ever.
-        children, derived = self.graph(params, return_derived=True)
+        # jitted, always: a FOLPS-sized graph is thousands of small kernels and the eager
+        # per-node dispatch is a large share of the node cost (same reason _compile_scalars jits).
+        # Nothing but the graph's own outputs is read here, which is what makes that safe -- the
+        # graph evaluates a COPY of the calculator, so anything a subclass reads back off the
+        # original afterwards is the previous node's value. A quantity the routing needs and the
+        # pytree does not already carry therefore has to become a child of it, as
+        # `FOLPSPTSpectrum2Poles._anchors` does, and not an attribute read after this call.
+        if self._graph_jitted is None:
+            import jax
+
+            self._graph_jitted = jax.jit(lambda p: self.graph(p, return_derived=True))
+        children, derived = self._graph_jitted(params)
         # keyed by the leaf's own PATH ('1.tt'), not by position: an index silently points at a
         # different quantity the moment a requirement is added, and a dump of the file is then
         # unreadable besides
@@ -202,6 +215,13 @@ class CalculatorEmulator(_Emulator):
         # the pytree aux: `to_calculator` rebuilds the state from it, and a routed subclass reads
         # its table layout out of it at every prediction -- so it has to survive the round trip
         state['aux'] = self.aux
+        # ... and "survive" means EXACTLY. An aux can hold live objects with no HDF5 form:
+        # CosmoprimoCosmology's carries its derived `Parameter`s and its requirement specs, and
+        # those came back from a plain HDF5 round trip as bare floats, so `tree_unflatten` then
+        # ran `param._value = val` on a numpy.float64 and a cached CMB emulator could not be
+        # deployed at all. Pickle it, exactly as `children_treedef` above is pickled and for the
+        # same reason; `state['aux']` stays for readability and for older files.
+        state['aux_pickle'] = np.frombuffer(pickle.dumps(self.aux), dtype='u1')
         # The leaf structure, pickled into bytes.  A PyTreeDef is a live JAX object with no HDF5
         # form, but it pickles in a couple of hundred bytes and is the only thing that restores a
         # pytree EXACTLY -- container types included, which reassembling from the leaf paths
@@ -222,7 +242,10 @@ class CalculatorEmulator(_Emulator):
     def __setstate__(self, state):
         super().__setstate__(state)
         self.derived_names = list(state['derived_names'])
-        self.aux = state['aux']
+        # Prefer the pickled aux (exact); fall back to the plain one for files written before
+        # it existed, which is also what a subclass overriding `aux` on write ends up with.
+        aux_blob = np.asarray(state.get('aux_pickle', np.zeros(0, dtype='u1')))
+        self.aux = pickle.loads(aux_blob.tobytes()) if aux_blob.size else state['aux']
         blob = np.asarray(state.get('children_treedef', np.zeros(0, dtype='u1')))
         self.children_treedef = pickle.loads(blob.tobytes()) if blob.size else None
         self.children_leafnames = list(state.get('children_leafnames', []))
@@ -231,7 +254,7 @@ class CalculatorEmulator(_Emulator):
         self.graph_params.__setstate__(state['graph_params'])
         # no Calculator in a saved emulator, and none is needed: `to_calculator` works from the
         # class above and the arguments its caller passes
-        self.calculator, self.graph = None, None
+        self.calculator, self.graph, self._graph_jitted = None, None, None
 
     def emulator_namespace(self):
         """Extra methods and attributes for the emulated calculator's class.
@@ -242,7 +265,7 @@ class CalculatorEmulator(_Emulator):
         """
         return {}
 
-    def to_calculator(self, *args, **kwargs):
+    def to_calculator(self, *args, calculator=None, center=True, **kwargs):
         """An instance of the original calculator's class, whose state is predicted, not computed.
 
         With no arguments, the ones the calculator was constructed with -- while this emulator
@@ -256,6 +279,31 @@ class CalculatorEmulator(_Emulator):
 
         ``theory.update(pt=emulated)`` does not work on a constructed calculator: desilike allows
         ``update()`` only during construction. Use ``replace()`` and recompile.
+
+        Parameters
+        ----------
+        calculator : Calculator, default=None
+            The calculator to deploy from, which an emulator read back from a file does not have.
+            It supplies the constructor arguments, and it is kept, because prediction can need the
+            calculator itself and not only its class: ``CMBEmulator`` reads ``m_ncdm``, ``N_ur``
+            and ``T_cmb`` off it whenever they are not varied. Pass the one wired into the
+            pipeline; that is the right one by construction. A live emulator already holds its
+            own, and this replaces it.
+
+            One argument rather than assigning ``emulator.calculator`` and then repeating
+            ``*calculator._init`` at the call: one place, and no way for the two to disagree.
+        center : bool or dict, default=True
+            Deploy at the centre of the trained region, rather than wherever the parameters
+            happen to point. They rarely point anywhere usable: training leaves the last node's
+            values behind, and a box measured from someone else's posterior need not contain the
+            constructor's defaults at all -- measured once at 4 sigma below a box's lower edge,
+            which killed every rank. Outside the region the emulator refuses, and it is asked as
+            soon as the pipeline compiles, so the default is to move rather than to fail.
+
+            ``True`` uses :attr:`Space.center`; a mapping deploys at those values instead;
+            ``False`` leaves every parameter as it is.
+        *args, **kwargs
+            Constructor arguments, overriding those of *calculator*.
         """
         from cosmoprimo.emulators.tools import NotTrained
 
@@ -263,6 +311,7 @@ class CalculatorEmulator(_Emulator):
             raise NotTrained('call train() first')
         import jax
 
+        emulator = self
         root_cls, aux, predict = self._calculator_cls, self.aux, self.predict
         children_leafnames = list(self.children_leafnames)
         children_treedef = self.children_treedef
@@ -285,6 +334,10 @@ class CalculatorEmulator(_Emulator):
                 # construction default: measured, an emulated pt then returned the fiducial
                 # spectrum for every parameter it was asked about.
                 self.emulator_params = dict(nodes)
+                # Back-reference to the emulator, shared by every instance this method
+                # returns: a downstream consumer that needs the object the predictions come
+                # from reaches it here. `predict` above is a bound method of the same object.
+                self._emulator = emulator
 
             return __init__
 
@@ -295,6 +348,11 @@ class CalculatorEmulator(_Emulator):
                 # object is meant to be a dependency -- a parent reads its attributes and ignores
                 # the return value -- and the root's return value is not recoverable from the
                 # emulated state. As a pipeline root it therefore behaves differently.
+                # The emulator does the predicting, so it needs to know whether the enclosing
+                # graph is traced -- an emulator whose transform calls a non-jax library (the
+                # scalars provider's analytic core calls cosmoprimo) must raise eagerly and
+                # return NaN when traced, exactly as `CosmoprimoCosmology` does.
+                emulator._is_tracing = getattr(self, '_is_tracing', False)
                 # Read the parameter nodes, not `getattr(self, name)`: on a real theory the
                 # cosmological parameters live on a sub-calculator (the template), not as
                 # attributes of the theory, so an attribute lookup finds nothing.
@@ -316,171 +374,44 @@ class CalculatorEmulator(_Emulator):
 
         # built with `type` rather than a class statement so a subclass can add methods: the h
         # routing, for instance, has to override `combine_bias_terms_spectrum2_poles` as well
-        namespace = {'__init__': make_init(), '__call__': make_call()}
+        def make_post_init():
+
+            def __post_init__(self, *args, **kwargs):
+                post_init = getattr(root_cls, '__post_init__', None)
+                if post_init is not None:
+                    post_init(self, *args, **kwargs)
+                # An emulated calculator is pure JAX
+                self._is_external = False
+
+            return __post_init__
+
+        namespace = {'__init__': make_init(), '__call__': make_call(),
+                     '__post_init__': make_post_init()}
         namespace.update(self.emulator_namespace())
         EmulatedCalculator = type(f'Emulated{root_cls.__name__}', (root_cls,), namespace)
         EmulatedCalculator.__qualname__ = EmulatedCalculator.__name__
+        if calculator is not None:
+            # kept, not just read for its `_init`: `predict` above is a bound method of this
+            # emulator, so whatever it looks up on `self.calculator` at evaluation time has to
+            # find the pipeline's own calculator here.
+            self.calculator = calculator
         if not (args or kwargs) and getattr(self, 'calculator', None) is not None:
             args, kwargs = self.calculator._init
-        return EmulatedCalculator(*args, **kwargs)
+        deployed = EmulatedCalculator(*args, **kwargs)
+        if center is not None and center is not False:
+            # On the deployed object, not on the emulator's own nodes: `build` resolves a
+            # parameter from the calculator it evaluates, so moving anything else is a no-op that
+            # looks like it worked.
+            values = self.space.center if center is True else dict(center)
+            params = get_params(deployed)
+            for name, value in values.items():
+                if name in params:
+                    params[name].update(value=value)
+        return deployed
 
 
 #: Keywords :func:`emulate` forwards to `train` rather than to the emulator it builds.
 _TRAIN_OPTIONS = ('budget', 'checkpoint', 'chunk', 'batch_size', 'mpicomm')
-
-
-class _PackedRoot(Calculator):
-    """A structural root over several calculators: it computes nothing itself.
-
-    Its point is that one compiled graph covers all of them, so anything they share upstream --
-    a template, a cosmology -- is evaluated once per node instead of once per calculator. That
-    sharing is the whole reason to pack rather than emulate each separately; the node set is
-    shared too, but the node set is cheap.
-    """
-    def __init__(self, calculators):
-        self.calculators = list(calculators)
-
-    def __call__(self):
-        # Read the dependencies. A Calculator dependency that is never read during __call__ is
-        # pruned from the graph, and every parameter it exposes goes with it -- measured, the
-        # packed graph came out with no parameters at all and every node failed as "does not
-        # expose 'h'". Gathering the children is the read.
-        self.children = [child for calculator in self.calculators
-                         for child in calculator.tree_flatten()[0]]
-        return None
-
-    def tree_flatten(self):
-        children, parts = [], []
-        for calculator in self.calculators:
-            own, part_aux = calculator.tree_flatten()
-            own = list(own)
-            parts.append({'aux': part_aux, 'n': len(own), 'cls': type(calculator)})
-            children += own
-        return children, {'parts': parts}
-
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        obj = object.__new__(cls)
-        obj.calculators = []
-        index = 0
-        for part in aux['parts']:
-            obj.calculators.append(
-                part['cls'].tree_unflatten(part['aux'], children[index:index + part['n']]))
-            index += part['n']
-        return obj
-
-
-class PackedCalculatorEmulator(CalculatorEmulator):
-    """Emulate several calculators at once, as one emulator.
-
-        emu = Emulator([theory1.pt, theory2.pt], space)
-        emu.train(budget=3)
-        pt1, pt2 = emu.to_calculator()
-
-    Worth doing whenever the calculators share upstream work: one compiled graph evaluates a
-    shared template or cosmology once per node rather than once per calculator, and the Boltzmann
-    call is the entire cost. Emulating each separately pays for it twice.
-    """
-    def __init__(self, calculators, space, **options):
-        self.parts = list(calculators)
-        super().__init__(_PackedRoot(self.parts), space, **options)
-        self._parts_cls = [type(part) for part in self.parts]
-
-    def __getstate__(self):
-        state = super().__getstate__()
-        # one class per part: `to_calculator` deploys them, not the packed root
-        state['parts_cls'] = [f'{cls.__module__}.{cls.__name__}' for cls in self._parts_cls]
-        return state
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
-        self._parts_cls = [_import(path) for path in state['parts_cls']]
-        self.parts = None
-
-    def to_calculator(self, *parts_args):
-        """The deployed calculators, in the order they were packed.
-
-        With no arguments, each part is constructed as it was -- while this emulator still holds
-        them.  A saved one does not, so pass one dict of constructor arguments per part.
-
-        One emulated calculator per part, each reconstructing from its own slice of the packed
-        prediction -- not the packed root, whose ``.calculators`` are still the originals it was
-        constructed with.
-
-        The parts predict independently, so the interpolant runs once per part at evaluation
-        time. That is deliberate: what packing saves is the training cost -- one shared upstream
-        evaluation per node instead of one per calculator -- and a predicted spline is cheap. A
-        one-entry memo keeps repeated identical calls from paying even that.
-        """
-        from cosmoprimo.emulators.tools import NotTrained
-
-        if not self.trained:
-            raise NotTrained('call train() first')
-        nodes = {name: self.graph_params[name] for name in self.space.params}
-        emulator = self
-        children_leafnames = list(self.children_leafnames)
-
-        def part_calculator(root_cls, init, spec, offset):
-            """One emulated calculator over its slice of the packed prediction.
-
-            A function called per part, NOT the loop body: ``__call__`` closes over ``root_cls``,
-            ``aux`` and the leaf slice, and runs later -- so defining the class in the loop would
-            hand every part the last iteration's values.  Silently, and only once more than one
-            calculator is packed.
-            """
-            aux, count = spec['aux'], spec['n']
-            leafnames = children_leafnames[offset:offset + count]
-
-            class EmulatedPart(root_cls):
-
-                def __init__(self, *args, **kwargs):
-                    super().__init__(*args, **kwargs)
-                    self.emulator_params = dict(nodes)
-
-                def __call__(self):
-                    values = {name: node.value
-                              for name, node in self.emulator_params.items()}
-                    predicted = emulator._predict_cached(values)
-                    children = [predicted[name] for name in leafnames]
-                    rebuilt = root_cls.tree_unflatten(aux, children)
-                    for key, value in rebuilt.__dict__.items():
-                        setattr(self, key, value)
-                    return self
-
-            EmulatedPart.__name__ = f'Emulated{root_cls.__name__}'
-            EmulatedPart.__qualname__ = EmulatedPart.__name__
-            args, kwargs = init
-            return EmulatedPart(*args, **kwargs)
-
-        classes = self._parts_cls
-        if parts_args:
-            if len(parts_args) != len(classes):
-                raise ValueError(f'{len(parts_args)} sets of arguments for {len(classes)} parts')
-            inits = [((), dict(item)) for item in parts_args]
-        elif getattr(self, 'parts', None) is not None:
-            inits = [part._init for part in self.parts]
-        else:
-            raise RuntimeError(
-                f'a saved emulator carries no calculators, so the {len(classes)} parts cannot be '
-                f'constructed on their own: pass one dict of constructor arguments per part, in '
-                f'the order they were packed.')
-
-        built, offset = [], 0
-        for root_cls, init, spec in zip(classes, inits, self.aux['parts']):
-            built.append(part_calculator(root_cls, init, spec, offset))
-            offset += spec['n']
-        return built
-
-    def _predict_cached(self, values):
-        """The packed prediction, memoised on the last parameter values.
-
-        Every part asks for the same prediction; without this each would recompute all of them.
-        """
-        key = tuple(sorted((name, float(np.asarray(value))) for name, value in values.items()))
-        cached = getattr(self, '_predict_memo', None)
-        if cached is None or cached[0] != key:
-            self._predict_memo = (key, self.predict(**values))
-        return self._predict_memo[1]
 
 
 def Emulator(calculator, space=None, params=None, cls=None, **options):
@@ -496,10 +427,8 @@ def Emulator(calculator, space=None, params=None, cls=None, **options):
 
     Parameters
     ----------
-    calculator : Calculator, list
-        Emulated directly -- no wrapper to construct. A list is packed into one emulator whose
-        ``to_calculator()`` returns the deployed calculators in order: worth it when they share
-        upstream work, since one graph then evaluates it once per node instead of once each.
+    calculator : Calculator
+        Emulated directly -- no wrapper to construct.
     space : Space, default=None
         Where accuracy is required. Derived from the calculator's own parameter ``ref`` limits
         when omitted -- a convenience, not a recommendation: a chain or a covariance is worth
@@ -523,16 +452,12 @@ def Emulator(calculator, space=None, params=None, cls=None, **options):
         :meth:`~CalculatorEmulator.to_calculator`.
     """
     if isinstance(calculator, (list, tuple)):
-        # several calculators: one graph over all of them, so shared upstream work is done once
-        calculators = list(calculator)
-        if not calculators:
-            raise ValueError('no calculator to emulate')
-        if space is None:
-            space = Space(_PackedRoot(calculators), params=params)
-        elif params is not None:
-            space = space.marginal(params)
-        return (cls if cls is not None else PackedCalculatorEmulator)(calculators, space,
-                                                                     **options)
+        # Packing several calculators into one graph was removed (2026-09-01): the pack forced
+        # the generic expansion on every part, throwing away each calculator's own routed
+        # emulator class -- 561 nodes over 7 parameters against 121 over 4 for w0waCDM. A pack
+        # that defers to `get_emulator_cls` per part would be worth having; this one was not.
+        raise TypeError('emulate one calculator at a time: packing was removed, and one '
+                        'emulator per calculator keeps each one its routed class')
     if space is None:
         space = Space(calculator, params=params)
     elif params is not None:
@@ -541,8 +466,7 @@ def Emulator(calculator, space=None, params=None, cls=None, **options):
         # The calculator is asked which subclass it wants: a theory that knows something exact
         # about itself declares it once in `get_emulator_cls` and every caller gets it, rather
         # than each having to know which subclass to import.  Asked on the INSTANCE, not the
-        # class, so a pt whose answer depends on how it was configured -- a FOLPS pt with
-        # output='monomials' bakes in what the direct-output one routes -- can dispatch on that.
+        # class, so a pt whose answer depends on how it was configured can dispatch on that.
         cls = calculator.get_emulator_cls() or CalculatorEmulator
     return cls(calculator, space, **options)
 

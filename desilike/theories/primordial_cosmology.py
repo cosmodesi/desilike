@@ -432,6 +432,31 @@ def _build_cosmoprimo(fiducial, params, lensing=False, calc_params=None, extra_p
     # are present ``h`` takes precedence (see primordial_cosmology.yaml).
     if 'h' in kw and 'theta_MC_100' in kw:
         kw.pop('theta_MC_100')
+
+    # theta_MC_100 is not an input cosmoprimo's `clone` accepts -- it is a DERIVED quantity
+    # (rs * h / D_M(z*), see Cosmology._get_params). Sampling it means solving for the h that
+    # reproduces it, which `Cosmology.solve` does, with a shortcut for this very target.
+    #
+    # Worth the root-find whenever the CMB sets the absolute scale: h, w0 and wa act on the Cl
+    # almost entirely through theta, so a box in h contains cosmologies whose spectra are
+    # translated along ell by tens of multipoles, and no low-order interpolant survives that
+    # (measured: a budget-3 Chebyshev over a 3.5-sigma (h, w0, wa) box gave
+    # sigma(logP_emulated - logP_exact) = 2e16, wrong at every draw). In the theta basis the
+    # peaks move by less than one multipole across the same box.
+    theta_MC_100 = kw.pop('theta_MC_100', None)
+    if theta_MC_100 is not None:
+        # Solve on a LIGHT clone and hand the resulting h to the real build below, rather than
+        # solving on the finished cosmology: `solve` re-clones with base='input', which drops the
+        # lensing / precision settings attached here, so a cosmology solved that way then raises
+        # on `lensed_cl` -- and inside pure_callback that raise becomes a silent all-NaN node
+        # (measured, at the very centre of the box, every output including H0 non-finite).
+        # It is also much cheaper: theta_cosmomc needs only the background, not lensed spectra.
+        # limits: not the solver's default (0.6, 0.8) -- a 3.5-sigma DESI w0waCDM box reaches
+        # h ~ 0.573 -- but not the (0.1, 2.) of cosmoprimo's test either, whose lower end is an
+        # unphysical cosmology at any realistic omega_cdm.
+        kw['h'] = float(fiducial.clone(base='input', **kw).solve(
+            'h', 'theta_MC_100', target=float(theta_MC_100),
+            limits=[0.4, 1.0], xtol=1e-6, maxiter=60)['h'])
     if lensing:
         kw['lensing'] = True
     if calc_params:
@@ -439,15 +464,12 @@ def _build_cosmoprimo(fiducial, params, lensing=False, calc_params=None, extra_p
     if extra_params:
         merged_extra_params = dict(getattr(getattr(fiducial, 'engine', None), '_extra_params', None) or {})
         merged_extra_params.update(extra_params)
-        return fiducial.clone(base='input', extra_params=merged_extra_params, **kw)
-    return fiducial.clone(base='input', **kw)
+        cosmo = fiducial.clone(base='input', extra_params=merged_extra_params, **kw)
+    else:
+        cosmo = fiducial.clone(base='input', **kw)
+    return cosmo
 
 
-def _nan_like(result):
-    """Replace array leaves in *result* (array, or dict of arrays) with same-shape NaNs."""
-    if isinstance(result, dict):
-        return {key: jnp.full(jnp.shape(value), jnp.nan) for key, value in result.items()}
-    return jnp.full(jnp.shape(result), jnp.nan)
 
 
 class CosmoprimoCosmology(PrimordialCosmology):
@@ -593,7 +615,15 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd=dict(eps=0.05), latex=r'\Omega_k'))
         return params
 
-    def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', **kwargs):
+    def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', precision=None, **kwargs):
+        # Accuracy overrides on top of the settings derived from the harmonic requirements
+        # (_LENSING_CALC_PARAMS / _LENS_POTENTIAL_CL_EXTRA_PARAMS): a dict with optional
+        # 'calc_params' (cosmoprimo calculation parameters, e.g. non_linear, ellmax_cl) and
+        # 'extra_params' (raw engine precision knobs) keys.  The defaults are tuned for
+        # production sampling; emulator TRAINING wants stricter ones, since the node values
+        # are the truth the fit is only as good as.
+        self._precision = {key: dict((precision or {}).get(key, {}) or {})
+                           for key in ('calc_params', 'extra_params')}
         # ``engine`` may be a cosmoprimo engine CLASS as well as a name -- notably
         # ``EmulatedEngine.read(fn)``, the documented way to use a trained cosmoprimo
         # emulator (e.g. an emulated harmonic section shared by CMB / FS / SN likelihoods).
@@ -636,6 +666,17 @@ class CosmoprimoCosmology(PrimordialCosmology):
             # Only ever raise ellmax_cl: an explicit (larger) fiducial setting is an accuracy
             # choice that must not be undercut by a smaller likelihood-requested ellmax.
             calc_params['ellmax_cl'] = max(requested_ellmax, self._fiducial['ellmax_cl'])
+        # Caller-supplied accuracy overrides win over the derived defaults, except that
+        # 'ellmax_cl' still only ever goes up (same rule as just above).
+        if self._precision['calc_params']:
+            override_ellmax = self._precision['calc_params'].get('ellmax_cl', None)
+            calc_params.update(self._precision['calc_params'])
+            if override_ellmax is not None and 'ellmax_cl' in calc_params:
+                calc_params['ellmax_cl'] = max(override_ellmax, requested_ellmax,
+                                               self._fiducial['ellmax_cl'])
+        if self._precision['extra_params']:
+            extra_params = dict(extra_params or {})
+            extra_params.update(self._precision['extra_params'])
         if self._is_external:
             try:
                 self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
@@ -662,9 +703,12 @@ class CosmoprimoCosmology(PrimordialCosmology):
                                if lensing else self._fiducial)
                 self._run_requirements(params)
                 for spec_key in self._requirements:
-                    self._results[spec_key] = _nan_like(self._results[spec_key])
+                    self._results[spec_key] = jax.tree_util.tree_map(
+                        lambda leaf: jnp.full(jnp.shape(leaf), jnp.nan),
+                        self._results[spec_key])
                 for param in self.derived_params:
-                    param.value = _nan_like(param.value)
+                    param.value = jax.tree_util.tree_map(
+                        lambda leaf: jnp.full(jnp.shape(leaf), jnp.nan), param.value)
         else:
             # JAX-native: tracers survive end-to-end (no pure_callback boundary), so
             # cosmoprimo's own exception_or_nan already raises in eager / NaNs under
@@ -772,13 +816,18 @@ _CONVERSION_JAXACE = {'ln10As': 'logA', 'ns': 'n_s', 'h': 'h', 'omega_b': 'omega
 _PACKAGED_EMULATORS = {
     # jaxace ACE emulator (trained on CLASS).  Network outputs, in order:
     # (sigma8, sigma8_z, rs_drag [Mpc], H_z [km/s/Mpc], r_z [Mpc], D_z, f_z).
-    # sigma8_z is total-matter; it is also served for of='delta_cb' as an approximation
-    # (0.5% low at the DESI fiducial with m_ncdm = 0.06 eV).
+    # Its sigma8_z is TOTAL-MATTER, so it is declared only for of='delta_m'.  delta_cb and
+    # theta_cb are not listed: they fall through to the linear-pk emulator, which integrates
+    # its own P_cb in a top-hat at R = 8 (see the sigma8_z branch in __call__).  Serving
+    # sigma8_M as sigma8_cb was a 0.45% bias at the DESI fiducial with m_ncdm = 0.06 eV, and
+    # it did NOT cancel downstream: DirectSpectrum2Template takes sigma8_fid from a
+    # cosmoprimo fiducial whatever the engine, so the whole bias landed in the physical-basis
+    # rescaling A = sigma8 / sigma8_fid.  Measured on LRG3 P+B, that alone accounted for
+    # sigma = 2.71 of the ACE-vs-CLASS log-posterior tilt, against 1.55 for the total.
     'ACE_mnuw0wacdm_ln10As_basis': dict(
         kind='jaxace',
         inputs=['z', 'logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm', 'w0_fld', 'wa_fld'],
-        outputs=['fourier.sigma8_z.delta_m.delta_m', 'fourier.sigma8_z.delta_cb.delta_cb',
-                 'fourier.sigma8_z.theta_cb.theta_cb',
+        outputs=['fourier.sigma8_z.delta_m.delta_m',
                  'thermodynamics.rs_drag', 'thermodynamics.rs_drag.delta_cb.delta_cb'],
         # Training ranges (from the network's in_minmax), used by the out-of-range guard in
         # __call__: inputs are clipped to these before evaluation (so downstream spline /
@@ -835,16 +884,44 @@ _CONVERSION_CAPSE = {'ln10^10as': 'logA', 'ln10as': 'logA', 'loga': 'logA',
                      'w0': 'w0_fld', 'wa': 'wa_fld'}
 
 
+def _find_capse_ellmax(spectrum_dir, nout):
+    """Maximum multipole a Capse-style network predicts, from its l.npy training grid.
+
+    jaxcapse interpolates the network's *nout* outputs onto the dense integer grid spanned by
+    l.npy, so ellmax is that grid's upper end -- NOT nout + 1.  The two coincide only when the
+    network was trained on a dense grid (the 'capse_mnuw0wacdm_250001' set, 2998 outputs for
+    ell = 2..2999); a set trained on Chebyshev-Lobatto nodes (256 nodes over ell = 2..9500)
+    would otherwise be reported as ellmax = 257, silently reading Lobatto node values as if
+    they were the first 256 multipoles.  Legacy artifacts stored the full CAMB 0..N grid in
+    l.npy while the network covers ell = 2..nout + 1; that case is resolved as in
+    jaxcapse.load_emulator.  Without l.npy (dense grid assumed) we fall back to nout + 1."""
+    path = spectrum_dir / 'l.npy'
+    if not path.is_file():
+        return nout + 1
+    ell = np.load(path)
+    if len(ell) != nout:
+        if len(ell) >= nout + 2 and ell[0] == 0 and np.all(np.diff(ell) == 1):
+            ell = ell[2:nout + 2]
+        else:
+            raise ValueError(f'Capse-style emulator {spectrum_dir}: multipole grid length ({len(ell)}) '
+                             f'does not match the network output length ({nout})')
+    return int(round(float(np.max(ell))))
+
+
 def _find_capse_metadata(emulator_dir):
     """Introspect a Capse-style Cl emulator directory: per-spectrum network subdirectories
     ('TT', 'TE', 'EE', and optionally 'BB', 'PP'), each holding nn_setup.json / weights.npy /
-    inminmax.npy / outminmax.npy / postprocessing.py, as produced by the CosmologicalEmulators
-    training pipeline (e.g. the local 'capse_mnuw0wacdm_250001' set).  Network inputs are read
-    from an explicit desilike-style 'input' list in nn_setup.json's emulator_description when
+    inminmax.npy / outminmax.npy / l.npy / postprocessing.py, as produced by the
+    CosmologicalEmulators training pipeline (e.g. the local 'capse_mnuw0wacdm_250001' and
+    'capse_mnuw0wacdm_20k_hybrid_ee_20260831' sets).  Network inputs are
+    read from an explicit desilike-style 'input' list in nn_setup.json's emulator_description when
     present, else parsed from its free-text 'parameters' description via _CONVERSION_CAPSE;
-    training ranges come from inminmax.npy and the maximum multipole from the outminmax.npy
-    row count (outputs cover ell = 2..ellmax).  Cl conventions are assumed identical to the
-    packaged 'camb_lcdm' set: Dl in muK^2 (TT/TE/EE), ell^2 (ell+1)^2 / (2 pi) Cl^phiphi (PP)."""
+    training ranges come from inminmax.npy and the maximum multipole from l.npy (see
+    :func:`_find_capse_ellmax`; outputs cover ell = 2..ellmax).  Cl conventions are assumed
+    identical to the packaged 'camb_lcdm' set: Dl in muK^2 (TT/TE/EE), ell^2 (ell+1)^2 / (2 pi)
+    Cl^phiphi (PP).  A non-box training domain -- e.g. the 'w0 + wa < -0.5' cut of the
+    mnuw0wacdm sets, declared as emulator_description['constraint'] -- is NOT enforced by the
+    out-of-range guard, which only clips per-parameter ranges, so it is warned about here."""
     import json
     spectra = [name for name in ['TT', 'TE', 'EE', 'BB', 'PP'] if (emulator_dir / name / 'nn_setup.json').is_file()]
     with open(emulator_dir / spectra[0] / 'nn_setup.json') as file:
@@ -863,9 +940,69 @@ def _find_capse_metadata(emulator_dir):
     if len(inputs) != len(in_minmax):
         raise ValueError(f'Capse-style emulator {emulator_dir}: {len(inputs)} parameter names for {len(in_minmax)} network inputs')
     ranges = {name: (float(low), float(high)) for name, (low, high) in zip(inputs, in_minmax)}
-    ellmax = np.load(emulator_dir / spectra[0] / 'outminmax.npy').shape[0] + 1
+    nout = np.load(emulator_dir / spectra[0] / 'outminmax.npy').shape[0]
+    ellmax = _find_capse_ellmax(emulator_dir / spectra[0], nout)
+    constraint = description.get('constraint', None)
+    if constraint:
+        warnings.warn(f'Capse-style emulator {emulator_dir} declares the training-domain constraint {constraint!r}, '
+                      "which the out-of-range guard does not enforce (it only clips per-parameter ranges): "
+                      'parameters satisfying every range but violating it are extrapolations, not NaN-masked')
     outputs = ['harmonic.lensed_cl'] + (['harmonic.lens_potential_cl'] if 'PP' in spectra else [])
-    return dict(kind='jaxcapse', inputs=list(inputs), outputs=outputs, ranges=ranges, ellmax=int(ellmax), spectra=spectra)
+    return dict(kind='jaxcapse', inputs=list(inputs), outputs=outputs, ranges=ranges,
+                ellmax=int(ellmax), spectra=spectra)
+
+
+def _ace_background(method_key, z, backend='cosmoprimo', cosmoprimo_cosmo=None, jaxace_cosmo=None):
+    """Background quantities for the ACE engine, from cosmoprimo or from jaxace.
+
+    ACE emulates the transfer functions; the background is analytic either way, so which library
+    integrates it is a free choice.  ``backend='cosmoprimo'`` (default) takes E(z), the distances
+    and the growth from :class:`cosmoprimo.cosmology.DefaultBackground`; ``'jaxace'`` keeps
+    jaxace's own.
+
+    The default is cosmoprimo because jaxace's growth is a trap under ``jax.vmap``: it integrates
+    with ``diffrax.Tsit5`` under an ADAPTIVE ``PIDController`` (rtol 1e-6, atol 1e-8,
+    ``max_steps=10000``), and a batched adaptive ``while_loop`` runs until the LAST lane
+    converges -- so one draw whose w0waCDM background is unphysical, routine when a sampler
+    proposes from the whole prior box, charges every lane the full 10000 steps.  Measured on the
+    w0waCDM CMB-SPA + DESI DR2 BAO posterior, that made the ``sigma8_cb`` derived parameter
+    53.67 ms/point against 0.025 ms/point for the likelihood it decorates (2234x), showing up as
+    a STEP in batch size -- 70 ms at 1, 29.6 s at 8, 29.5 s at 512 -- rather than a slope.
+    cosmoprimo uses a FIXED 200-step RK4 whose cost cannot depend on the data.
+
+    Conventions, which differ between the two and are silent if got wrong:
+
+    - growth is taken from ``DefaultBackground`` EXPLICITLY rather than through the engine
+      attribute, as :func:`~desilike.theories.galaxy_clustering.template.get_ref_scalars_from_cosmo`
+      does, because an engine may override it with a fitting formula;
+    - ``znorm=0.`` keeps the EARLY-TIME normalisation (D ~ a in matter domination), jaxace's
+      convention; cosmoprimo's default divides by D(0), which would rescale every emulated pk;
+    - ``mass='cb'``, because jaxace's growth ODE sources on Omega_cb and that is what the linear-pk
+      emulator's ``D`` argument means; ``mass='m'`` would put massive neutrinos in the source;
+    - jaxace returns distances in Mpc (hence the explicit ``* h`` below), cosmoprimo in Mpc/h.
+    """
+    if backend == 'jaxace':
+        if method_key == 'background.efunc':
+            return jaxace_cosmo.E_z(z)
+        if method_key == 'background.comoving_transverse_distance':
+            return jaxace_cosmo.dM_z(z) * jaxace_cosmo.h
+        if method_key == 'background.luminosity_distance':
+            return jaxace_cosmo.dL_z(z) * jaxace_cosmo.h
+        if method_key == 'background.growth_factor':
+            return jaxace_cosmo.D_z(z)
+        return jaxace_cosmo.f_z(z)
+    from cosmoprimo.cosmology import DefaultBackground
+    ba = cosmoprimo_cosmo.get_background()
+    if method_key == 'background.efunc':
+        return ba.efunc(z)
+    if method_key == 'background.comoving_transverse_distance':
+        return ba.comoving_transverse_distance(z)
+    if method_key == 'background.luminosity_distance':
+        return ba.luminosity_distance(z)
+    if method_key == 'background.growth_factor':
+        return DefaultBackground.growth_factor(ba, z, mass='cb', znorm=0.)
+    # growth_factor populates both cached interpolants, so this is a lookup, not a second solve.
+    return DefaultBackground.growth_rate(ba, z, mass='cb')
 
 
 def _interp_loglog(k_query, k_knots, pk_knots):
@@ -911,6 +1048,21 @@ class ACECosmology(PrimordialCosmology):
     total-matter (served for ``of='delta_cb'`` as an approximation, 0.5% low at the DESI
     fiducial); ``bb`` is returned as zeros; the packaged ``camb_lcdm`` Cl emulator is
     LCDM-only (a warning is emitted when a varied parameter is not an emulator input).
+    
+    background_engine : {'cosmoprimo', 'jaxace'}, default='cosmoprimo'
+        Which library provides the background sector -- ``background.efunc``, the distances,
+        ``background.growth_factor`` / ``growth_rate``, and the growth that scales the emulated
+        linear pk behind ``sigma8_z`` of ``delta_cb`` / ``theta_cb``.  ACE emulates the transfer
+        functions, so the background is analytic either way and the choice is free.
+
+        The default is not jaxace because its growth solver is a trap under ``jax.vmap``:
+        ``diffrax.Tsit5`` under an ADAPTIVE ``PIDController`` (``max_steps=10000``), and a batched
+        adaptive ``while_loop`` runs until the LAST lane converges, so one draw whose w0waCDM
+        background is unphysical charges every lane the full 10000 steps.  Measured on the
+        w0waCDM CMB-SPA + DESI DR2 BAO posterior that made the derived block 53.67 ms/point
+        against 0.025 ms/point for the likelihood it decorates, appearing as a STEP in batch size
+        (70 ms at 1, 29.6 s at 8, 29.5 s at 512) rather than a slope.  cosmoprimo integrates the
+        same equation with a FIXED 200-step RK4 whose cost cannot depend on the data.
     """
 
     @classmethod
@@ -1020,7 +1172,14 @@ class ACECosmology(PrimordialCosmology):
         from ..parameter import truncate_priors as truncate_priors_to_ranges
         return truncate_priors_to_ranges(params, cls.training_ranges(engine=engine, base_dir=base_dir, basis='cosmo'))
 
-    def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', **kwargs):
+    def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', background_engine='cosmoprimo', **kwargs):
+        # Which library integrates the background sector; see _ace_background for why the
+        # default is not jaxace (its adaptive growth ODE runs to max_steps under vmap whenever
+        # one draw in the batch fails to converge -- 47x on a w0waCDM CMB+BAO posterior).
+        if background_engine not in ('cosmoprimo', 'jaxace'):
+            raise ValueError("background_engine must be 'cosmoprimo' or 'jaxace', not "
+                             f'{background_engine!r}')
+        self._background_engine = background_engine
         self._engine = str(engine)
         if base_dir is not None:
             base_emulator_dir = Path(base_dir)
@@ -1152,6 +1311,23 @@ class ACECosmology(PrimordialCosmology):
                         self._warn_uncovered_params(emulator_key, method_key)
                         found = True
                         break
+                for prefix in ('fourier.sigma_rz.', 'fourier.sigma8_z.'):
+                    # Derived products of the linear pk: sigma_rz is its top-hat integral, and
+                    # sigma8_z is that integral at R = 8 Mpc/h.  Any emulator providing the
+                    # corresponding fourier.pk serves them (see __call__).  For sigma8_z of
+                    # delta_cb / theta_cb this is not just a fallback but the CORRECT source --
+                    # the jaxace network's own sigma8_z is total-matter (see _PACKAGED_EMULATORS).
+                    if found or not method_key.startswith(prefix):
+                        continue
+                    pk_key = method_key.replace(prefix, 'fourier.pk.', 1)
+                    for emulator_key, metadata in self._emulator_metadata.items():
+                        if pk_key in metadata['outputs']:
+                            if emulator_key not in self._loaded_emulators:
+                                self._loaded_emulators[emulator_key] = self._load_emulator(emulator_key)
+                            self._method_emulator_matching[method_key] = emulator_key
+                            self._warn_uncovered_params(emulator_key, method_key)
+                            found = True
+                            break
                 if not found:
                     if method_key.split('.')[0] not in ('background', 'params', 'primordial'):
                         raise NotImplementedError(f"could not find {method_key} in emulators' products")
@@ -1277,16 +1453,12 @@ class ACECosmology(PrimordialCosmology):
             input_names = self._emulator_metadata[emulator_key]['inputs'] if emulator_key is not None else None
             kind = self._emulator_metadata[emulator_key].get('kind', None) if emulator_key is not None else None
             if emulator is None:
-                if method_key == 'background.efunc':
-                    result = jaxace_cosmo.E_z(**_kw_coords)
-                elif method_key == 'background.comoving_transverse_distance':
-                    result = jaxace_cosmo.dM_z(**_kw_coords) * jaxace_cosmo.h
-                elif method_key == 'background.luminosity_distance':
-                    result = jaxace_cosmo.dL_z(**_kw_coords) * jaxace_cosmo.h
-                elif method_key == 'background.growth_factor':
-                    result = jaxace_cosmo.D_z(**_kw_coords)
-                elif method_key == 'background.growth_rate':
-                    result = jaxace_cosmo.f_z(**_kw_coords)
+                if method_key in ('background.efunc', 'background.comoving_transverse_distance',
+                                  'background.luminosity_distance', 'background.growth_factor',
+                                  'background.growth_rate'):
+                    result = _ace_background(method_key, _kw_coords['z'], self._background_engine,
+                                             cosmoprimo_cosmo=cosmoprimo_cosmo,
+                                             jaxace_cosmo=jaxace_cosmo)
                 elif method_key == 'background.age':
                     if self._conversion != 'cosmoprimo':
                         raise NotImplementedError("background.age requires conversion='cosmoprimo'")
@@ -1325,7 +1497,9 @@ class ACECosmology(PrimordialCosmology):
                 # pk in Mpc^3), converted below to desilike's k in h/Mpc, pk in (Mpc/h)^3.
                 emulator_params = jnp.array([get_param(name) for name in input_names])
                 z = spec['z']
-                growth = jaxace_cosmo.D_z(z)
+                growth = _ace_background('background.growth_factor', z, self._background_engine,
+                                         cosmoprimo_cosmo=cosmoprimo_cosmo,
+                                         jaxace_cosmo=jaxace_cosmo)
                 of = spec['static']['of'][0]
                 # theta_cb is served from the delta_cb network (times f_z^2 below)
                 component = emulator['delta_m' if of == 'delta_m' else 'delta_cb']
@@ -1335,7 +1509,37 @@ class ACECosmology(PrimordialCosmology):
                     # jaxace emulator so that sigma8_z(theta_cb) = f_z * sigma8_z(delta_cb) exactly.
                     pk = run_ace(z)[:, 6, None]**2 * pk
                 h = get_param('h')
-                if method_key.startswith('fourier.pk_now'):
+                if method_key.startswith('fourier.sigma8_z'):
+                    # sigma8 is sigma_R at R = 8 Mpc/h of THIS pk -- the same top-hat integral
+                    # as sigma_rz below, at a single radius.  Taking it from the emulated P_cb
+                    # rather than the jaxace total-matter output is what makes sigma8_cb
+                    # actually cb (measured: 3e-5 against CLASS, where the jaxace output was
+                    # 4.5e-3 low).  of='theta_cb' needs no special case: pk already carries the
+                    # f_z^2 factor above, so the integral returns f_z * sigma8_cb exactly, and
+                    # the growth rate f = fsigma8 / sigma8 stays exact.
+                    k_h = k_grid / h
+                    x = k_h * 8.
+                    window = 3. * (jnp.sin(x) - x * jnp.cos(x)) / x**3
+                    integrand = (k_h[None, :]**3 * (pk * h**3) * window[None, :]**2
+                                 / (2. * jnp.pi**2))                                # (nz, nk)
+                    result = jnp.sqrt(jnp.trapezoid(integrand, x=jnp.log(k_h), axis=-1))
+                elif method_key.startswith('fourier.sigma_rz'):
+                    if of.startswith('theta'):
+                        raise NotImplementedError('sigma_rz of theta is not served (velocity '
+                                                  'variance in a top-hat is not what you want)')
+                    # Top-hat sigma_R(z) from the emulated linear pk, trapezoid in ln k over the
+                    # network's own grid (log-spaced, so the rule is well conditioned):
+                    # sigma_R^2 = int dln k  k^3 P(k) / (2 pi^2) W(kR)^2, W(x) = 3 (sin x - x cos x) / x^3,
+                    # with k in h/Mpc and R in Mpc/h so the h factors cancel.  Stored as (nz, nr),
+                    # the (z, r) layout CosmoprimoCosmology uses for the same key.
+                    k_h = k_grid / h
+                    x = k_h[None, :] * jnp.asarray(spec['r'])[:, None]              # (nr, nk)
+                    window = 3. * (jnp.sin(x) - x * jnp.cos(x)) / x**3
+                    integrand = (k_h[None, None, :]**3 * (pk * h**3)[None, :, :]
+                                 * window[:, None, :]**2 / (2. * jnp.pi**2))        # (nr, nz, nk)
+                    sigma2 = jnp.trapezoid(integrand, x=jnp.log(k_h), axis=-1)      # (nr, nz)
+                    result = jnp.sqrt(sigma2).T
+                elif method_key.startswith('fourier.pk_now'):
                     # No-wiggle pk: same cosmoprimo BAO filter as CosmoprimoCosmology, applied to
                     # the emulated pk (JAX-traceable, like the eisenstein_hu engine path).  The
                     # cosmoprimo interpolator needs concrete k knots, so first resample the pk
@@ -1432,8 +1636,104 @@ def amplitude(params):
     """
     for name in ('A_s', 'logA') + tuple(Cosmology._alias_parameters['logA']):
         if name in params:
-            return params[name] if name == 'A_s' else 1e-10 * np.exp(params[name])
+            return params[name] if name == 'A_s' else 1e-10 * jnp.exp(params[name])
     return None
+
+
+#: Speed of light, km/s.
+_CLIGHT = 299792.458
+#: <p>/T for a relativistic Fermi-Dirac gas: sets where the a^-4 -> a^-3 turn happens.
+_FERMI_DIRAC_MOMENTUM = 3.15137
+#: Boltzmann constant, eV/K.
+_KELVIN_TO_EV = 8.617333262e-5
+
+
+def _theta_analytic(h, omega_b, omega_cdm, w0=-1., wa=0., m_ncdm=(0.06,), N_ur=2.0328,
+                            T_cmb=2.7255, T_ncdm_over_cmb=0.71611, na=2048):
+    r"""``theta_cosmomc`` from closed-form background quantities alone.
+
+    The same definition cosmoprimo derives -- :math:`r_s h / D_M(z_\star)` with the Hu & Sugiyama
+    :math:`z_\star` -- but every ingredient analytic, so this jits, grads and **vmaps** and needs
+    no :class:`Cosmology` instance.
+
+    That is the point. Deriving ``theta_cosmomc`` the ordinary way runs the background, whose only
+    non-closed-form piece is the massive-neutrino density: a Fermi-Dirac integral cosmoprimo caches
+    in a spline PER COSMOLOGY INSTANCE, and so rebuilds inside a trace at every call. Measured,
+    that route costs 1.2 ms jitted and gets WORSE under ``vmap`` (1.86 ms/point); this is 0.21 ms
+    jitted and 0.051 ms/point at ``vmap`` 256. It lives here rather than in cosmoprimo because it
+    exists for :meth:`CMBEmulator.to_training`, which runs inside the trace where the exact value
+    cannot be computed at all -- it is behind a ``pure_callback``.
+
+    ``m_ncdm`` is an ordinary argument, not a captured constant, so it can be emulated later.
+
+    Accuracy against the exact derivation over a CMB-only w0waCDM box, h in [0.60, 0.85]: bias
+    +1.6 sigma(theta), **scatter 0.075 sigma(theta)**. The bias is a near-constant offset and
+    calibrates out; uncalibrated it is not ignorable, a box centred on a mis-converted theta having
+    been measured 5.3 sigma off.
+
+    Two traps, both silent:
+
+    * do NOT renormalise :math:`\omega_\nu(a)` so that :math:`\omega_\nu(1) = \sum m_\nu / 93.14`.
+      That rescales the whole profile and corrupts the relativistic limit, which
+      :math:`\omega_\gamma` fixes: measured, 3.7% (158 sigma) of bias.
+    * today's neutrino density must be evaluated at :math:`a = 1`, not taken as the last element of
+      whatever grid is in hand -- on the :math:`r_s` grid that is the density at :math:`a_\star`,
+      which drives :math:`\omega_{de}` negative and the result to NaN.
+    """
+    omega_g = 2.4735e-5 * (T_cmb / 2.7255) ** 4
+    omega_ur = N_ur * 7. / 8. * (4. / 11.) ** (4. / 3.) * omega_g
+
+    def omega_ncdm(a):
+        masses = jnp.atleast_1d(jnp.asarray(m_ncdm))
+        relativistic = 7. / 8. * (4. / 11.) ** (4. / 3.) * omega_g
+        temperature = _KELVIN_TO_EV * T_cmb * T_ncdm_over_cmb
+        y = masses[:, None] * a[None, :] / (_FERMI_DIRAC_MOMENTUM * temperature)
+        return jnp.sum(relativistic / a[None, :] ** 4 * jnp.sqrt(1. + y ** 2), axis=0)
+
+    omega_ncdm0 = omega_ncdm(jnp.ones(1))[0]
+    omega_m = omega_b + omega_cdm + omega_ncdm0
+    omega_de = h ** 2 - omega_m - omega_g - omega_ur
+
+    def one_over_a2H(a):
+        de = omega_de * a ** (-3. * (1. + w0 + wa)) * jnp.exp(-3. * wa * (1. - a))
+        total = (omega_g + omega_ur) / a ** 4 + (omega_b + omega_cdm) / a ** 3 + omega_ncdm(a) + de
+        return _CLIGHT / (a ** 2 * 100. * jnp.sqrt(total))
+
+    zstar = 1048. * (1. + 0.00124 * omega_b ** -0.738) * (
+        1. + (0.0783 * omega_b ** -0.238 / (1. + 39.5 * omega_b ** 0.763))
+        * omega_m ** (0.560 / (1. + 21.1 * omega_b ** 1.81)))
+    astar = 1. / (1. + zstar)
+
+    a_rs = jnp.exp(jnp.linspace(jnp.log(1e-8), jnp.log(astar), na))
+    sound_speed = (3. * (1. + 3e4 * a_rs * omega_b)) ** -0.5
+    rs = jnp.trapezoid(one_over_a2H(a_rs) * sound_speed, a_rs)
+    a_dm = jnp.exp(jnp.linspace(jnp.log(astar), 0., na))
+    return rs / jnp.trapezoid(one_over_a2H(a_dm), a_dm)
+
+
+def _solve_analytic_theta(target, omega_b, omega_cdm, limits=(0.2, 1.5), iterations=40, na=2048,
+                          **kwargs):
+    """The ``h`` whose analytic ``theta_MC_100`` is *target*, by bisection on a closed-form function.
+
+    No engine is touched, so this works inside a trace, which is what
+    :meth:`CMBEmulator.from_training` needs -- the exact solve runs a background per iteration and
+    cannot be traced at all.
+
+    Deliberately NOT used to seed :meth:`cosmoprimo.Cosmology.solve`: tried and measured slower,
+    1.23 s/solve against 0.80, because ``bracket`` and ridders still spend their ~10 exact
+    background evaluations wherever they start.
+    """
+    def residual(h):
+        return 100. * _theta_analytic(h, omega_b, omega_cdm, na=na, **kwargs) - target
+
+    low, high = limits
+    flow = residual(low)
+    for _ in range(iterations):
+        middle = 0.5 * (low + high)
+        cond = residual(middle) * flow > 0.
+        low = jnp.where(cond, middle, low)
+        high = jnp.where(cond, high, middle)
+    return 0.5 * (low + high)
 
 
 class CMBEmulator(CalculatorEmulator):
@@ -1464,9 +1764,99 @@ class CMBEmulator(CalculatorEmulator):
             factor = 1. if value is None else value
             if tau is not None:
                 # one e^{-tau} per screened leg: 'tt' 2, 'tp' 1, 'pp' 0
-                factor = factor * np.exp(-tau * sum(leg != 'p' for leg in spectrum))
+                factor = factor * jnp.exp(-tau * sum(leg != 'p' for leg in spectrum))
             factors[key] = factor
         return factors
+
+
+    def _background_kwargs(self, params):
+        """``m_ncdm``, ``N_ur``, ``T_cmb`` for the analytic ``theta``.
+
+        From *params* when they are being VARIED, and only otherwise from the cosmology's own
+        value. They must NOT be captured as constants: any of them can be sampled, and a captured
+        one would evaluate the emulator's basis at the fiducial while the cosmology used the
+        sampled value -- the two bases then disagree point by point, which is the failure that
+        put an earlier box 5.3 sigma off its posterior.
+        """
+        fiducial = getattr(getattr(self, 'calculator', None), '_fiducial', None)
+        kwargs = {}
+        for name in ('m_ncdm', 'N_ur', 'T_cmb'):
+            if name in params:
+                kwargs[name] = params[name]
+            elif fiducial is not None:
+                kwargs[name] = fiducial[name]
+            else:
+                raise ValueError(f'the analytic theta basis needs {name}, which is neither varied '
+                                 f'nor available from a cosmology on this emulator')
+        return kwargs
+
+    def to_training(self, params):
+        r""":math:`(h, w_0, w_a) \rightarrow (\theta_\mathrm{MC}, w_0, w_0 + w_a)`.
+
+        The expansion basis belongs to the EMULATOR, not to the cosmology: the pipeline keeps
+        sampling ``h`` and ``wa_fld``, priors and refs stay in them, chains come out in them, and
+        nothing downstream has to learn about ``theta_MC_100`` or ``w0pwa``.
+
+        Both maps are cheap and traceable, which is the whole reason they can run here: this is
+        applied at EVERY prediction, inside the jit, where the exact ``theta`` cannot be computed
+        at all -- it sits behind a ``pure_callback``. :func:`_theta_analytic` is 0.0205
+        ms/point under ``vmap``, against the emulator's own 0.0176.
+
+        Its ~1.6 sigma(theta) bias does not matter HERE, and that is worth being precise about:
+        ``theta`` is only an internal relabelling of ``h``. The training box is built by mapping
+        points through this same function (:meth:`training_space`), the nodes are evaluated by
+        inverting it (:meth:`from_training`), and predictions enter through it again -- so the
+        composition is the identity and the bias cancels exactly. It would only matter if a
+        ``theta`` from somewhere else (a chain, a published box) were fed in, which is the trap
+        that put an earlier box 5.3 sigma off.
+        """
+        params = dict(params)
+        if 'wa_fld' in params and 'w0_fld' in params:
+            params['w0pwa'] = params.pop('wa_fld') + params['w0_fld']
+        if 'h' in params:
+            params['theta_MC_100'] = 100. * _theta_analytic(
+                params.pop('h'), params['omega_b'], params['omega_cdm'],
+                w0=params.get('w0_fld', -1.),
+                wa=params.get('w0pwa', -1.) - params.get('w0_fld', -1.),
+                **self._background_kwargs(params))
+        return params
+
+    def from_training(self, params):
+        r"""The inverse, to call the cosmology in ITS parameters: neither ``w0pwa`` nor
+        ``theta_MC_100`` is a cosmoprimo input.
+
+        ``h`` comes back through :func:`_solve_analytic_theta`, the bisection on the same closed
+        form -- not through ``Cosmology.solve``, which runs a background per iteration. Using the
+        SAME function in both directions is what makes the round trip exact.
+        """
+        params = dict(params)
+        if 'w0pwa' in params:
+            params['wa_fld'] = params.pop('w0pwa') - params['w0_fld']
+        if 'theta_MC_100' in params:
+            params['h'] = _solve_analytic_theta(
+                params.pop('theta_MC_100'), params['omega_b'], params['omega_cdm'],
+                w0=params.get('w0_fld', -1.), wa=params.get('wa_fld', 0.),
+                **self._background_kwargs(params))
+        return params
+
+    def training_space(self):
+        """The user's space, re-expressed in the expansion basis by mapping its points.
+
+        Paired with :meth:`to_training`, as :class:`Space` requires. ``Space.map`` transforms
+        points rather than propagating a Jacobian, and ``Space`` applies the declared transform to
+        those samples itself, so mean, covariance and limits all end up in the expansion variable
+        without the caller arranging it.
+
+        The transform matters because ``w0 + wa`` is bounded above: CAMB's PPF refuses
+        ``w0 + wa > 0`` ("giving w>0 at high redshift"), stricter than cosmoprimo's own ``< 1/3``
+        radiation-domination check, and 0 is also the hard prior the analysis applies. A Smolyak
+        grid is unisolvent, so one node past the bound is not a smaller problem but a singular
+        one; a logit onto ``(-5, 0)`` makes the bound unreachable rather than an edge to cut.
+        """
+        space = self.space
+        if not any(name in getattr(space, 'params', []) for name in ('wa_fld', 'h')):
+            return space
+        return space.map(self.to_training, transforms={'w0pwa': 'logit_w0pwa'})
 
     def transform(self, values, params):
         factors = self.scaling(params)

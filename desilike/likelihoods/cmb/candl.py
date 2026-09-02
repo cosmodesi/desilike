@@ -100,7 +100,7 @@ class _BaseCandlLikelihood(Likelihood):
     # (matches cmb/camspec.py; not tied to the cosmology's T_cmb parameter).
     T0_cmb = 2.7255
 
-    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, ell_cuts=None, **kwargs):
+    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, ell_cuts=None, clear_internal_priors=None, **kwargs):
         import candl
 
         if variant is not None:
@@ -121,6 +121,8 @@ class _BaseCandlLikelihood(Likelihood):
         else:
             self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
 
+        self._clear_internal_priors(clear_internal_priors)
+
         dl_requirements = self.like.requirements_dict.get('Dl', {})
         self._ellmax_standard = max([ellmax for name, ellmax in dl_requirements.items() if name.lower() != 'kk'], default=0)
         self._ellmax_potential = max([ellmax for name, ellmax in dl_requirements.items() if name.lower() == 'kk'], default=0)
@@ -135,6 +137,70 @@ class _BaseCandlLikelihood(Likelihood):
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+
+    def _clear_internal_priors(self, clear):
+        """Drop Gaussian priors candl would otherwise apply inside its own ``log_like``.
+
+        Needed when several candl likelihoods are summed and more than one declares a prior on
+        the SAME parameter: each applies its own, and the parameter is constrained twice.
+        Measured on CMB-SP4A, where ACT DR6 declares tau ~ N(0.0566, 0.00580) and SPT-3G D1
+        declares tau ~ N(0.0510, 0.00600): the combination gives tau = 0.0539 +- 0.00417
+        against 0.0549 +- 0.00549 for a single prior -- tighter by ~sqrt(2) and pulled to a
+        weighted mean of two different centres. The official SPT-3G cobaya setup avoids this
+        with the same option name.
+
+        Parameters
+        ----------
+        clear : bool, str, list, default=None
+            ``None`` / ``False`` keeps every prior (candl's own behaviour). ``True`` drops all
+            of them -- rarely what you want, since the NUISANCE priors are per-arm and
+            legitimate. A name or list of names drops only the priors on those parameters,
+            which is how you de-duplicate one shared parameter while keeping the rest.
+        """
+        if not clear:
+            return
+        priors = list(getattr(self.like, 'priors', None) or [])
+        if not priors:
+            return
+        names = None if clear is True else set([clear] if isinstance(clear, str) else list(clear))
+
+        def parameters_of(prior):
+            found = getattr(prior, 'par_names', None)
+            if found is None:
+                found = getattr(prior, 'par_name', None)
+            if found is None:
+                return []
+            return [found] if isinstance(found, str) else list(found)
+
+        kept, dropped = [], []
+        for prior in priors:
+            parameters = parameters_of(prior)
+            if names is None or any(parameter in names for parameter in parameters):
+                dropped.extend(parameters)
+            else:
+                kept.append(prior)
+        if not dropped:
+            raise ValueError(f'clear_internal_priors={clear!r} matched none of the priors this '
+                             f'likelihood declares, on '
+                             f'{sorted({p for prior in priors for p in parameters_of(prior)})}; '
+                             f'a silently ineffective clear would leave the prior double-counted')
+        self.like.priors = kept
+        # `required_prior_parameters` must follow the priors: `_cosmo_prior_names` is built from
+        # it, so a stale entry would keep this likelihood asking the cosmology for a parameter
+        # whose prior no longer exists here.
+        if hasattr(self.like, 'required_prior_parameters'):
+            remaining, seen = [], set()
+            for prior in kept:
+                for parameter in parameters_of(prior):
+                    if parameter not in seen:
+                        seen.add(parameter)
+                        remaining.append(parameter)
+            self.like.required_prior_parameters = remaining
+        # not self.log_info: at __init__ time the Calculator machinery has not attached the
+        # logging mixin's methods to this instance yet
+        import logging
+        logging.getLogger(type(self).__name__).info(
+            f'cleared candl-internal priors on {sorted(set(dropped))}')
 
     def _build_ell_cuts_mask(self, ell_cuts):
         """Boolean mask for per-spectrum ell cuts on the FULL (uncropped) candl likelihood.
@@ -764,15 +830,34 @@ class PlanckPR3LowlEESroll2Likelihood(_BaseClikCandlLikelihood):
     **kwargs
         Forwarded to ``clipy.clik_candl``.
 
+    .. warning::
+
+        **The .clik this wraps is not distributed any more.** Its only published source,
+        ``web.fe.infn.it/~pagano/low_ell_datasets/sroll2/``, is gone -- the tarball, the
+        directory and the whole ``~pagano`` user page all 404 (checked 2026-09-01), and the
+        Wayback Machine holds no snapshot. ``sroll20.ias.u-psud.fr`` serves the SRoll 2.0 sky
+        MAPS, not the likelihood built from them. Pass ``clik_file=`` if you obtain a copy.
+
+        For the same likelihood from data that IS distributed, use
+        :class:`~desilike.likelihoods.cmb.planck_native.PlanckPR3LowlEESroll2NativeLikelihood`:
+        the tabulated form (cobaya's ``planck_2018_lowl.EE_sroll2``), installable from the
+        ``CobayaSampler/planck_native_data`` release. That is also the implementation the SP4A
+        configuration declares, so it -- not this class -- is the like-for-like choice there.
+
     Reference
     ---------
     Pagano et al. 2020  https://arxiv.org/abs/1908.09856
-    Data               https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/
+    Data               https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/ (dead)
     """
 
     installer_section = 'PlanckPR3LowlEESroll2Likelihood'
     _clik_basename = 'simall_100x143_sroll2_v3_EE_Aplanck.clik'
-    _tgz_url = 'https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.tgz'
+    # Dead (404, see the class warning). NOT replaceable by the cobaya asset: the
+    # CobayaSampler/planck_native_data release ships planck_sroll2_lowE.zip, whose single member
+    # is sroll2_prob_table.txt -- a likelihood TABLE, which clipy cannot read. That asset is what
+    # PlanckPR3LowlEESroll2NativeLikelihood installs.
+    # _tgz_url = 'https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.tgz'
+    _tgz_url = None
 
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
@@ -791,6 +876,12 @@ class PlanckPR3LowlEESroll2Likelihood(_BaseClikCandlLikelihood):
         from desilike.install import exists_path, download, extract
         target = os.path.join(data_dir, cls._clik_basename)
         if installer.reinstall or not exists_path(target):
+            if cls._tgz_url is None:
+                raise ValueError(
+                    f'{cls.__name__} cannot be installed: {cls._clik_basename} has no reachable '
+                    'source (see the class warning). Either pass clik_file= with your own copy, '
+                    'or use PlanckPR3LowlEESroll2NativeLikelihood, the tabulated form of the same '
+                    'likelihood, which installs from CobayaSampler/planck_native_data.')
             tgz_fn = os.path.join(data_dir, cls._clik_basename + '.tgz')
             download(cls._tgz_url, tgz_fn)
             extract(tgz_fn, data_dir)

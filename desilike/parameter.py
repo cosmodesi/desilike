@@ -856,15 +856,6 @@ class ParameterFiniteDifference:
     def copy(self):
         return self.clone()
 
-    @classmethod
-    def from_legacy(cls, fd_eps=None, fd_acc=2, fd_transform=None):
-        """Build from the legacy kwargs; a 3-tuple ``fd_eps`` is (center, eps_below, eps_above)."""
-        eps, center = fd_eps, None
-        if fd_eps is not None and hasattr(fd_eps, '__len__'):
-            center, eps_below, eps_above = fd_eps
-            eps = (eps_below, eps_above)
-        return cls(eps=eps, acc=fd_acc, transform=fd_transform, center=center)
-
 
 class Parameter(Variable):
     """A single named parameter with prior, value, and metadata.
@@ -1129,15 +1120,22 @@ class Parameter(Variable):
             if isinstance(raw, bytes):
                 raw = raw.decode()
             meta = json.loads(raw, object_hook=_parameter_object_hook)
+            fd = meta.get('fd')
+            if fd is None:
+                # legacy file keys; a 3-tuple fd_eps is (center, eps_below, eps_above)
+                eps, center = meta.get('fd_eps'), None
+                if eps is not None and hasattr(eps, '__len__'):
+                    center, eps_below, eps_above = eps
+                    eps = (eps_below, eps_above)
+                fd = ParameterFiniteDifference(eps=eps, acc=meta.get('fd_acc', 2),
+                                               transform=meta.get('fd_transform'), center=center)
             self.__init__(
                 name=meta['name'], value=state.get('value'),
                 prior=meta.get('prior'), ref=meta.get('ref'),
                 latex=meta.get('latex'), fixed=meta.get('fixed', True),
                 derived=meta.get('derived', False),
                 shape=tuple(meta.get('shape', [])),
-                fd=meta.get('fd') if meta.get('fd') is not None else ParameterFiniteDifference.from_legacy(
-                    fd_eps=meta.get('fd_eps'), fd_acc=meta.get('fd_acc', 2), fd_transform=meta.get('fd_transform')),
-                depends={})
+                fd=fd, depends={})
             # depends resolved later by VariableCollection.__setstate__
         else:
             # in-memory format: feed directly to __init__

@@ -265,52 +265,12 @@ class Shaped(Calculator):
         return obj
 
 
-def test_a_list_of_calculators_is_packed_into_one_emulator():
-    """One graph over both, so anything they share upstream is evaluated once per node instead of
-    once per calculator -- which is the entire reason to pack."""
-    from desilike.base import compile
-    from desilike.emulators import PackedCalculatorEmulator
-
-    shared = Variable('h', value=0.7)
-    parts = [Shaped(h=shared, amplitude=Variable('amplitude', value=1.)),
-             Shaped(h=shared, amplitude=Variable('other', value=1.))]
-    space = Space(limits={'h': (0.6, 0.8), 'amplitude': (0.5, 2.), 'other': (0.5, 2.)})
-
-    emu = Emulator(parts, space)
-    assert isinstance(emu, PackedCalculatorEmulator)
-    # the shared parameter appears once, not once per part
-    assert sorted(emu.params) == ['amplitude', 'h', 'other']
-    emu.train(budget=3)
-
-    deployed = emu.to_calculator()
-    assert len(deployed) == 2
-    point = {'h': 0.72, 'amplitude': 1.3, 'other': 0.9}
-    for emulated, reference in zip(deployed, [Shaped(h=Variable('h', value=0.7),
-                                                     amplitude=Variable('amplitude', value=1.)),
-                                              Shaped(h=Variable('h', value=0.7),
-                                                     amplitude=Variable('other', value=1.))]):
-        graph, truth = compile(emulated), compile(reference)
-        # per-graph: the emulated part carries the whole packed parameter set (the packed
-        # prediction needs every one of them), the reference only its own two.
-        for pipe in [graph, truth]:
-            pipe({name: value for name, value in point.items() if name in pipe.params})
-        assert np.allclose(emulated.pk, reference.pk, rtol=1e-6)
-
-
-def test_a_packed_dependency_that_is_never_read_would_be_pruned():
-    """The bug this caught: `_PackedRoot.__call__` returned None without reading `self.calculators`,
-    so the graph pruned every part and the packed emulator exposed no parameters at all."""
-    from desilike.emulators.api import _PackedRoot
-    from desilike.base import compile
-
-    root = _PackedRoot([Shaped(h=Variable('h', value=0.7),
-                               amplitude=Variable('amplitude', value=1.))])
-    assert {param.name for param in compile(root).params} >= {'h', 'amplitude'}
-
-
-def test_packing_an_empty_list_is_refused():
-    with pytest.raises(ValueError, match='no calculator'):
-        Emulator([], Space(limits={'h': (0.6, 0.8)}))
+def test_a_list_of_calculators_is_refused():
+    """Packing was removed: a pack emulated every part with the generic expansion, throwing
+    away the routed class each calculator asks for through `get_emulator_cls`."""
+    with pytest.raises(TypeError, match='one calculator at a time'):
+        Emulator([Shaped(h=Variable('h', value=0.7), amplitude=Variable('amplitude', value=1.))],
+                 Space(limits={'h': (0.6, 0.8)}))
 
 
 # ── derived parameters ────────────────────────────────────────────────────────

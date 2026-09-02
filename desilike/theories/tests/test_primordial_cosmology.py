@@ -247,17 +247,20 @@ class TestACECosmology:
         sigma8_m = float(cosmo.derived_params['sigma8_m'].value)
         assert np.isclose(sigma8_m, fo.sigma8_z(0., of='delta_m'), rtol=1e-3)
 
-        # fourier: sigma8_z is total-matter (0.5% off delta_cb), fsigma8 = f_z * sigma8_z
+        # fourier: sigma8_z is the top-hat sigma8 of the emulated P_cb, so genuinely cb (the
+        # network's own sigma8 output is total-matter, 0.4% away at this fiducial); fsigma8 =
+        # f_z * sigma8_z.  These tolerances are the ones that catch a growth-normalisation
+        # mistake: the emulated pk carries D^2 with whatever normalisation D was given, and the
+        # conventions on offer differ by 3.3% (see _ace_background).  Measured: 1.3e-4 / 1.2e-4.
         sigma8 = cosmo.get_fourier().sigma8_z(of='delta_cb', z=z_test)
         fsigma8 = cosmo.get_fourier().sigma8_z(of='theta_cb', z=z_test)
-        assert np.isclose(float(sigma8), fo.sigma8_z(z_test, of='delta_m'), rtol=1e-3)
-        assert np.isclose(float(sigma8), fo.sigma8_z(z_test, of='delta_cb'), rtol=1e-2)
-        assert np.isclose(float(fsigma8), fo.sigma8_z(z_test, of='theta_cb'), rtol=1e-2)
+        assert np.isclose(float(sigma8), fo.sigma8_z(z_test, of='delta_cb'), rtol=1e-3)
+        assert np.isclose(float(fsigma8), fo.sigma8_z(z_test, of='theta_cb'), rtol=1e-3)
 
         # fourier: linear pk (delta_cb), and pk_tt = f_z^2 pk_dd with f_z = fsigma8 / sigma8
         pk_dd = np.asarray(cosmo.get_fourier().pk(of='delta_cb', z=z_test, k=k))
         pk_tt = np.asarray(cosmo.get_fourier().pk(of='theta_cb', z=z_test, k=k))
-        np.testing.assert_allclose(pk_dd, fo.pk_interpolator(of='delta_cb')(k, z=z_test), rtol=5e-3)
+        np.testing.assert_allclose(pk_dd, fo.pk_interpolator(of='delta_cb')(k, z=z_test), rtol=2e-3)
         np.testing.assert_allclose(pk_tt / pk_dd, float(fsigma8 / sigma8)**2, rtol=1e-6)
 
         # background (analytic jaxace, unchanged by this feature; sanity only)

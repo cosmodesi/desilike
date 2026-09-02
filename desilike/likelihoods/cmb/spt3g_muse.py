@@ -1,4 +1,4 @@
-"""SPT-3G 2-year delensed EE + optimal phiphi (MUSE) likelihood.
+"""SPT-3G 2-year delensed EE + optimal ϕϕ (MUSE) likelihood.
 
 Wrapper around the public ``muse3glike`` release (Ge et al. 2024), the likelihood the
 ``CMB-SPA`` chains run as ``muse3glike.cobaya.spt3g_2yr_delensed_ee_optimal_pp_muse``.
@@ -16,9 +16,9 @@ when SPT lensing goes inside the joint ACT+Planck+SPT covariance.
 
 Two conventions inherited from the upstream cobaya plugin, both easy to get wrong:
 
-* the EE leg is the **unlensed** (delensed) EE spectrum in muK^2, while ``phiphi`` is the
-  dimensionless ``C_L^{phiphi}`` -- so EE carries a ``(T0_cmb * 1e6)^2`` factor against
-  cosmoprimo's dimensionless output and phiphi carries none;
+* the EE leg is the **unlensed** (delensed) EE spectrum in muK^2, while ``ϕϕ`` is the
+  dimensionless ``C_L^{ϕϕ}`` -- so EE carries a ``(T0_cmb * 1e6)^2`` factor against
+  cosmoprimo's dimensionless output and ``ϕϕ`` carries none;
 * both legs are read over ``ell = 1 .. 5000``, the span of the band-power windows. The
   upstream plugin nominally requests ``pp`` only to 3000, but cobaya hands it the full array
   built for the ``ee`` request, so 5000 is what it actually uses.
@@ -48,9 +48,9 @@ from desilike.base import GaussianLikelihood
 from desilike.parameter import VariableCollection
 
 
-#: Upstream component names, with ASCII aliases so a yaml or a python config need not carry
-#: the unicode.
-_COMPONENT_ALIASES = {'pp': 'ϕϕ', 'phiphi': 'ϕϕ', 'ϕϕ': 'ϕϕ', 'ee': 'EE', 'EE': 'EE'}
+#: Component names, exactly as the release spells them: they key ``BPWF`` and ``s``, and are
+#: what its constructor accepts.
+_COMPONENTS = ('ϕϕ', 'EE')
 
 #: The transform the release applies to band powers before the gaussian: arctanh(x - offset).
 _TRANSFORM_OFFSET = 1.01
@@ -62,10 +62,10 @@ class SPT3G2yrMUSELikelihood(GaussianLikelihood):
 
     Parameters
     ----------
-    components : list, str, default=('pp', 'EE')
-        Which legs to use. ``'pp'`` (equivalently ``'phiphi'`` or ``'ϕϕ'``) selects the lensing
+    components : list, str, default=('ϕϕ', 'EE')
+        Which legs to use, named as the release names them: ``'ϕϕ'`` selects the lensing
         potential band powers, ``'EE'`` the delensed EE band powers. The chains reproduced by
-        ``CMB-SPA`` use ``'pp'`` alone. Components that are not selected are still marginalised
+        ``CMB-SPA`` use ``'ϕϕ'`` alone. Components that are not selected are still marginalised
         over by the release's covariance; selecting fewer legs changes which data enter, not
         whether the systematics are marginalised.
     cosmo : BasePrimordialCosmology, default=None
@@ -81,16 +81,15 @@ class SPT3G2yrMUSELikelihood(GaussianLikelihood):
     ellmin, ellmax = 1, 5000
     _zip_url = 'https://lambda.gsfc.nasa.gov/data/suborbital/SPT/muse_3g_like_march_2025.zip'
 
-    def __init__(self, components=('pp', 'EE'), cosmo=None, filename=None, params=None):
+    def __init__(self, components=_COMPONENTS, cosmo=None, filename=None, params=None):
         import muse3glike
 
         if isinstance(components, str):
             components = [components]
-        try:
-            components = [_COMPONENT_ALIASES[str(component)] for component in components]
-        except KeyError as exc:
-            raise ValueError(f'unknown component {exc.args[0]!r}; expected any of '
-                             f'{sorted(set(_COMPONENT_ALIASES))}') from exc
+        components = [str(component) for component in components]
+        unknown = [component for component in components if component not in _COMPONENTS]
+        if unknown:
+            raise ValueError(f'unknown component(s) {unknown}; expected any of {list(_COMPONENTS)}')
         if len(set(components)) != len(components):
             raise ValueError(f'repeated component in {components}')
         self.components = components
@@ -130,21 +129,17 @@ class SPT3G2yrMUSELikelihood(GaussianLikelihood):
             # Delensed EE: the unlensed spectrum, not the lensed one.
             self.cosmo.add_requirements({'harmonic.unlensed_cl': requirements})
 
-    def _theory_cl(self):
-        """C_ell for each selected leg over ell = 1 .. 5000, in the release's units."""
+    def __call__(self):
+        # C_ell for each selected leg over ell = 1 .. 5000, in the release's units.
         harmonic = self.cosmo.get_harmonic()
         sl = slice(self.ellmin, self.ellmax + 1)
         cl = {}
         if 'ϕϕ' in self.components:
-            # C_L^{phiphi} is dimensionless on both sides -- no temperature factor here.
+            # C_L^{ϕϕ} is dimensionless on both sides -- no temperature factor here.
             cl['ϕϕ'] = harmonic.lens_potential_cl(ellmax=self.ellmax)['pp'][sl]
         if 'EE' in self.components:
             unit = (self.T0_cmb * 1e6) ** 2
             cl['EE'] = unit * harmonic.unlensed_cl(ellmax=self.ellmax)['ee'][sl]
-        return cl
-
-    def __call__(self):
-        cl = self._theory_cl()
 
         flattheory, valid = [], True
         for name in self.components:

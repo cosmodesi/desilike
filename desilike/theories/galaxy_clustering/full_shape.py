@@ -31,7 +31,7 @@ import interpax
 from ...base import Calculator, get_params
 from cosmoprimo.emulators.tools.utils import cardinal_cubic_weights, lagrange_weights
 from ...parameter import Parameter, VariableCollection
-from ..primordial_cosmology import CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog
+from ..primordial_cosmology import CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog, _sigma_tophat
 from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
 from ...emulators.api import CalculatorEmulator, DERIVED
@@ -1883,7 +1883,37 @@ class FOLPSPTSpectrum2Poles(Calculator):
     rbao : float, default=104.
     A_full : bool, default=True
     remove_DeltaP : bool, default=False
+    nk : int, default=480
+        Points on folps' loop-table output grid, log-spaced over its own ``[0.001, 0.5]``.
+        folps' own default is 120; ``None`` leaves it there.
+
+        That grid sets the accuracy of everything downstream, because everything downstream
+        interpolates off it: ``get_rsd_pkmu`` samples it at ``(kap, muap)``, and an emulator
+        preconditioning in ``h`` resamples it again at ``k / s``.  At 120 points the BAO wiggles
+        get ~4 samples per period near :math:`k = 0.3`, so a cubic interpolation off it carries
+        a few :math:`10^{-3}`, and that error moves as the wiggles slide across the grid --
+        which makes it a function of ``h``, not a constant offset.
+
+        Measured (z = 0.8, ``h`` in [0.500, 0.900], everything else fiducial, ``nfftlog=256``),
+        max :math:`|\Delta P / P|` over the multipoles against a converged FOLPSD
+        (``nfftlog=512``, ``nk=960``), median over the scan and worst point: 2.6e-03 / 3.3e-02
+        at folps' 120, 3.2e-04 / 5.0e-03 at 240, 1.7e-04 / 3.6e-03 at 480.
+
+        120 -> 480 costs 18% of an evaluation (634 -> 748 ms, the Boltzmann call dominating),
+        but it multiplies an emulator's state by four.
+    nfftlog : int, default=256
+        Points on folps' internal FFTLog grid, fixed over ``[1e-7, 100]``.  folps' own default
+        is 128.  At 128 that is
+        :math:`\Delta \log k = 0.162`, which aliases the BAO wiggles: the loop columns then
+        carry a ~3% error oscillating in ``h`` with period :math:`\Delta \log h = 0.162`
+        (:math:`\Delta h \simeq 0.11` at ``h = 0.67``), since the wiggles sit at fixed physical
+        ``k`` while the grid is fixed in h/Mpc.  256 removes it -- worst loop column, deg-3
+        residual in ``h`` over [0.500, 0.900]: 3.3e-02 at 128, 3.9e-03 at 256, 4.0e-03 at 512.
     """
+    #: folps' own output grid, for a subclass whose ``__post_init__`` does not set one --
+    #: ``__call__`` reads it, so it cannot simply be absent.
+    _nk = None
+
 
     @classmethod
     def install(cls, installer):
@@ -1909,8 +1939,9 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, damping_method='tree+loop',
-                      use_GTNS=None, nfftlog=128, **kwargs):
+                      use_GTNS=None, nfftlog=256, nk=480, **kwargs):
         # Non-node setup only.
+        self._nk = None if nk is None else int(nk)
         self._kernels = str(kernels)
         self._rbao = float(rbao)
         self._A_full = bool(A_full)
@@ -1932,6 +1963,12 @@ class FOLPSPTSpectrum2Poles(Calculator):
                         'f0': self.template.f0}
         folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
             mmatrices=self._matrices, kernels=self._kernels, rbao=self._rbao, **cosmo_params)
+        if self._nk is not None:
+            # The output grid is free: the M22 matrices are contracted against `K**eta` per
+            # output k (folps' `precvec`), so they do not depend on it.  Only its density costs
+            # anything, and it buys the accuracy of every interpolation off the table -- see
+            # `nk` in the class docstring.
+            folps_nlps.kTout = np.geomspace(folps_nlps.kminout, folps_nlps.kmaxout, self._nk)
         table, table_now = folps_nlps.calculate_loop_table(
             k=self.template.k, pklin=self.template.pk_dd,
             pknow=self.template.pknow_dd, **cosmo_params)
@@ -2119,6 +2156,14 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
     ``__call__`` evaluates only what the bispectrum reads: ``folps.get_linear`` returns
     ``[k, pk_lin, pk_lin_now, fk]`` and explicitly does not need the one-loop table.
 
+    ``nk`` matters here for the same reason as on the power-spectrum pt -- those four rows are
+    interpolated onto folps' output grid and read off it again -- but ``nfftlog`` does not:
+    ``get_linear`` never contracts the FFTLog matrices, so it stays at folps' 128 rather than
+    paying for a build it discards.  Measured (z = 0.8, ``h`` in [0.500, 0.900], equilateral
+    ``k`` in [0.02, 0.20], B000 and B202) against ``nk=960``, median / worst
+    max :math:`|\Delta B / B|`: 3.5e-04 / 6.7e-04 at folps' 120, 7.5e-05 / 1.6e-04 at 240,
+    1.0e-05 / 3.1e-05 at 480.
+
     This exists for the emulator.  :meth:`combine_bias_terms_spectrum3_poles` uses exactly those
     four arrays, but on a :class:`FOLPSPTSpectrum2Poles` they are 4 of its 84 ``tree_flatten``
     children, so a Taylor emulator built over it expands the entire one-loop table — ~3.8 MB of
@@ -2149,10 +2194,11 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
     def __post_init__(self, k=None, template=None, ells=None, mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, model='FOLPSD', damping='lor',
                       precision=(8, 10, 10), renormalized=True, interpolation_method='linear',
-                      scaling=None, nfftlog=128, **kwargs):
+                      scaling=None, nfftlog=128, nk=480, **kwargs):
         # Non-node setup only.  Deliberately not the parent's: that builds a ProjectToPoles over
         # ``ells``, which this calculator never uses and which cannot even be constructed when
         # ``ells`` are bispectrum triplets.
+        self._nk = None if nk is None else int(nk)
         self._kernels = str(kernels)
         self._rbao = float(rbao)
         self._A_full = bool(A_full)
@@ -2166,6 +2212,8 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
                         'f0': self.template.f0}
         folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
             mmatrices=self._matrices, kernels=self._kernels, rbao=self._rbao, **cosmo_params)
+        if self._nk is not None:
+            folps_nlps.kTout = np.geomspace(folps_nlps.kminout, folps_nlps.kmaxout, self._nk)
         linear = folps_nlps.get_linear(
             k=self.template.k, pklin=self.template.pk_dd, pknow=self.template.pknow_dd, **cosmo_params)
         # Same four rows FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles builds from
@@ -4909,17 +4957,6 @@ def _compile_scalars(provider):
     return jitted
 
 
-def _sigma_tophat(k, pk, radius):
-    """Top-hat sigma_R from a linear pk on grid *k* (trapezoid in ln k).
-
-    Module level: it takes no state, and the base's `compute` calls it -- while it lived on
-    `FOLPSDEmulator` that worked only because no other subclass sets `precondition`.
-    """
-    x = k * radius
-    window = 3. * (jnp.sin(x) - x * jnp.cos(x)) / x**3
-    return jnp.sqrt(jnp.trapezoid(k**3 * pk * window**2 / (2. * np.pi**2), x=jnp.log(k)))
-
-
 class _ScaledEmulator(CalculatorEmulator):
     r"""Emulate a FOLPSD pt with the background scalars routed exactly.
 
@@ -4997,7 +5034,7 @@ class _ScaledEmulator(CalculatorEmulator):
 
         A saved emulator has no calculator to take one from, and the closed-form routing needs
         one -- the template passed here is exactly it.  Cloned, because the deployed pt is
-        constructed with that same object and compiling one calculator twice corrupts the
+        constructed with that same object and compiling one ScaledEmulatorcalculator twice corrupts the
         pure_callback layout.  An emulated provider travels in the state and wins over this.
         """
         template = kwargs.get('template')
@@ -5324,7 +5361,7 @@ class FOLPSDEmulator(_ScaledEmulator):
         emulator, h_fid = self, self._h_fid
         from desilike.theories.primordial_cosmology import find_conflicts
 
-        # whatever this pipeline calls h: `emulator_params` is keyed by ITS names
+        # whatever this pipeline calls h: `emulator_params` is keyed by its names
         h_name = find_conflicts('h', self.space.params)[0]
         powers = [self._nuisance_scale_powers.get(name, 0)
                   for name in self._nuisance_names]

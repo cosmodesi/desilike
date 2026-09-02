@@ -649,29 +649,6 @@ class BaseSampler(ABC):
         log_post, derived = self._posterior_logpdf_with_derived_one(sample)
         return log_post - log_prior, derived
 
-    def _get_start(self, size=1):
-        """Return a dict ``{name: array}`` sampled from each parameter's ref.
-
-        Parameters
-        ----------
-        size : int
-            Number of draws.  When 1 the batch axis is squeezed away.
-
-        Returns
-        -------
-        dict
-        """
-        key = jax.random.PRNGKey(int(np.random.default_rng().integers(2**32)))
-        start = {}
-        for param in self.varied_params:
-            if param.ref is not None and param.ref.is_proper():
-                subkey, key = jax.random.split(key)
-                value = np.asarray(param.ref.sample(subkey, shape=(size,) + param.shape))
-            else:
-                value = np.broadcast_to(np.asarray(param.value), (size,) + param.shape)
-            start[param.name] = value.squeeze(0) if size == 1 else value
-        return start
-
     def array_to_samples(self, samples, derived, **kwargs):
         """Convert parameter arrays to a :class:`~desilike.samples.MCSamples`.
 

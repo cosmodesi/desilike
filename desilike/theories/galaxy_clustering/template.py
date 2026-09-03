@@ -1496,7 +1496,7 @@ class ShapeFitTheory(BAOTheory):
         super().__call__()
         rd = self.cosmo.get_thermodynamics().rs_drag
         s = rd / self._rd_fid
-        kp = self._kp * s
+        kp = self._kp / s
         pknow = self.cosmo.get('fourier.pk_now', of='delta_cb', engine=self._with_now, z=self.z, k=self._k_pivot_grid)
         pk_prim = self.cosmo.get('primordial.pk', k=self._k_pivot_grid) * self._k_pivot_grid if self._n_varied else None
         self.m = self._log_slope(pknow, pk_prim=pk_prim, kp=kp)

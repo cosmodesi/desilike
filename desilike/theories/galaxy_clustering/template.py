@@ -1637,40 +1637,130 @@ class ShapeFitTheory(BAOTheory):
 # (measured: corrections <= 3e-3 over w0 + wa < -0.25 with order-2 residuals <= 1e-3,
 # claude_taylor_w0wa/check_scalar_corrections.py).
 
-def get_ref_scalars_from_cosmo(z, cosmo):
-    """Baseline background scalars (invE, DM, D, f) from cosmoprimo's DefaultBackground.
+def get_ref_scalars_from_cosmo(z, cosmo, nsteps=200, nodes=48):
+    r"""Baseline background scalars (invE, DM, D, f) at a single redshift.
 
-    The growth is taken from :meth:`DefaultBackground.growth_factor` / ``growth_rate``
-    EXPLICITLY, with ``mass='cb'``:
+    Evaluated at the one redshift asked for, nothing tabulated: cosmoprimo's
+    ``DefaultBackground`` would build two C2 cubic splines (banded solves over 201 and 119 knots)
+    and read them at a single z, rebuilt on every call because the caller clones a fresh
+    cosmology each time -- measured at 81% of this function and 15x its total cost.
 
-    - explicitly, because engines may override those methods with fitting formulae (the
-      eisenstein_hu Background uses Carroll-Press-Turner for D and an Omega_m-power law for
-      f, and its docstring notes it does not treat neutrinos) -- going through the engine
-      attribute would silently swap the growth physics underneath the corrections;
-    - ``mass='cb'`` (Omega_cdm + Omega_b), because the pipeline's f is the cdm+baryon
-      quantity sigma8_z(theta_cb) / sigma8_z(delta_cb); with ``mass='m'`` the massive
-      neutrinos enter the source term and the correction is 25x less flat (measured,
-      claude_taylor_w0wa/check_growth_species.py).
+    Three choices worth knowing:
 
-    ``growth_factor`` populates both cached interpolants, so ``growth_rate`` below is a
-    lookup rather than a second solve.
+    * the growth is early-time normalised, D ~ a in matter domination (``znorm=0.``).
+      Normalising by D(0) makes D a relative growth, and the c_D / c_DM corrections then have to
+      absorb the cosmology dependence of D(0) itself: their spread over the w0-wa box goes from
+      ~1e-3 to 12%.
+    * ``DM`` is the transverse distance, matching what ``qper`` is built from, since the
+      correction it anchors is ``qper / (analytic DM ratio)``.  Curvature enters as a series in
+      :math:`x^2` for :math:`\sinh(x)/x`, analytic at ``Omega_k = 0`` and needing no branch.
+    * massive neutrinos count as matter, :math:`(1 + z)^3`.  True at the redshifts used, not at
+      the start of the growth integration (z ~ 400, kT_nu ~ m), and that is the whole residual:
+      against the tabulated implementation ``invE``, ``DM`` and ``f`` agree to <1e-6 and ``D`` to
+      2.9e-3, or 3.6e-4 as the ratio to the fiducial, which is the only form the corrections use.
+
+    A preconditioner, not a truth, so a smooth shift is absorbed by the fitted correction.  What
+    would not be absorbed is numerator and denominator coming from different functions, which is
+    why :meth:`ScalingScalarsEmulator.set_ref_fiducial` recomputes its anchor rather than
+    trusting the stored one.
+
+    Parameters
+    ----------
+    z : float
+        Redshift.  Must be concrete: it sets the (static) integration grids.
+    cosmo : Cosmology
+        Read for its z = 0 density parameters only; no background is constructed.
+    nsteps : int, default=200
+        RK4 steps from ``ln a = -6`` to ``ln a = -ln(1 + z)``.
+    nodes : int, default=48
+        Gauss-Legendre nodes for the comoving distance.
+
+        Both defaults are converged: 200 -> 800 and 48 -> 96 leave every scalar unchanged to the
+        digit, so raising them only costs time (15x down to 6.8x).
     """
-    from cosmoprimo.cosmology import DefaultBackground
-    background = cosmo.get_background()
-    # znorm=0. keeps the EARLY-TIME normalisation of the ODE solution (D ~ a in matter
-    # domination).  The default (znorm=None) divides by D(z=0), which makes D a RELATIVE
-    # growth: the c_D / c_DM corrections then have to absorb the cosmology dependence of
-    # D(0) itself and their spread over the w0-wa box blows up from ~1e-3 to 12% (measured).
-    # sigma8(z) at fixed A_s tracks the absolute growth, so the baseline must too.
-    growth_d = DefaultBackground.growth_factor(background, z, mass='cb', znorm=0.)
-    return {'invE': 1. / background.efunc(z),
-            # TRANSVERSE, matching what `qper` is built from -- the correction it anchors is
-            # `qper / (analytic DM ratio)`, so a radial baseline would leave the difference in
-            # the correction for a non-flat fiducial, which is what the analytic core is for.
-            # Identical to the radial distance when the fiducial is flat.
-            'DM': background.comoving_transverse_distance(z),
-            'D': growth_d,
-            'f': DefaultBackground.growth_rate(background, z, mass='cb')}
+    from cosmoprimo import constants
+
+    if np.ndim(z) != 0:
+        raise ValueError('z must be a scalar, got shape {}'.format(np.shape(z)))
+
+    def total(name):
+        return jnp.sum(jnp.atleast_1d(jnp.asarray(cosmo[name])))
+
+    omega_cb = total('Omega_cdm') + total('Omega_b')
+    omega_m = omega_cb + total('Omega_ncdm')          # as matter, see above
+    omega_r = total('Omega_g') + total('Omega_ur')
+    omega_k, omega_de = total('Omega_k'), total('Omega_de')
+    w0, wa = total('w0_fld'), total('wa_fld')
+
+    def densities(redshift):
+        """Unnormalised sum(rho_i / rho_crit0), and its dark-energy part, at *redshift*."""
+        opz = 1. + redshift
+        dark = opz**(3. * (1. + w0 + wa)) * jnp.exp(-3. * wa * redshift / opz)
+        return omega_m * opz**3 + omega_r * opz**4 + omega_k * opz**2 + omega_de * dark, dark
+
+    # E(0) = 1 exactly, as cosmoprimo's is.  The sum at z = 0 is 1.4e-7 off unity here, because
+    # Omega_ncdm today is not exactly its matter-equivalent.
+    norm = densities(0.)[0]
+
+    def efunc2(redshift):
+        return densities(redshift)[0] / norm
+
+    gauss_nodes, gauss_weights = np.polynomial.legendre.leggauss(nodes)
+    hubble_distance = constants.c / 1e3 / 100.
+    chi = hubble_distance * jnp.sum(jnp.asarray(0.5 * z * gauss_weights)
+                                    / jnp.sqrt(efunc2(jnp.asarray(0.5 * z * (gauss_nodes + 1.)))))
+    curvature = omega_k * (chi / hubble_distance)**2
+    distance = chi * (1. + curvature / 6. + curvature**2 / 120. + curvature**3 / 5040.)
+
+    # The growth equation in eta = ln a, exactly as cosmoprimo writes it: y = (D, D') with
+    # y' = A y, A = [[0, 1], [3/2 Omega_cb, -2 - dlnH/dlna]], stepped with RK4.
+    # ln(a) grid.  It starts where cosmoprimo's does, so the initial condition D = D' = a
+    # (matter domination) is imposed at the same place, and ENDS at z, so there is no run to
+    # z = 0 and nothing to interpolate back.
+    eta_start = -6.
+    eta = np.linspace(eta_start, -np.log1p(z), nsteps + 1)
+    eta_prev, eta_next = eta[:-1], eta[1:]
+    step = jnp.asarray(eta_next - eta_prev)
+
+    def coefficients(eta_nodes):
+        redshift = np.exp(-eta_nodes) - 1.
+        summed, dark = densities(redshift)
+        opz = 1. + redshift
+        w_fld = w0 + redshift / opz * wa
+        # adotdot / (a H^2) = 1 + dlnH / dlna
+        acceleration = -0.5 * (1. - omega_k * opz**2 / summed + omega_r * opz**4 / summed
+                               + 3. * w_fld * omega_de * dark / summed)
+        return -1. - acceleration, 1.5 * omega_cb * opz**3 / summed
+
+    zeros, ones = jnp.zeros_like(step), jnp.ones_like(step)
+
+    def amatrix(coefficient_1, coefficient_2):
+        return jnp.stack([jnp.stack([zeros, ones], axis=-1),
+                          jnp.stack([coefficient_2, coefficient_1], axis=-1)], axis=-2)
+
+    identity = jnp.stack([jnp.stack([ones, zeros], axis=-1),
+                          jnp.stack([zeros, ones], axis=-1)], axis=-2)
+    amat_first = amatrix(*coefficients(eta_prev))
+    amat_mid = amatrix(*coefficients(0.5 * (eta_prev + eta_next)))
+    amat_last = amatrix(*coefficients(eta_next))
+    scale = step[..., None, None]
+    kmat1 = amat_first
+    kmat2 = amat_mid @ (identity + scale / 2. * kmat1)
+    kmat3 = amat_mid @ (identity + scale / 2. * kmat2)
+    kmat4 = amat_last @ (identity + scale * kmat3)
+    steps = identity + scale / 6. * (kmat1 + 2. * kmat2 + 2. * kmat3 + kmat4)
+
+    # Only the endpoint is wanted, so reduce pairwise (log depth) rather than scanning: a
+    # sequential scan over 200 steps is 200 tiny kernels, which is the cost this is avoiding.
+    while steps.shape[0] > 1:
+        if steps.shape[0] % 2:
+            steps = jnp.concatenate([steps, identity[:1]], axis=0)
+        steps = steps[1::2] @ steps[0::2]          # the later step multiplies on the left
+    start = np.exp(eta_start)
+    growth, growth_prime = steps[0] @ jnp.asarray([start, start])
+
+    return {'invE': 1. / jnp.sqrt(efunc2(z)), 'DM': distance,
+            'D': growth, 'f': growth_prime / growth}
 
 
 class ScalingScalars(Calculator):
@@ -1916,6 +2006,11 @@ class ScalingScalarsEmulator(CalculatorEmulator):
 
         Not per prediction: `inverse_transform` runs at every evaluation, and this is the
         cosmology its analytic core is anchored on.
+
+        ``ref_fid`` travels in the anchors and is used as stored: the corrections are ratios
+        against it, so numerator and denominator must come from the same
+        :func:`get_ref_scalars_from_cosmo`.  An emulator trained before a change to that
+        function must be retrained, not redeployed.
         """
         from cosmoprimo import Cosmology
 

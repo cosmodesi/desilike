@@ -625,6 +625,80 @@ def test_smc_covariance_proposal(likelihood, names):
 
 
 @pytest.mark.mpi_skip
+def test_proposal_support_and_non_finite(likelihood):
+    """The likelihood a kernel sees is finite or -inf, never nan and never +inf.
+
+    Both terms of ``log_posterior - log_proposal`` are -inf outside the prior box, and the
+    bare difference there is a nan -- which a kernel does not screen the way it screens an
+    impossible point. And a proposal whose support stopped a margin short of the hard bounds
+    made that sliver ``+inf``, infinitely attractive. Check the two corners directly, on the
+    pooled evaluator the kernel is actually handed.
+    """
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+    proposal = samplers.ProductProposal(samplers.GaussianProposal(
+        Covariance(np.diag([0.1**2, 0.3**2]), params=[params['a'].clone(value=0.4),
+                                                      params['b'].clone(value=0.6)])))
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42, proposal=proposal)
+
+    # Both parameters are limited to [-10, 10]; the proposal insets its DRAWS by 1e-7 of the
+    # width (2e-6 here) but must not inset its support.
+    edge = np.array([[-10. + 1e-9, 0.6]])
+    outside = np.array([[-10. - 1., 0.6]])
+    for point, name in [(edge, 'edge'), (outside, 'outside')]:
+        value = float(np.asarray(sampler.likelihood_logpdf(point))[0])
+        assert not np.isnan(value), f'{name}: likelihood is nan'
+        assert value < np.inf, f'{name}: likelihood is +inf'
+    assert np.isfinite(float(np.asarray(sampler.likelihood_logpdf(edge))[0]))
+    assert float(np.asarray(sampler.likelihood_logpdf(outside))[0]) == -np.inf
+
+
+@pytest.mark.mpi_skip
+def test_mixture_proposal(likelihood):
+    """A mixture adds its components' densities, and a prior component floors the result.
+
+    The floor is the point: it bounds ``log_posterior - log_proposal``, so a proposal placed
+    badly costs efficiency instead of returning the wrong dispersion.
+    """
+    from scipy.special import logsumexp
+    from desilike.samples import Covariance
+    params = {param.name: param for param in likelihood.params if not (param.derived or param.fixed)}
+    covariance = Covariance(np.diag([0.1**2, 0.3**2]), params=[params['a'].clone(value=0.4),
+                                                               params['b'].clone(value=0.6)])
+    gaussian = samplers.GaussianProposal(covariance)
+    weights = [0.9, 0.1]
+    mixture = samplers.MixtureProposal([gaussian, samplers.PriorProposal()], weights=weights)
+    sampler = samplers.Sampler(likelihood, kernel=samplers.SMC(nparticles=64), rng=42, proposal=mixture)
+
+    # The density is the weighted sum of the components', evaluated on their own terms.
+    reference = samplers.GaussianProposal(covariance)
+    reference.init(sampler.varied_params)
+    prior = samplers.PriorProposal()
+    prior.init(sampler.varied_params)
+    point = jnp.array([0.5, 0.2])
+    expected = logsumexp([np.log(weights[0]) + float(reference.logpdf(point)),
+                          np.log(weights[1]) + float(prior.logpdf(point))])
+    assert np.isclose(float(mixture.logpdf(point)), expected)
+
+    # Far from the Gaussian, the prior component is what holds the density up.
+    far = jnp.array([-8., 8.])
+    assert float(mixture.logpdf(far)) > float(reference.logpdf(far))
+    assert np.isfinite(float(mixture.logpdf(far)))
+
+    draws = mixture.rvs(200, np.random.default_rng(42))
+    assert draws.shape == (200, 2)
+    limits = mixture.limits()
+    assert np.all((draws >= limits[:, 0]) & (draws <= limits[:, 1]))
+
+    # A mixture has no ppf, and every component must cover every parameter.
+    assert not hasattr(mixture, 'ppf')
+    with pytest.raises(ValueError, match='every factor'):
+        partial = samplers.GaussianProposal(Covariance(np.diag([0.1**2]), params=[params['a'].clone(value=0.4)]))
+        samplers.Sampler(likelihood, kernel=samplers.SMC(), rng=42,
+                         proposal=samplers.MixtureProposal([partial, samplers.PriorProposal()]))
+
+
+@pytest.mark.mpi_skip
 def test_proposal_errors(likelihood):
     """Malformed proposals are rejected where they are built, not deep inside a run."""
     from desilike.samples import Covariance

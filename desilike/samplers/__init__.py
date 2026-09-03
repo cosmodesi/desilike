@@ -15,7 +15,7 @@ from .grid import Grid
 from .qmc import QMC
 from .importance import Importance
 from .proposals import (BaseProposal, PriorProposal, SamplesProposal, GaussianProposal,
-                        ProductProposal)
+                        ProductProposal, MixtureProposal)
 
 __all__ = [
     'Sampler',
@@ -51,4 +51,5 @@ __all__ = [
     'SamplesProposal',
     'GaussianProposal',
     'ProductProposal',
+    'MixtureProposal',
 ]

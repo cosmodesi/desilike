@@ -114,7 +114,6 @@ class SMC(PopulationKernel):
         self._pool = context['pool']
         self._ndim = context['ndim']
         self._has_proposal = context.get('proposal', None) is not None
-        self._output_dir = context.get('output_dir')
 
     # ── pooled evaluation ─────────────────────────────────────────────────────
 

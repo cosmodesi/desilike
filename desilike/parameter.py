@@ -4,6 +4,8 @@ import re
 import copy
 import json
 import threading
+from types import MappingProxyType
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -532,8 +534,19 @@ class ParameterPrior:
             raise ValueError(f'Prior limits ({lo}, {hi}): lower >= upper')
         self.limits = (lo, hi)
         self.shape = tuple(shape) if shape is not None else None
-        self.attrs = dict(attrs)
+        # Read-only: `__setattr__` already refuses to rebind attributes, and this closes
+        # the remaining hole -- a mutable dict reachable through a frozen object. With it
+        # the instance is immutable in full, which is what lets `copy` return self.
+        self.attrs = MappingProxyType(dict(attrs))
         self._setup()
+        # The offset that makes logpdf(center) = 0 is part of the prior's definition, so it is
+        # computed here, once. It was lazy while `Parameter.clone` rebuilt the prior on every
+        # parameter copy -- 37 constructions per emcee step, 83% of the step; parameters are
+        # immutable now (`Parameter.copy` returns self) and a run rebuilds ~0.2 priors per step.
+        # `ensure_compile_time_eval` so a prior built inside a jit trace still evaluates the
+        # constant eagerly instead of staging it out, where `float()` would raise.
+        with jax.ensure_compile_time_eval():
+            self._logpdf_center = float(self._logpdf_fn(jnp.asarray(self._center)))
         object.__setattr__(self, '_frozen', True)
 
     def __setattr__(self, name, value):
@@ -572,7 +585,6 @@ class ParameterPrior:
                 self._ppf_fn = _ppf
                 self._center = (lo + hi) / 2.
                 self._std = (hi - lo) / float(np.sqrt(12.))
-            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── norm (with optional truncation via truncnorm) ─────────────────────
@@ -608,7 +620,6 @@ class ParameterPrior:
             self._logpdf_fn = _logpdf
             self._sample_fn = _sample
             self._ppf_fn = _ppf
-            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── other dists via jax.scipy.stats ──────────────────────────────────
@@ -665,7 +676,6 @@ class ParameterPrior:
             self._std = s
         except Exception:
             self._center, self._std = 0., None
-        self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
 
     def logpdf(self, x):
         """Return log PDF relative to center: logpdf(x) - logpdf(center) ≤ 0.
@@ -676,7 +686,7 @@ class ParameterPrior:
         This matches the behaviour of the backup desilike ``remove_zerolag=True``
         convention.
         """
-        return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center_val
+        return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center
 
     def sample(self, key=None, shape=None):
         """Draw samples using JAX PRNG key; raises if prior is improper.
@@ -781,8 +791,13 @@ class ParameterPrior:
         return ParameterPrior(**state)
 
     def copy(self):
-        return self.clone()
-
+        # Immutable in full (frozen attributes, read-only `attrs`), so a copy needs no state
+        # of its own: a distinct object sharing this one's instance dict. `_setup` and the
+        # centering constant -- the whole cost of a construction -- are shared rather than
+        # recomputed. Samplers copy parameters freely.
+        new = object.__new__(self.__class__)
+        object.__setattr__(new, '__dict__', self.__dict__)
+        return new
 
 
 class ParameterFiniteDifference:
@@ -804,7 +819,7 @@ class ParameterFiniteDifference:
         Preferred expansion anchor (transformed units when ``transform`` is set); used by
         the default fit center (desilike_bak's ``param.delta`` semantics).
     limits : (float, float), optional
-        Chebyshev COLLOCATION range, in PARAMETER units (mapped through ``transform``
+        Range, in parameter units (mapped through ``transform``
         internally): the order-n stencil then uses n + 1 Chebyshev-Lobatto nodes spanning
         this range, with every derivative taken from the full node set -- the resulting
         order-n Taylor is identically the degree-n Chebyshev interpolant over the range
@@ -828,6 +843,12 @@ class ParameterFiniteDifference:
         self.transform = str(transform) if transform is not None else None
         self.center = float(center) if center is not None else None
         self.limits = tuple(float(value) for value in limits) if limits is not None else None
+        object.__setattr__(self, '_frozen', True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, '_frozen', False):
+            raise AttributeError(f'{self.__class__.__name__} is immutable; use clone() to get a modified copy')
+        object.__setattr__(self, name, value)
 
     def __getstate__(self):
         return {'eps': list(self.eps) if isinstance(self.eps, tuple) else self.eps,
@@ -854,7 +875,10 @@ class ParameterFiniteDifference:
         return ParameterFiniteDifference(**state)
 
     def copy(self):
-        return self.clone()
+        # Immutable, like ParameterPrior: a distinct object over the same instance dict.
+        new = object.__new__(self.__class__)
+        object.__setattr__(new, '__dict__', self.__dict__)
+        return new
 
 
 class Parameter(Variable):
@@ -1088,9 +1112,8 @@ class Parameter(Variable):
         new = object.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         new.depends = dict(self.depends)
-        new.prior = self.prior.copy()
-        new.ref = self.ref.copy()
-        new._fd = self._fd.copy()
+        # `prior`, `ref` and `_fd` are immutable, so the references `__dict__.update` already
+        # installed ARE the copies: re-assigning `x.copy()` over them was a no-op with a cost.
         return new
 
     def __getstate__(self, to_file=False):

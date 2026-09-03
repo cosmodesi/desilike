@@ -96,7 +96,7 @@ def _emulate(theory, inner_pt=None):
     from desilike.emulators import Emulator, Space
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = Emulator(inner_pt, Space(limits=_fd_box(inner_pt)))
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
     emu.train(budget=1, verbose=False)
     replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)

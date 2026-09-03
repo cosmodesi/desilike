@@ -16,6 +16,9 @@ Three adapters, composable:
 - :class:`GaussianProposal` -- a multivariate Gaussian truncated to the hard prior box,
   typically fitted to a marginal of an existing chain and inflated.
 - :class:`ProductProposal` -- a product of factors over disjoint blocks of parameters.
+- :class:`MixtureProposal` -- a weighted mixture over the same parameters. With a prior
+  component it puts a floor under the density, which bounds ``log_posterior - log_proposal``
+  and is what makes a badly centred proposal harmless.
 
 All three expose ``logpdf(x)`` on a flat vector in original parameter space (JAX-traceable)
 and ``rvs(size, rng)``; :class:`GaussianProposal` and products of Gaussians also expose
@@ -113,6 +116,7 @@ class PriorProposal(BaseProposal):
         cumsize = _cumsize_params(self.params)
         return jnp.concatenate([jnp.atleast_1d(param.prior.ppf(u[cumsize[i]:cumsize[i + 1]]))
                                 for i, param in enumerate(self.params)])
+
 
 
 class SamplesProposal(BaseProposal):
@@ -262,18 +266,23 @@ class GaussianProposal(BaseProposal):
         # The Gaussian normalization is known, so keep it: it is what makes the evidence
         # returned by a bridge from this proposal the actual log Z, not log Z up to a constant.
         self._log_norm = float(0.5 * self.ndim * np.log(2. * np.pi) + np.sum(np.log(np.diag(cholesky))))
-        # Keep the sampler strictly inside the support: a point exactly on the edge is
-        # turned into a NaN by the logit rescalings some kernels apply to bounded dimensions.
+        # Two boxes, and the difference between them matters. DRAWS are inset by a margin,
+        # because a point exactly on the edge is turned into a nan by the logit rescalings some
+        # kernels apply to bounded dimensions. The SUPPORT is the hard prior box itself: inset
+        # it too and the proposal is zero on a sliver where the posterior is not, which makes
+        # `log_posterior - log_proposal` there `+inf` (see `_logp_difference`).
         limits = self.limits()
         width = limits[:, 1] - limits[:, 0]
         margin = 1e-7 * np.where(np.isfinite(width), width, 1.)
-        self._low = np.where(np.isfinite(limits[:, 0]), limits[:, 0] + margin, -np.inf)
-        self._high = np.where(np.isfinite(limits[:, 1]), limits[:, 1] - margin, np.inf)
+        self._support_low = np.where(np.isfinite(limits[:, 0]), limits[:, 0], -np.inf)
+        self._support_high = np.where(np.isfinite(limits[:, 1]), limits[:, 1], np.inf)
+        self._low = self._support_low + np.where(np.isfinite(self._support_low), margin, 0.)
+        self._high = self._support_high - np.where(np.isfinite(self._support_high), margin, 0.)
 
     def logpdf(self, x):
         diff = x - self._mean
         log_p = -0.5 * (diff @ self._precision @ diff) - self._log_norm
-        inside = jnp.all((x >= jnp.asarray(self._low)) & (x <= jnp.asarray(self._high)))
+        inside = jnp.all((x >= jnp.asarray(self._support_low)) & (x <= jnp.asarray(self._support_high)))
         return jnp.where(inside, log_p, -jnp.inf)
 
     def ppf(self, u):
@@ -380,3 +389,85 @@ class ProductProposal(BaseProposal):
         for factor, index in self._blocks:
             result[:, index] = factor.rvs(size, rng)
         return result
+
+
+class MixtureProposal(BaseProposal):
+    """A weighted mixture of proposals over the SAME parameters -- insurance, not a shape.
+
+    Where :class:`ProductProposal` splits the parameters between factors, a mixture keeps every
+    factor over all of them and adds their densities. Its point is the floor: with a prior
+    factor at weight *w*, the proposal density is never below ``w`` times the prior anywhere the
+    prior allows, so ``log_posterior - log_proposal`` is bounded from above.
+
+    That bound is what makes a badly centred proposal harmless. A proposal does not bias the
+    target -- the target is the exact posterior for any of them -- but where the proposal has
+    almost no mass and the posterior has plenty, the ratio explodes, a handful of particles take
+    all the weight, and the dispersion that comes back is the one those few particles happen to
+    carry. Measured on the analytic test posterior, a Gaussian at the posterior's own width but
+    centred 1 sigma off returned sigma 0.969 +- 0.019 of the truth, against 0.998 +- 0.006 when
+    centred; inflating instead does not fix it, because width is not what went wrong.
+
+    So mix in the prior and stop having to know the centre:
+
+    >>> MixtureProposal([GaussianProposal(covariance), PriorProposal()], weights=[0.9, 0.1])
+
+    The prior factor's density is unnormalized, as every desilike prior is, so *weights* set the
+    mixture only up to that constant and the evidence a bridge returns is offset by the log of
+    the mixture's total mass. Neither affects the posterior.
+
+    A mixture has no closed-form inverse CDF, so it exposes :meth:`rvs` and no ``ppf``: kernels
+    that sample the unit cube (nested samplers) cannot use one, and say so.
+    """
+
+    def __init__(self, factors, weights=None):
+        """
+        Parameters
+        ----------
+        factors : sequence of BaseProposal
+            Mixture components, each covering all the parameters (a
+            :class:`PriorProposal` covers whatever it is handed, which is why it is the natural
+            defensive component). A sequence rather than varargs, so that it pairs positionally
+            with *weights*: the two are read together, and one of them being a list while the
+            other was spread out invited getting their order wrong.
+        weights : sequence of float, optional
+            Mixture weights, normalized here. Defaults to equal weights.
+        """
+        if isinstance(factors, BaseProposal):
+            raise TypeError('MixtureProposal takes a SEQUENCE of factors, not one per argument: '
+                            'MixtureProposal([a, b], weights=[0.9, 0.1]).')
+        factors = list(factors)
+        if not factors:
+            raise ValueError('a mixture needs at least one factor.')
+        self.factors = factors
+        if weights is None:
+            weights = np.ones(len(self.factors))
+        weights = np.asarray(weights, dtype='f8')
+        if weights.shape != (len(self.factors),):
+            raise ValueError(f'got {weights.size} weights for {len(self.factors)} factors.')
+        if np.any(weights < 0.) or not np.any(weights > 0.):
+            raise ValueError('mixture weights must be non-negative and not all zero.')
+        self.weights = weights / weights.sum()
+
+    def init(self, params):
+        super().init(params)
+        for factor in self.factors:
+            factor.init(self.params)
+            ndim = getattr(factor, 'ndim', self.ndim)
+            if ndim != self.ndim:
+                raise ValueError(f'mixture factor {type(factor).__name__} covers {ndim} of the '
+                                 f'{self.ndim} dimensions; every factor must cover them all.')
+        self._log_weights = jnp.asarray(np.log(self.weights))
+
+    def logpdf(self, x):
+        # logsumexp, so a factor at -inf (outside its own support) drops out instead of taking
+        # the whole mixture with it -- which is the entire point of a defensive component.
+        terms = jnp.stack([log_weight + factor.logpdf(x)
+                           for log_weight, factor in zip(self._log_weights, self.factors)])
+        return jax.scipy.special.logsumexp(terms)
+
+    def rvs(self, size, rng):
+        counts = rng.multinomial(size, self.weights)
+        draws = [factor.rvs(int(count), rng) for factor, count in zip(self.factors, counts) if count]
+        draws = np.concatenate(draws, axis=0)
+        rng.shuffle(draws, axis=0)
+        return draws

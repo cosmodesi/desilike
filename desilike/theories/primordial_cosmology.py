@@ -846,6 +846,22 @@ _PACKAGED_EMULATORS = {
                  'fourier.pk_now.delta_cb.delta_cb', 'fourier.pk_now.delta_m.delta_m'],
         # Linear-pk networks consume (z, H0, ombh2, omch2, mnu, w0, wa); logA / n_s enter
         # analytically through the postprocessing, hence no range on them here.
+        # Verified against the artifact's own `inminmax.npy` (identical for Pk_lin_mm and
+        # Pk_lin_cb, 7 rows in network-input order); the values below round each edge OUTWARD
+        # by at most 8e-5 relative:
+        #   z          [1.0000e-05,  4.99999    ]   <- not a `ranges` entry: the z grid is the
+        #                                             emulator's own axis, not a parameter
+        #   H0         [50.000080  , 89.99992   ]   -> h [0.5000008, 0.8999992]
+        #   omega_b    [ 0.02000001,  0.02499999]
+        #   omega_cdm  [ 0.08000020,  0.1799998 ]
+        #   m_ncdm     [ 1.0000e-06,  0.499997  ]
+        #   w0_fld     [-2.999993  ,  0.499993  ]
+        #   wa_fld     [-2.999970  ,  1.999990  ]
+        # logA and n_s carry NO range here at all -- `preprocessing.py` in the artifact is
+        # `drop_primordial_parameters`, which slices them off before the network sees anything.
+        # So the n_s / logA edges of any box built from ACECosmology.training_ranges('ace') come
+        # entirely from 'camb_lcdm' below, an emulator a full-shape fit never loads -- which is
+        # what `section=` is for: name the sections a run consumes and those edges do not apply.
         ranges={'H0': (50., 90.), 'omega_b': (0.02, 0.025), 'omega_cdm': (0.08, 0.18),
                 'm_ncdm': (0., 0.5), 'w0_fld': (-3., 0.5), 'wa_fld': (-3., 2.)},
     ),
@@ -1151,7 +1167,7 @@ class ACECosmology(PrimordialCosmology):
         return params
 
     @classmethod
-    def training_ranges(cls, engine='ace', base_dir=None, basis='cosmo'):
+    def training_ranges(cls, engine='ace', base_dir=None, basis='cosmo', section=None):
         r"""Return the training ranges of the emulators selected by *engine*.
 
         These are the ranges enforced by :meth:`__call__`'s out-of-range guard: inputs are
@@ -1170,6 +1186,17 @@ class ACECosmology(PrimordialCosmology):
             ``'cosmo'``: desilike cosmological parameter names (the ``'H0'`` range is
             reported as ``'h'``, scaled by 1/100).  ``'emulator'``: the networks' native
             input names (``'H0'`` as such).
+        section : str or list, default=None
+            Which sections to intersect over: ``'harmonic'``, ``'fourier'``, ``'background'``,
+            or a list of them.  ``None`` takes all of them, which is what the out-of-range guard
+            enforces on a cosmology built with every section.
+
+            Ask for a subset when only part of the cosmology is consumed, because the sections
+            do not agree and the intersection is the tightest of them.  A full-shape fit reads
+            the fourier and background sections and never evaluates the harmonic one, yet with
+            ``engine='ace'`` it inherits ``camb_lcdm``'s logA (2.5, 3.5) and n_s (0.88, 1.05)
+            against the (2.0, 3.7) and (0.8, 1.1) the other two allow -- measured on LRG3
+            w0waCDM, that clipped the posterior at 2.1 to 2.3 sigma on the low side of both.
 
         Returns
         -------
@@ -1180,7 +1207,13 @@ class ACECosmology(PrimordialCosmology):
             raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
         base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
         if isinstance(engine, str):
-            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section: engine for section in ['harmonic', 'fourier', 'background']}
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section_: engine for section_ in ['harmonic', 'fourier', 'background']}
+        if section is not None:
+            sections = [section] if isinstance(section, str) else list(section)
+            unknown = [name for name in sections if name not in engine]
+            if unknown:
+                raise ValueError(f'unknown section(s) {unknown}; engine has {sorted(engine)}')
+            engine = {name: engine[name] for name in sections}
         training_ranges = {}
         for engine_name in set(engine.values()):
             if engine_name is None:
@@ -1201,7 +1234,7 @@ class ACECosmology(PrimordialCosmology):
         return training_ranges
 
     @classmethod
-    def truncate_priors(cls, params, engine='ace', base_dir=None):
+    def truncate_priors(cls, params, engine='ace', base_dir=None, section=None):
         r"""Intersect each parameter's prior in *params* with the emulators' training ranges.
 
         Outside the training ranges (see :meth:`training_ranges`) :meth:`__call__` NaN-masks
@@ -1219,6 +1252,10 @@ class ACECosmology(PrimordialCosmology):
             Same as :meth:`__post_init__`'s *engine*.
         base_dir : str, Path, optional
             Same as :meth:`__post_init__`'s *base_dir*.
+        section : str or list, default=None
+            Passed to :meth:`training_ranges`: which sections the ranges come from.  Name the
+            ones a run actually consumes, or the tightest section truncates the priors of a
+            calculator that never evaluates it.
 
         Returns
         -------
@@ -1226,7 +1263,8 @@ class ACECosmology(PrimordialCosmology):
             *params*, with each prior's limits intersected with the training ranges.
         """
         from ..parameter import truncate_priors as truncate_priors_to_ranges
-        return truncate_priors_to_ranges(params, cls.training_ranges(engine=engine, base_dir=base_dir, basis='cosmo'))
+        return truncate_priors_to_ranges(params, cls.training_ranges(engine=engine, base_dir=base_dir,
+                                                                     basis='cosmo', section=section))
 
     def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', background_engine='cosmoprimo', **kwargs):
         # Which library integrates the background sector; see _ace_background for why the

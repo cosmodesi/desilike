@@ -67,6 +67,8 @@ class Nautilus(PopulationKernel):
 
         if self._pool.main:
             if not self._initialized:
+                if self._output_dir is not None:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)  # holds nautilus.h5
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'nautilus',
                     prior=self._prior_ppf, likelihood=self._likelihood_logpdf_with_derived,

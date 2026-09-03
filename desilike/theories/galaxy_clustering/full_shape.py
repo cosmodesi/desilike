@@ -1899,22 +1899,21 @@ class FOLPSPTSpectrum2Poles(Calculator):
         (``nfftlog=512``, ``nk=960``), median over the scan and worst point: 2.6e-03 / 3.3e-02
         at folps' 120, 3.2e-04 / 5.0e-03 at 240, 1.7e-04 / 3.6e-03 at 480.
 
-        120 -> 480 costs 18% of an evaluation (634 -> 748 ms, the Boltzmann call dominating),
-        but it multiplies an emulator's state by four.
+        Cost, on an uncontended node (best of 3 x 10 calls): 567 ms at 120, 594 at 480, 575 at
+        960 -- inside the ~5% run-to-run scatter, so the exact path is Boltzmann- and
+        dispatch-bound and ``nk`` is effectively free there.  (An earlier 634 -> 748 ms, quoted
+        here as 18%, was a shared node; it is contention, not ``nk``.)  What it does cost is
+        downstream: the bias assembly, which interpolates the table onto ``(kap, muap)``, goes
+        64.8 -> 69.9 ms, and an emulator's state is multiplied by four.
     nfftlog : int, default=256
         Points on folps' internal FFTLog grid, fixed over ``[1e-7, 100]``.  folps' own default
-        is 128.  At 128 that is
-        :math:`\Delta \log k = 0.162`, which aliases the BAO wiggles: the loop columns then
-        carry a ~3% error oscillating in ``h`` with period :math:`\Delta \log h = 0.162`
-        (:math:`\Delta h \simeq 0.11` at ``h = 0.67``), since the wiggles sit at fixed physical
-        ``k`` while the grid is fixed in h/Mpc.  256 removes it -- worst loop column, deg-3
-        residual in ``h`` over [0.500, 0.900]: 3.3e-02 at 128, 3.9e-03 at 256, 4.0e-03 at 512.
+        is 128, i.e. :math:`\Delta \log k = 0.162`, which aliases the BAO wiggles: the loop
+        columns then carry a ~3% error oscillating in ``h`` with period
+        :math:`\Delta \log h = 0.162` (:math:`\Delta h \simeq 0.11` at ``h = 0.67``), since the
+        wiggles sit at fixed physical ``k`` while the grid is fixed in h/Mpc.  256 removes it --
+        worst loop column, deg-3 residual in ``h`` over [0.500, 0.900]: 3.3e-02 at 128,
+        3.9e-03 at 256, 4.0e-03 at 512.
     """
-    #: folps' own output grid, for a subclass whose ``__post_init__`` does not set one --
-    #: ``__call__`` reads it, so it cannot simply be absent.
-    _nk = None
-
-
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/FolpsD')
@@ -5034,7 +5033,7 @@ class _ScaledEmulator(CalculatorEmulator):
 
         A saved emulator has no calculator to take one from, and the closed-form routing needs
         one -- the template passed here is exactly it.  Cloned, because the deployed pt is
-        constructed with that same object and compiling one ScaledEmulatorcalculator twice corrupts the
+        constructed with that same object and compiling one calculator twice corrupts the
         pure_callback layout.  An emulated provider travels in the state and wins over this.
         """
         template = kwargs.get('template')

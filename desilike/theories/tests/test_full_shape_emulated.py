@@ -69,7 +69,7 @@ def _emulate(theory, inner_pt=None):
     """Emulate ``inner_pt`` (default: ``theory.pt``) in-place; return compiled pipeline."""
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = Emulator(inner_pt, Space(limits=_fd_box(inner_pt)))
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
     emu.train(budget=_EMU_ORDER)
     replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)

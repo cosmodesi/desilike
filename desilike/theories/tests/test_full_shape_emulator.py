@@ -48,7 +48,7 @@ def emulators():
     built = {}
     for label, cls in [('plain', CalculatorEmulator), ('folpsd', FOLPSDEmulator)]:
         pipeline = theory()
-        emulator = Emulator(pipeline.pt, Space(limits=LIMITS), cls=cls)
+        emulator = Emulator(pipeline.pt, Space(bounds=LIMITS), cls=cls)
         emulator.train(budget=1)
         swapped = theory()
         replace(swapped, swapped.pt, emulator.to_calculator())
@@ -147,7 +147,7 @@ def test_the_routing_applies_with_nothing_frozen():
     max|dP/P| 2.8e-03, against 3.1e-03 for the plain emulator.  What frozen parameters buy on top
     of that is their dimension off the grid, and exactness instead of an interpolation.
     """
-    emulator = Emulator(theory().pt, Space(limits={'h': (0.66, 0.70)}), cls=FOLPSDEmulator)
+    emulator = Emulator(theory().pt, Space(bounds={'h': (0.66, 0.70)}), cls=FOLPSDEmulator)
     assert emulator.params == ['h'] and emulator.exact_params == []
 
 
@@ -160,7 +160,7 @@ def test_the_theory_declares_its_own_emulator():
     # of the class alone
     assert pt.get_emulator_cls() is FOLPSDEmulator
 
-    space = Space(limits={'h': (0.66, 0.70), 'w0_fld': (-1.1, -0.9)})
+    space = Space(bounds={'h': (0.66, 0.70), 'w0_fld': (-1.1, -0.9)})
     assert isinstance(Emulator(pt, space), FOLPSDEmulator)
     assert Emulator(pt, space).exact_params == ['w0_fld']
     # explicit still wins, including to force the generic one
@@ -200,7 +200,7 @@ def test_every_routing_predicts(label):
         pytest.importorskip('fkptjax')
     make = {'3poles': FOLPSPTSpectrum3Poles, 'fkpt': FKPTJAXPTSpectrum2Poles}[label]
     pt = make(template=template())
-    emulator = Emulator(pt, Space(limits=LIMITS))
+    emulator = Emulator(pt, Space(bounds=LIMITS))
     assert type(emulator) is not CalculatorEmulator, 'the pt should declare its own routing'
     emulator.train(budget=0)
 
@@ -233,7 +233,7 @@ def test_the_scalar_provider_is_emulated_automatically(tmp_path):
     from cosmoprimo.emulators.tools import Emulator as Template
 
     pt = theory().pt
-    emulator = Emulator(pt, Space(limits=LIMITS))
+    emulator = Emulator(pt, Space(bounds=LIMITS))
     emulator.train(budget=0, scalars_budget=1)
     assert emulator._state_scalars is not None, 'no provider was trained'
 
@@ -254,7 +254,7 @@ def test_a_supplied_provider_is_used_as_is():
 
     pt = theory().pt
     provider = ScalingScalars(z=Z)
-    emulator = Emulator(pt, Space(limits=LIMITS), scalars=provider)
+    emulator = Emulator(pt, Space(bounds=LIMITS), scalars=provider)
     emulator.train(budget=0)
     assert emulator._state_scalars is None, 'a supplied provider must not be re-fitted'
     assert emulator.input_scalars is provider
@@ -279,7 +279,7 @@ SHAPEFIT_LIMITS = {'qpar': (0.95, 1.05), 'qper': (0.95, 1.05), 'df': (0.85, 1.15
 def test_a_shapefit_template_routes_its_own_parameters():
     """`(qpar, qper, df, dA)` reach the tables only through the background scalars, so they are
     routed and `dm` is the only expanded parameter -- no cosmology anywhere."""
-    emulator = Emulator(shapefit_theory().pt, Space(limits=SHAPEFIT_LIMITS))
+    emulator = Emulator(shapefit_theory().pt, Space(bounds=SHAPEFIT_LIMITS))
     assert type(emulator) is FOLPSDEmulator
     assert emulator.params == ['dm']
     assert sorted(emulator.exact_params) == ['dA', 'df', 'qpar', 'qper']
@@ -296,7 +296,7 @@ def test_the_shapefit_routing_is_exact():
 
     rms(diff)/rms(ref), not np.allclose: its default atol=1e-8 passes on anything near zero.
     """
-    space = Space(limits=SHAPEFIT_LIMITS)
+    space = Space(bounds=SHAPEFIT_LIMITS)
     emulator = Emulator(shapefit_theory().pt, space)
     emulator.train(budget=0)
     emulated = shapefit_theory()
@@ -325,7 +325,7 @@ def test_a_template_that_routes_everything_says_so():
 
     pt = FOLPSTracerSpectrum2Poles(template=BAOSpectrum2Template(z=Z)).pt
     with pytest.raises(ValueError, match='routes every parameter'):
-        Emulator(pt, Space(limits={'qpar': (0.98, 1.02), 'qper': (0.98, 1.02)}))
+        Emulator(pt, Space(bounds={'qpar': (0.98, 1.02), 'qper': (0.98, 1.02)}))
 
 
 
@@ -340,7 +340,7 @@ def test_a_saved_emulator_can_be_deployed(tmp_path):
     from cosmoprimo.emulators.tools import Emulator as Template
     from desilike.theories.galaxy_clustering import ShapeFitSpectrum2Template
 
-    space = Space(limits=SHAPEFIT_LIMITS)
+    space = Space(bounds=SHAPEFIT_LIMITS)
     emulator = Emulator(shapefit_theory().pt, space)
     emulator.train(budget=0)
     point = dict(space.center, qpar=1.02, df=1.05)
@@ -403,7 +403,7 @@ def test_a_different_parameter_basis_is_routed_the_same():
     """
     from desilike.theories.primordial_cosmology import find_conflicts
 
-    emulator = Emulator(h0_theory().pt, Space(limits=H0_LIMITS))
+    emulator = Emulator(h0_theory().pt, Space(bounds=H0_LIMITS))
     assert type(emulator) is FOLPSDEmulator
     # the QUANTITY is preconditioned -- `precondition` stays in canonical names, and the
     # pipeline's own name for it is resolved where the parameter is actually read

@@ -36,7 +36,7 @@ setup_logging()
 #     space = Space(mean=best_fit, covariance=fisher)    # good
 CENTRE = {'h': 0.6736, 'omega_cdm': 0.1200, 'logA': 3.044}
 SIGMA = {'h': 0.006, 'omega_cdm': 0.0012, 'logA': 0.014}
-space = Space(limits={name: (CENTRE[name] - 3. * SIGMA[name], CENTRE[name] + 3. * SIGMA[name])
+space = Space(bounds={name: (CENTRE[name] - 3. * SIGMA[name], CENTRE[name] + 3. * SIGMA[name])
                       for name in CENTRE},
               # per-axis resolution: a different knob from `budget`. The level sets one axis's
               # own error; the budget buys only the interaction terms. Measured -- raising one

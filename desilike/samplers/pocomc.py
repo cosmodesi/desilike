@@ -208,6 +208,11 @@ class PocoMC(PopulationKernel):
 
         if self._pool.main:
             if self._sampler is None:
+                if self._output_dir is not None:
+                    # `pmc_*.state` after every step, read back to resume, so the directory has
+                    # to exist before the sampler is built. Made here rather than by the sampler
+                    # that owns the run, so a kernel that checkpoints nothing leaves none behind.
+                    self._output_dir.mkdir(parents=True, exist_ok=True)
                 prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_bounds, self._ndim, self._rng)
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'pocoMC',

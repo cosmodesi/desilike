@@ -84,6 +84,22 @@ def _flat_to_dict(sample, varied_params):
     return result
 
 
+def _logp_difference(log_post, log_prior):
+    """Return ``log_post - log_prior``, with every non-finite outcome mapped to ``-inf``.
+
+    The subtraction has two corners where the bare difference is not a log-density. Both
+    terms are ``-inf`` outside the prior box (or outside the proposal support, when one
+    replaces it), and ``-inf - -inf`` is a nan, which no kernel screens the way it screens
+    an impossible point. And where a proposal support stops just inside the posterior --
+    any truncated proposal keeping a margin off the hard bounds -- the difference is
+    ``+inf``, which would make that sliver infinitely attractive. A kernel adds the beta = 0
+    density back on (``log_prior + beta * log_likelihood``), so returning ``-inf`` here is
+    what rejects the point instead of poisoning the population with a nan.
+    """
+    difference = log_post - log_prior
+    return jnp.where(jnp.isfinite(difference), difference, -jnp.inf)
+
+
 def _batched(core, returns_tuple):
     """Wrap a single-sample core into a batched evaluator.
 
@@ -641,13 +657,13 @@ class BaseSampler(ABC):
 
     def _likelihood_logpdf_one(self, sample):
         """Return ``log_likelihood`` for a single ``(ndim,)`` sample (no derived)."""
-        return self._posterior_logpdf_one(sample) - self._prior_logpdf_one(sample)
+        return _logp_difference(self._posterior_logpdf_one(sample), self._prior_logpdf_one(sample))
 
     def _likelihood_logpdf_with_derived_one(self, sample):
         """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample."""
         log_prior = self._prior_logpdf_one(sample)
         log_post, derived = self._posterior_logpdf_with_derived_one(sample)
-        return log_post - log_prior, derived
+        return _logp_difference(log_post, log_prior), derived
 
     def array_to_samples(self, samples, derived, **kwargs):
         """Convert parameter arrays to a :class:`~desilike.samples.MCSamples`.
@@ -672,14 +688,21 @@ class BaseSampler(ABC):
         data = []
         # ── varied params ─────────────────────────────────────────────────────
         cumsize = _cumsize_params(self.varied_params)
+        # `copy` + `_value`, not `clone(value=...)`: clone round-trips through
+        # `__getstate__`, which serialises prior, ref and fd to dicts for `__init__` to
+        # rebuild. This runs once per parameter per step and was most of the step time.
         for i, param in enumerate(self.varied_params):
             slice_arr = samples[..., cumsize[i]:cumsize[i + 1]].reshape(samples.shape[:-1] + param.shape)
-            data.append(param.clone(value=slice_arr))
+            param = copy.copy(param)
+            param._value = slice_arr
+            data.append(param)
         # ── derived params ────────────────────────────────────────────────────
         cumsize = _cumsize_params(self.derived_params)
         for i, param in enumerate(self.derived_params):
             slice_arr = derived[..., cumsize[i]:cumsize[i + 1]].reshape(derived.shape[:-1] + param.shape)
-            data.append(param.clone(value=slice_arr))
+            param = copy.copy(param)
+            param._value = slice_arr
+            data.append(param)
 
         new_samples = MCSamples(data)
         for key, value in kwargs.items():
@@ -1284,10 +1307,11 @@ class PopulationSampler(BaseSampler):
         if proposal is not None:
             self._set_proposal(proposal)
 
-        # The kernel checkpoint directory for the first (or only) local run.
+        # Where the kernel may checkpoint, for the first (or only) local run. Named, not
+        # created: a kernel that writes state makes it when it writes, so one that does not --
+        # SMC restarts from beta = 0 rather than an intermediate temperature -- leaves no empty
+        # directory beside its chain.
         kernel_output_dir = self._kernel_output_dir(0)
-        if kernel_output_dir is not None and self.pool.main:
-            kernel_output_dir.mkdir(parents=True, exist_ok=True)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
             (self.prior_logpdf, self.prior_ppf, self.prior_rvs, self.prior_bounds),
@@ -1349,8 +1373,6 @@ class PopulationSampler(BaseSampler):
                 self.kernel._rng = self._group_rngs[local_idx]
                 new_output_dir = self._kernel_output_dir(local_idx)
                 if new_output_dir is not None:
-                    if self.pool.main:
-                        new_output_dir.mkdir(parents=True, exist_ok=True)
                     self.kernel._output_dir = new_output_dir
 
             output = self.kernel.run(**kwargs)

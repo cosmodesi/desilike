@@ -36,7 +36,7 @@ class Space(BaseSpace):
 
         Space(theory)                       # extents from each Parameter's `ref`
         Space(theory, params=['h', 'n_s'])  # a subset
-        Space(limits={'h': (0.6, 0.8)})     # or the base class's own forms
+        Space(bounds={'h': (0.6, 0.8)})     # or the base class's own forms
 
     ``ref`` is used rather than ``prior`` because the region an emulator must cover is where the
     chain lives, not where the prior allows. Over-covering is the most expensive mistake
@@ -78,12 +78,12 @@ class Space(BaseSpace):
         if missing:
             raise ValueError(
                 f'{type(calculator).__name__} parameters {missing} are varied but have no finite '
-                f'`ref` limits. Give the Space explicit limits, a covariance or '
+                f'`ref` limits. Give the Space explicit bounds, a covariance or '
                 f'samples, or fix the parameters you do not want emulated.')
         if not limits:
             raise ValueError(f'no varied parameter of {type(calculator).__name__} has a `ref`; '
                              f'nothing to emulate')
-        super().__init__(limits=limits, nsigma=nsigma, **kwargs)
+        super().__init__(bounds=limits, nsigma=nsigma, **kwargs)
 
 
 def _leafname(path):

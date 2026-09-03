@@ -39,7 +39,7 @@ def toy():
 
 
 def box():
-    return Space(limits={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)})
+    return Space(bounds={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)})
 
 
 def test_unknown_parameter_raises_instead_of_being_ignored():
@@ -225,7 +225,7 @@ def test_an_emulated_calculator_responds_to_parameters_on_a_SUB_calculator():
 
     child = toy()
     parent = Parent(child=child)
-    emulated = emulate(parent, Space(limits={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)}),
+    emulated = emulate(parent, Space(bounds={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)}),
                        budget=3).to_calculator()
     graph = compile(emulated)
 
@@ -270,7 +270,7 @@ def test_a_list_of_calculators_is_refused():
     away the routed class each calculator asks for through `get_emulator_cls`."""
     with pytest.raises(TypeError, match='one calculator at a time'):
         Emulator([Shaped(h=Variable('h', value=0.7), amplitude=Variable('amplitude', value=1.))],
-                 Space(limits={'h': (0.6, 0.8)}))
+                 Space(bounds={'h': (0.6, 0.8)}))
 
 
 # ── derived parameters ────────────────────────────────────────────────────────
@@ -304,7 +304,7 @@ def test_derived_parameters_are_emulated_and_written_back():
 
     calculator = WithDerived(h=Variable('h', value=0.7),
                              amplitude=Variable('amplitude', value=1.))
-    emu = Emulator(calculator, Space(limits={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)}))
+    emu = Emulator(calculator, Space(bounds={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)}))
     emu.train(budget=3)
     assert 'scale' in emu.derived_names
 
@@ -352,7 +352,7 @@ def dict_child():
 def test_a_dict_child_is_flattened_through_the_pytree():
     """`jnp.asarray` on a dict child is `dtype object is not a valid JAX array type`, so the
     children are flattened through the tree rather than one level."""
-    emu = Emulator(dict_child(), Space(limits={'h': (0.6, 0.8)}))
+    emu = Emulator(dict_child(), Space(bounds={'h': (0.6, 0.8)}))
     emu.train(budget=2)
     assert emu.children_leafnames == ['0.ee', '0.tt']
     assert np.allclose(emu.to_calculator()().cl['tt'], 0.7 * K, rtol=1e-10)
@@ -364,7 +364,7 @@ def test_a_trained_emulator_round_trips_through_hdf5(tmp_path):
     only at the end of a training run: 'cannot write PyTreeDef to HDF5'. The leaf paths carry the
     same information and are strings.
     """
-    emu = Emulator(dict_child(), Space(limits={'h': (0.6, 0.8)}))
+    emu = Emulator(dict_child(), Space(bounds={'h': (0.6, 0.8)}))
     emu.train(budget=2)
     reloaded = Emulator.read(emu.write(str(tmp_path / 'dict_child.h5')))
 
@@ -425,7 +425,7 @@ class TupleChild(Calculator):
 
 
 def test_a_tuple_child_survives_the_round_trip(tmp_path):
-    emu = Emulator(TupleChild(h=Variable('h', value=0.7)), Space(limits={'h': (0.6, 0.8)}))
+    emu = Emulator(TupleChild(h=Variable('h', value=0.7)), Space(bounds={'h': (0.6, 0.8)}))
     emu.train(budget=2, verbose=False)
 
     rebuilt = emu.to_calculator()()

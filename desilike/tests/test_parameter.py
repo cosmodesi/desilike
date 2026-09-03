@@ -8,7 +8,8 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.parameter import ParameterPrior, Parameter, VariableCollection, NAMESPACE_SEP, decode_name, find_names
+from desilike.parameter import (ParameterPrior, ParameterFiniteDifference, Parameter, VariableCollection,
+                                NAMESPACE_SEP, decode_name, find_names)
 
 
 # ── ParameterPrior ────────────────────────────────────────────────────────────
@@ -59,11 +60,18 @@ class TestParameterPrior:
         assert p.is_limited()
 
     def test_copy(self):
+        # ParameterPrior is immutable: attributes cannot be rebound and `attrs` is
+        # read-only, so `copy` shares the instance state rather than rebuilding it.
         p = ParameterPrior(dist='norm', loc=0.3, scale=0.05)
         q = p.copy()
         assert p == q
-        q.attrs['loc'] = 99.
-        assert p.attrs['loc'] == 0.3  # independent
+        assert q is not p
+        assert q.__dict__ is p.__dict__
+        with pytest.raises(TypeError):
+            q.attrs['loc'] = 99.
+        with pytest.raises(AttributeError):
+            q.dist = 'uniform'
+        assert p.attrs['loc'] == 0.3
 
     def test_copy_constructor(self):
         p = ParameterPrior(dist='norm', loc=0.3, scale=0.05)
@@ -118,6 +126,41 @@ class TestParameterPrior:
         assert s.shape == (50,)
         assert abs(float(jnp.mean(s)) - 0.3) < 0.1
 
+
+
+# ── ParameterFiniteDifference ─────────────────────────────────────────────────
+
+class TestParameterFiniteDifference:
+
+    def test_immutable(self):
+        # Immutable for the same reason as ParameterPrior: `Parameter.__copy__` runs on every
+        # slice of a chain, and a value object that cannot change need not be rebuilt there.
+        fd = ParameterFiniteDifference(eps=1e-3, acc=4, transform='sqrt', center=0.5)
+        with pytest.raises(AttributeError):
+            fd.eps = 1e-2
+        with pytest.raises(AttributeError):
+            fd.acc = 2
+        copied = fd.copy()
+        assert copied == fd
+        assert copied is not fd
+        assert copied.__dict__ is fd.__dict__
+        cloned = fd.clone(eps=1e-2)
+        assert cloned.eps == 1e-2 and fd.eps == 1e-3
+        assert cloned.acc == 4 and cloned.transform == 'sqrt' and cloned.center == 0.5
+
+    def test_getstate_setstate_roundtrip(self):
+        fd = ParameterFiniteDifference(eps=(1e-3, 2e-3), acc=4, transform='sqrt')
+        new = ParameterFiniteDifference(**fd.__getstate__())
+        assert new == fd
+        assert copy.deepcopy(fd) == fd
+        import pickle
+        assert pickle.loads(pickle.dumps(fd)) == fd
+
+    def test_limits_mode(self):
+        fd = ParameterFiniteDifference(limits=(0.1, 0.9))
+        assert fd.limits == (0.1, 0.9) and fd.eps is None
+        with pytest.raises(ValueError):
+            ParameterFiniteDifference(eps=1e-3, limits=(0.1, 0.9))
 
 
 # ── Parameter ─────────────────────────────────────────────────────────────────
@@ -234,8 +277,14 @@ class TestParameter:
         p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
         q = copy.copy(p)
         assert q == p
-        q.prior.attrs['loc'] = 99.
-        assert p.prior.attrs['loc'] == 0.3  # independent
+        # The copy is a distinct Parameter, but its prior is immutable and therefore
+        # shared; independence is guaranteed by the prior refusing every mutation.
+        assert q is not p
+        with pytest.raises(TypeError):
+            q.prior.attrs['loc'] = 99.
+        assert p.prior.attrs['loc'] == 0.3
+        q.value = 99.
+        assert p.value != 99.
 
     def test_getstate_setstate_roundtrip(self):
         p = Parameter('galaxy.omega_m', value=0.3, prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01},

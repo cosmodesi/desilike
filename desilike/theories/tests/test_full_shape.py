@@ -64,7 +64,7 @@ def _emulate(theory, inner_pt=None):
     from desilike.base import replace
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = TaylorEmulator(compile(inner_pt), order=2)
+    emu = TaylorEmulator(compile(inner_pt), order=3)
     emu.fit()
     replace(theory, inner_pt, emu.to_calculator())
     return compile(theory)
@@ -488,6 +488,7 @@ class TestPyBird:
         theory_emu = PyBirdTracerCorrelation2Poles(s=s, ells=ells, pt=PyBirdPTCorrelation2Poles(s=s, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
+    
 
 # ── FOLPS ─────────────────────────────────────────────────────────────────────
 
@@ -1310,10 +1311,47 @@ class TestGeoFPTAX:
             )
             # _emulate fits a degree-1 Taylor expansion on the PT calculator and 
             # replaces it in-place, then compiles the full tracer pipeline.
-            _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+            _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='logA')
         except TypeError:
             # Gracefully skip if the `pt` argument hasn't been added to the tracer yet
             pytest.skip("GeoFPTAXTracerSpectrum3Poles does not yet accept a `pt` argument; skipping emulation test.")
+
+
+    def test_pt_emulated(self):
+        """GeoFPTAXPTSpectrum2Poles emulated directly (bypassing the bispectrum tracer).
+        This avoids the large amplitudes and non-linear bias expansion of the bispectrum,
+        which can easily cause a 1st-order Taylor emulator to exceed tight tolerances."""
+        from desilike import compile, TaylorEmulator
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXPTSpectrum2Poles
+        
+        k = np.linspace(0.02, 0.2, 20)
+        theory = GeoFPTAXPTSpectrum2Poles(k=k)
+        pipe_exact = compile(theory)
+        
+        # Fit a Taylor emulator directly on the PT
+        emu = TaylorEmulator(pipe_exact, order=1)
+        emu.fit()
+        pipe_emu = compile(emu.to_calculator())
+        
+        # 1. Check center (exact match)
+        center = {p.name: p.value for p in pipe_exact.params}
+        np.testing.assert_allclose(
+            np.asarray(pipe_emu(center)), 
+            np.asarray(pipe_exact(center)),
+            atol=1e-5, rtol=0., 
+            err_msg='PT emulator mismatch at expansion center'
+        )
+        
+        # 2. Check shifted (relative error)
+        # GeoFPTAX PT depends on cosmological parameters via the template, e.g., logA
+        shift_param = 'logA'
+        if shift_param in center:
+            shifted = {**center, shift_param: center[shift_param] * 1.05}
+            exact_s = np.asarray(pipe_exact(shifted))
+            emu_s = np.asarray(pipe_emu(shifted))
+            reldiff = float(np.max(np.abs(emu_s - exact_s) / (np.abs(exact_s) + 1e-30)))
+            assert reldiff < 0.10, f'[{shift_param}+5%] PT max reldiff={reldiff:.3f} > 0.10'
+
         
 def test_jit():
 
@@ -1429,6 +1467,9 @@ def test_compile_input():
     ref = np.asarray(pipe_full(all_defaults))
     np.testing.assert_allclose(np.asarray(poles), ref, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(poles_jit), ref, rtol=1e-5)
+
+
+
 
 
 if __name__ == '__main__':

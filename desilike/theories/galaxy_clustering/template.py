@@ -585,7 +585,7 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         tanh_arg = self._a * jnp.log(self._rs_drag_fid / 8.)
         sigma8_sq_ratio = dA * jnp.exp((dm + dn) / self._a * jnp.tanh(tanh_arg))
         self.sigma8 = self._sigma8_fid * jnp.sqrt(sigma8_sq_ratio)
-        self.fsigma8 = self._fsigma8_fid * df
+        self.fsigma8 = self._fsigma8_fid * df * jnp.sqrt(sigma8_sq_ratio / dA)
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
         return self.pk_dd
 
@@ -1496,7 +1496,7 @@ class ShapeFitTheory(BAOTheory):
         super().__call__()
         rd = self.cosmo.get_thermodynamics().rs_drag
         s = rd / self._rd_fid
-        kp = self._kp * s
+        kp = self._kp / s
         pknow = self.cosmo.get('fourier.pk_now', of='delta_cb', engine=self._with_now, z=self.z, k=self._k_pivot_grid)
         pk_prim = self.cosmo.get('primordial.pk', k=self._k_pivot_grid) * self._k_pivot_grid if self._n_varied else None
         self.m = self._log_slope(pknow, pk_prim=pk_prim, kp=kp)

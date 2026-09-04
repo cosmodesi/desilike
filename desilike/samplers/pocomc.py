@@ -1,14 +1,15 @@
 """PocoMC preconditioned Monte Carlo kernel."""
 
 import logging
+import importlib.util
 
 import numpy as np
 
-try:
-    import pocomc as _pocomc
-    POCOMC_INSTALLED = True
-except ModuleNotFoundError:
-    POCOMC_INSTALLED = False
+# Importing pocomc imports Torch, whose bundled libomp conflicts on macOS with
+# the libomp linked by pyclass.  Detect availability without importing it and
+# load it only when the PocoMC kernel is actually run.
+POCOMC_INSTALLED = importlib.util.find_spec('pocomc') is not None
+_pocomc = None
 
 from .base import PopulationKernel, update_kwargs
 
@@ -114,8 +115,12 @@ class PocoMC(PopulationKernel):
         self._output_dir = context.get('output_dir')
 
     def run(self, **kwargs):
+        global _pocomc
         if not POCOMC_INSTALLED:
             raise ImportError("The 'pocomc' package is required but not installed.")
+        if _pocomc is None:
+            import pocomc as _pocomc_module
+            _pocomc = _pocomc_module
 
         if self._pool.main:
             if self._sampler is None:

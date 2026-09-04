@@ -49,12 +49,13 @@ class QuadraticModel(Calculator):
         return self.out
 
     def tree_flatten(self):
-        return [self.out], None
+        return [self.out], {'model_kind': 'quadratic'}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj.out = children[0]
+        obj.model_kind = aux['model_kind']
         return obj
 
     @classmethod
@@ -231,6 +232,7 @@ def test_taylor_custom_to_calculator():
     emu = TaylorEmulator(pipe, order=2)
     emu.fit()
     calc = emu.to_calculator()
+    assert calc.model_kind == 'quadratic'
     pipe2 = compile(calc)
     assert set(pipe2.params.names()) == {'a', 'b'}
     for a, b in [(0.5, 1.2), (1.5, -0.3)]:

@@ -388,6 +388,12 @@ class TaylorEmulator:
                 # via update() are accepted and ignored — the emulator is fixed at
                 # training time.
                 self.params = {param.name: param.clone() for param in emulator._params}
+                # Expose serialized static metadata immediately.  Downstream calculators
+                # may need fields such as k, ells, z, rsd, or ap while wiring their graph,
+                # before this calculator's first __call__ reconstructs the full state.
+                if isinstance(self._tree_aux, dict):
+                    for name, value in self._tree_aux.items():
+                        setattr(self, name, value)
 
             def __post_init__(self, *args, **kwargs):
                 # Skip root_cls.__post_init__ — emulator needs no heavy setup.

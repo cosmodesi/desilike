@@ -3,12 +3,15 @@
 import numpy as np
 from statistics import NormalDist
 
+from desilike import BaseCalculator
 from desilike import jax as desilike_jax
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
+from desilike.parameter import ParameterCollection
 
 from .base import ProjectToMultipoles
 from .full_shape import BaseTracerPTPowerSpectrumMultipoles, FOLPSv2PowerSpectrumMultipoles
+from ..primordial_cosmology import Cosmoprimo
 
 
 _QUANTILES = (1, 2, 3, 4, 5)
@@ -97,6 +100,155 @@ def _gaussian_quantile_coefficients(nquantiles=5):
                                 c2=(h2_lower - h2_upper) / probability,
                                 c3=(h3_lower - h3_upper) / probability)
     return coefficients
+
+
+class DensitySplitMatterPowerSpectrumMultipoles(BaseCalculator):
+    r"""
+    Minimal linear density-split--matter power-spectrum multipoles.
+
+    For each selected quantile, this calculator evaluates
+
+    .. math::
+
+        P_{Q_q m}(k, \mu) = c_{1,q} W_R(k)
+        (1 + f \mu^2)^2 P_{\mathrm{cb}}^{\mathrm{lin}}(k),
+
+    where ``W_R(k) = exp[-(k R)^2 / 2]``.  The density-split response
+    coefficients are independent parameters, including that of the middle
+    quantile.  The model deliberately excludes AP remapping, loop corrections,
+    counterterms, and stochastic contributions.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers in ``h / Mpc``.  Defaults to the injected matter
+        calculator's grid, or 101 points between ``0.01`` and ``0.2``.
+    z : float, default=0.
+        Redshift at which to evaluate the linear spectrum and growth rate.
+    ells : tuple, default=(0, 2, 4)
+        Power-spectrum multipoles to compute.
+    quantiles : tuple, default=(1, 2, 3, 4, 5)
+        Density quantiles to predict.
+    smoothing_radius : float, default=10.
+        Gaussian smoothing radius in ``Mpc / h``.
+    rsd : bool, default=True
+        Include linear Kaiser redshift-space distortions.  Real space supports
+        only the monopole.
+    cosmo : BaseCalculator, default=None
+        Desilike cosmology calculator for the exact calculation. Defaults to
+        :class:`Cosmoprimo` when ``matter`` is not supplied.
+    matter : BaseCalculator, default=None
+        Optional exact or emulated matter Kaiser calculator, with matching
+        ``k``, ``z``, ``ells`` and ``rsd`` attributes. Its ``power`` must have
+        shape ``(nells, nk)`` or be flattened in ell-major order. Mutually
+        exclusive with ``cosmo``. Responses and smoothing are always applied
+        exactly here, outside any emulator, preserving mixed responses.
+    """
+
+    @classmethod
+    def _params(cls, params, quantiles=_QUANTILES):
+        quantiles = _normalize_quantiles(quantiles)
+        coefficients = _gaussian_quantile_coefficients(nquantiles=len(_QUANTILES))
+        return ParameterCollection({
+            _composite_parameter_name('c1', quantile): {
+                'value': coefficients[quantile]['c1'],
+                'prior': {
+                    'dist': 'norm',
+                    'loc': coefficients[quantile]['c1'],
+                    'scale': 2.,
+                },
+                'ref': {
+                    'dist': 'norm',
+                    'loc': coefficients[quantile]['c1'],
+                    'scale': 0.25,
+                },
+                'fixed': False,
+                'latex': 'c_{{1,{:d}}}'.format(quantile),
+            }
+            for quantile in quantiles
+        })
+
+    def initialize(self, k=None, z=0., ells=(0, 2, 4), quantiles=_QUANTILES,
+                   smoothing_radius=10., rsd=True, cosmo=None, matter=None):
+        if matter is not None and cosmo is not None:
+            raise ValueError('provide either matter or cosmo, not both')
+        if k is None:
+            k = matter.k if matter is not None else np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        if (self.k.ndim != 1 or self.k.size == 0 or not np.isfinite(self.k).all()
+                or np.any(self.k <= 0.) or np.any(np.diff(self.k) <= 0.)):
+            raise ValueError('k must be a non-empty, finite, positive, strictly increasing one-dimensional array')
+
+        self.z = float(z)
+        if not np.isfinite(self.z) or self.z < 0.:
+            raise ValueError('z must be finite and non-negative')
+
+        self.ells = tuple(int(ell) for ell in ells)
+        if not self.ells or len(set(self.ells)) != len(self.ells):
+            raise ValueError('ells must be non-empty and unique')
+        invalid_ells = [ell for ell in self.ells if ell not in (0, 2, 4)]
+        if invalid_ells:
+            raise ValueError('ells must be drawn from (0, 2, 4); found {}'.format(invalid_ells))
+
+        self.quantiles = _normalize_quantiles(quantiles)
+        self.smoothing_radius = float(smoothing_radius)
+        if not np.isfinite(self.smoothing_radius) or self.smoothing_radius < 0.:
+            raise ValueError('smoothing_radius must be finite and non-negative')
+
+        self.rsd = bool(rsd)
+        if not self.rsd and self.ells != (0,):
+            raise ValueError('real-space density-split matter power supports only ell=0')
+        self.matter = matter
+        self.cosmo = None
+        if matter is None:
+            self.cosmo = Cosmoprimo() if cosmo is None else cosmo
+        elif (not np.array_equal(self.k, matter.k)
+              or self.ells != tuple(matter.ells)
+              or self.z != float(matter.z)
+              or self.rsd != bool(matter.rsd)):
+            raise ValueError('matter kernel grid, multipoles, redshift and RSD must match')
+
+    def calculate(self, **params):
+        if self.matter is not None:
+            matter_power = jnp.asarray(self.matter.power)
+            shape = (len(self.ells), self.k.size)
+            if matter_power.shape not in (shape, (shape[0] * shape[1],)):
+                raise ValueError('matter power must have shape (nells, nk) or be flattened in ell-major order')
+            matter_power = matter_power.reshape(shape)
+        else:
+            fourier = self.cosmo.cosmo.get_fourier()
+            linear_power = jnp.asarray(
+                fourier.pk_interpolator(of='delta_cb').to_1d(z=self.z)(self.k)
+            )
+            if self.rsd:
+                sigma8 = fourier.sigma8_z(self.z, of='delta_cb')
+                fsigma8 = fourier.sigma8_z(self.z, of='theta_cb')
+                growth_rate = fsigma8 / sigma8
+                factors = {
+                    0: 1. + 2. * growth_rate / 3. + growth_rate**2 / 5.,
+                    2: 4. * growth_rate / 3. + 4. * growth_rate**2 / 7.,
+                    4: 8. * growth_rate**2 / 35.,
+                }
+                matter_power = jnp.stack([factors[ell] * linear_power for ell in self.ells], axis=0)
+            else:
+                matter_power = linear_power[None, :]
+
+        window = jnp.exp(-0.5 * (jnp.asarray(self.k) * self.smoothing_radius)**2)
+        responses = jnp.asarray([
+            params[_composite_parameter_name('c1', quantile)]
+            for quantile in self.quantiles
+        ])
+        self.power = responses[:, None, None] * matter_power[None, :, :] * window[None, None, :]
+
+    def get(self):
+        return self.power
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'quantiles', 'smoothing_radius', 'rsd', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
 
 
 def _smoothing_window(k, radius, kernel='gaussian'):

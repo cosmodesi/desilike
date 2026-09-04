@@ -1050,6 +1050,12 @@ class ACECosmology(PrimordialCosmology):
             # Dict of per-component TransferFunctionEmulators, keyed like of= (mirrors the
             # jaxcapse per-spectrum dict below); pre/postprocessing resolve from the files
             # shipped inside each artifact component directory.
+            if hasattr(jaxmapse, 'load_pk_emulator_from_artifact'):
+                # jaxmapse >= 0.1.1 exposes the complete artifact as a PkEmulator
+                # instead of exposing its extracted directory through artifact_path().
+                emulator = jaxmapse.load_pk_emulator_from_artifact(emulator_key)
+                return {'delta_m': emulator.linear_pmm,
+                        'delta_cb': emulator.linear_pkcb}
             root = Path(jaxmapse.artifact_path(emulator_key))
             return {'delta_m': jaxmapse.load_emulator(str(root / 'Pk_lin_mm')),
                     'delta_cb': jaxmapse.load_emulator(str(root / 'Pk_lin_cb'))}

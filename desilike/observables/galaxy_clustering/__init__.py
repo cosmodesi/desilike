@@ -21,6 +21,3 @@ TurnOverCompressionObservable
 
 from .stats import Spectrum2PolesObservable, Correlation2PolesObservable, Spectrum3PolesObservable
 from .compressed import (BAOCompressionObservable, BAOPhaseShiftCompressionObservable, ShapeFitCompressionObservable, TurnOverCompressionObservable)
-from .density_split import (DensitySplitPowerSpectrumMultipolesObservable, load_density_split_power_spectrum_multipoles,
-                            flatten_density_split_power_spectrum_multipoles, load_density_split_mock_matrix,
-                            density_split_sample_covariance, get_density_split_k)

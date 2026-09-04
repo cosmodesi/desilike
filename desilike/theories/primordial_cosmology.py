@@ -651,7 +651,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
             elif method_key == 'background.efunc':
                 result = cosmo.get_background().efunc(**_kw_coords)
             elif method_key == 'background.comoving_transverse_distance':
-                result = cosmo.get_background().comoving_transverse_distance(**_kw_coords)
+                # cosmoprimo's current public name; keep the desilike requirement key
+                # stable because ACE exposes the same transverse comoving distance.
+                result = cosmo.get_background().comoving_angular_distance(**_kw_coords)
             elif method_key == 'background.luminosity_distance':
                 result = cosmo.get_background().luminosity_distance(**_kw_coords)
             elif method_key == 'background.growth_factor':

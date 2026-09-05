@@ -421,6 +421,7 @@ class _NumpyroEnsembleKernel(Kernel):
 
         self._rng = rng
         self._ndim = context['ndim']
+        self._pool = context['pool']
 
         if self.nwalkers is None:
             # 4 * ndim is always even; also satisfies the recommended nwalkers >= 2 * ndim.
@@ -467,9 +468,11 @@ class _NumpyroEnsembleKernel(Kernel):
         # get_samples(group_by_chain=True) → (nwalkers, n_steps, ndim); transpose → (n_steps, nwalkers, ndim)
         samples = np.asarray(mcmc.get_samples(group_by_chain=True)).transpose(1, 0, 2)
 
-        # Evaluate log-posterior and derived quantities on all samples in one pass.
-        flat_samples = jnp.asarray(samples.reshape(-1, self._ndim))
-        results = self._posterior_logpdf_with_derived(flat_samples)
+        # Through the pool, not in one pass: the block holds n_steps * nwalkers points, and
+        # vmapping all of them at once is what made 200 steps x 60 walkers on a P+B posterior
+        # ask for 55.6 GiB on a 40 GiB A100.
+        flat_samples = np.asarray(samples.reshape(-1, self._ndim))
+        results = self._pool.map(self._posterior_logpdf_with_derived, list(flat_samples))
         log_post = np.array([result[0] for result in results]).reshape(n_steps, self.nwalkers)
         derived = np.array([result[1] for result in results]).reshape(n_steps, self.nwalkers, -1)
 

@@ -2190,10 +2190,15 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
             template = DirectSpectrum2Template()
         self.template = template
         self.template.update(with_now='peakaverage')
+        # As on the parent: share the cosmology's h Parameter with this node, so `_anchors` reads
+        # the value the graph threads here rather than the template's own copy.  Needed since
+        # `FOLPSD3PolesEmulator` preconditions in h too.
+        cosmo_params = self.template.cosmo.params if hasattr(self.template, 'cosmo') else {}
+        self.params = {name: cosmo_params[name] for name in ('h',) if name in cosmo_params}
 
     def __post_init__(self, k=None, template=None, ells=None, mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, model='FOLPSD', damping='lor',
-                      precision=(8, 10, 10), renormalized=True, interpolation_method='linear',
+                      precision=(4, 16, 4), renormalized=True, interpolation_method='linear',
                       scaling=None, nfftlog=128, nk=480, **kwargs):
         # Non-node setup only.  Deliberately not the parent's: that builds a ProjectToPoles over
         # ``ells``, which this calculator never uses and which cannot even be constructed when
@@ -2226,6 +2231,7 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.fsigma8
         self.sigma8_fid = self.template.sigma8_fid
+        self.h_anchor, self.sigma_mpc_anchor = self._anchors()
 
     def get_emulator_cls(self):
         """The exact-scaling emulator for this pt.
@@ -2237,7 +2243,8 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
 
     def tree_flatten(self):
         children = [self.k_pkl_pklnw_fk, self.f, self.f0, self.qpar, self.qper,
-                    self.sigma8, self.fsigma8, self.sigma8_fid]
+                    self.sigma8, self.fsigma8, self.sigma8_fid,
+                    self.h_anchor, self.sigma_mpc_anchor]
         aux = {'k': self.k, 'ells': self.ells}
         return children, aux
 
@@ -2246,7 +2253,8 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
         obj = object.__new__(cls)
         obj.k, obj.ells = aux['k'], aux['ells']
         (obj.k_pkl_pklnw_fk, obj.f, obj.f0, obj.qpar, obj.qper,
-         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid,
+         obj.h_anchor, obj.sigma_mpc_anchor) = children
         return obj
 
     def combine_bias_terms_spectrum2_poles(self, *args, **kwargs):
@@ -2561,7 +2569,7 @@ class FOLPSTracerCorrelation2Poles(Calculator):
 #@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
 def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               f0, qpar, qper, multipoles=['B000', 'B202'],
-                              precision=(8, 10, 10), damping='lor',
+                              precision=(4, 16, 4), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
                               renormalized=True, use_fk=False, redshift_smearing=None):
@@ -2665,8 +2673,31 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
     model : str, default='FOLPSD'
     damping : str, default='lor'
-    precision : tuple, default=(8, 10, 10)
+    precision : tuple, default=(4, 16, 4)
         Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.
+
+        The three axes are not equally hard.  Scored in :math:`\Delta\chi^2` through the real
+        LRG3 window and the joint P+B covariance, against a converged ``(20, 40, 40)`` rule and
+        over 1541 draws from the reference distribution, each axis on its own (the other two
+        converged) gives median :math:`\Delta\chi^2`:
+
+        ==== ======== ======== ========
+        n    ``Nphi`` ``Nx``   ``Nmu``
+        ==== ======== ======== ========
+        4    1.8e-3   8.8e-1   8.9e-7
+        5    3.9e-5   2.1e-1   2.2e-8
+        8    8.6e-10  1.2e-1   2.1e-10
+        10   1.7e-11  5.4e-2   2.7e-11
+        16   --       2.3e-3   --
+        20   --       8.5e-4   --
+        ==== ======== ======== ========
+
+        ``Nphi`` and ``Nmu`` converge spectrally and are ten orders of magnitude past any useful
+        budget at the old ``(8, 10, 10)``; ``Nx`` converges slowly and carries the whole error.
+        So the old default was mis-allocated rather than over-resolved: ``(4, 16, 4)`` is 256
+        nodes against 800, **2.8x faster and 22x more accurate** (max :math:`\Delta\chi^2`
+        1.98 -> 0.089, p99 0.90 -> 0.037).  Raise to ``(5, 20, 4)`` for max 0.022 at 1.6x, or
+        back to ``(8, 10, 10)`` to reproduce older runs.
     renormalized : bool, default=True
     interpolation_method : str, default='linear'
     redshift_smearing : callable or None, default=None
@@ -2752,7 +2783,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                       prior_basis='physical_aap', fsat=None, sigv=None,
-                      nbar=1e-4, model='FOLPSD', damping='lor', precision=(8, 10, 10),
+                      nbar=1e-4, model='FOLPSD', damping='lor', precision=(4, 16, 4),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
                       tracers=None, **kwargs):
         # Non-node setup only.
@@ -5260,11 +5291,23 @@ class FOLPSDEmulator(_ScaledEmulator):
     # Powers of the dilation scale dividing each folps-convention nuisance parameter, applied at
     # run time by `emulator_namespace`. Measured, not derived:
     # routed-vs-exact response ratios at h = 0.74 are pure scalars (shape correlation 1.000000)
-    # matching s^2 (alpha0/2/4), s^3 (alphashot0), s^5 (alphashot2) to 5 digits, while ctilde
-    # and the FoG damping are exactly invariant and must not be rescaled. The channels
+    # matching s^2 (alpha0/2/4), s^3 (alphashot0), s^5 (alphashot2) to 5 digits. The channels
     # anticorrelate at typical bias values, so a partial rescaling is worse than none.
+    #
+    # `ctilde` is exactly invariant, and it is the only one that is: it multiplies
+    # `(k mu f0)^4 sigma2w^2`, and sigma2w is a table column that already carries the dilation.
+    # `X_FoG` looks like it belongs with it and does not -- in folps it is a LENGTH, always
+    # multiplying k alone (`l2 = (f0 k mu X_FoG)^2` for 'exp'/'lor', `denom = 1 + (f0 k mu)^2
+    # X_FoG^2` for 'vdg'), so it needs s^1. Measured 2026-09-04, LRG3 w0waCDM P+B, h over the full
+    # ACE box with everything else at the chain best fit (X_FoG = 4.44): without this entry
+    # `emu - exact` is a smooth V, zero at h_fid and 2.15 sigma_data rms at h = 0.90, with NO
+    # structure at the chebyshev nodes -- the whole of it is this term (X_FoG = 0 gives 0.029,
+    # X_FoG = 10 gives 6.32). s^1 reproduces the X_FoG = 0 baseline to 4 digits at every h; s^2 and
+    # s^3 overcorrect. Max raw dchi2 over the box 81.4 -> 0.082, and 0.181 -> 0.081 after the
+    # analytic marginalisation, which absorbs ~450x of it and is why this hid for so long.
+    # The h = 0.74 measurement above missed it because s = 1.099 there: a 10% effect on one term.
     _nuisance_scale_powers = {'alpha0': 2, 'alpha2': 2, 'alpha4': 2,
-                              'alphashot0': 3, 'alphashot2': 5}
+                              'alphashot0': 3, 'alphashot2': 5, 'X_FoG': 1}
     # Keyed by name on purpose: a positional tuple applies silently wrong powers if folps ever
     # reorders or inserts a parameter, and exactly that cost real debugging time.
     _nuisance_names = ('b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde',
@@ -5295,8 +5338,6 @@ class FOLPSDEmulator(_ScaledEmulator):
         ``(n_k, n_mu)`` each, so fitting them would be the largest part of the emulator and all
         of it discarded.
         """
-        import interpax
-
         layout = self._layout()
         growth = values['f']
         # derived quantities are outputs of the pipeline, not part of the state this routes:
@@ -5329,9 +5370,10 @@ class FOLPSDEmulator(_ScaledEmulator):
                 # low-order expansion work; a k-shift representation is exact but samples
                 # the BAO wiggles at h-moving positions, defeating any polynomial. Cubic keeps
                 # the resampling noise at ~1e-6 through the wiggles (linear costs ~0.2%).
-                k_row = values[k_rows[name]]
-                column = interpax.interp1d(np.asarray(k_row) / scale, np.asarray(k_row),
-                                           np.asarray(column), method='cubic', extrap=True)
+                # Off the ends of folps' output grid the tail is first order in ln k, not the
+                # continued cubic -- see :func:`_resample_dilated`.
+                k_row = np.asarray(values[k_rows[name]])
+                column = _resample_dilated(k_row, column, k_row / scale)
                 out[name] = column / (amplitude**degree * scale**3) if degree else column
             elif degree:
                 # sigma^2-type scalars: the dilated run-time grid supplies the s^2 back
@@ -5434,10 +5476,10 @@ class FOLPSDEmulator(_ScaledEmulator):
 class FOLPSD3PolesEmulator(_ScaledEmulator):
     r"""The FOLPSD bispectrum pt: the linear inputs only.
 
-    Much simpler than the power-spectrum case, because the bispectrum applies AP per call from
-    the ``(qpar, qper)`` scalars -- there is no distorted grid to rebuild. The state is one
-    ``(4, n_k)`` array of ``(k, pk_l, pk_l_NW, f_k)`` rows plus six scalars, so the routing
-    reduces to:
+    Simpler than the power-spectrum case, because the bispectrum applies AP per call from the
+    ``(qpar, qper)`` scalars -- there is no distorted grid to rebuild. The state is one
+    ``(4, n_k)`` array of ``(k, pk_l, pk_l_NW, f_k)`` rows plus the scalars, so the routing
+    reduces to the ``h`` dilation below plus:
 
     - the two linear-pk rows carry the amplitude (the :math:`\sigma^2` damping integrals are
       computed per call from those rows, so they inherit it exactly);
@@ -5446,17 +5488,54 @@ class FOLPSD3PolesEmulator(_ScaledEmulator):
 
     See :class:`_ScaledEmulator` for the arguments.
     """
+    #: ``h`` preconditioning, as on :class:`FOLPSDEmulator`: the rows are dilated back to a
+    #: reference frame before fitting and dilated forward again at prediction time.
+    #:
+    #: Without it the linear rows are fitted on a grid fixed in h/Mpc while the BAO wiggles slide
+    #: through it, and the Chebyshev expansion spends its orders tracking that. Measured z = 0.8,
+    #: h over the ACE box, max |err| / max|row| over 0.01 < k < 0.25 against a 129-node reference:
+    #: ``pk_l`` goes 2.8e-03 (5 nodes) -> 1.5e-04 (9) -> 6.7e-06 (17), i.e. it reaches its floor
+    #: at level 4 and not before, while its no-wiggle twin is already there with 9 -- the wiggles,
+    #: not the broadband. With the dilation: 6.2e-04 (5) -> 8.0e-06 (9), the floor at level 3.
+    #: That is what was forcing ``levels={'h': 4}`` on the whole pipeline; the power-spectrum arm
+    #: gains nothing from 5 nodes to 17 (median |dP/P| 5.3e-06 against 4.8e-06).
+    #:
+    #: Undone by resampling the rows FORWARD in :meth:`inverse_transform`, rather than by the
+    #: power spectrum's trick of handing the assembly ``qpar / s, qper / s`` and letting the AP
+    #: jacobian restore the :math:`s^3`. That trick is exact there because every dimensionful
+    #: table entry is homogeneous; here it is not. ``folps.sigmas``, which the bispectrum calls
+    #: per evaluation on these very rows, cuts at a fixed ``kT <= 0.4`` and uses a fixed
+    #: ``k_BAO = 1/104``, so evaluated in the reference frame it would return
+    #: :math:`\Sigma^2, \delta\Sigma^2` for the wrong physical scales -- the same non-homogeneity
+    #: that leaves ``delta_sigma2_NW`` wanting :math:`s^{2.56}` in the power-spectrum table.
+    #: Resampling forward keeps the assembly's inputs bit-comparable with the un-emulated pt, so
+    #: no bispectrum nuisance parameter needs an ``s``-power either.
+    precondition = ('h',)
+
     def set_children_leafnames(self):
         self.children_leafnames = ['k_pkl_pklnw_fk', 'f', 'f0', 'qpar', 'qper', 'sigma8',
-                                   'fsigma8', 'sigma8_fid']
+                                   'fsigma8', 'sigma8_fid', 'h_anchor', 'sigma_mpc_anchor']
 
     def transform(self, values, params):
         out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
-        amplitude = (values['sigma8'] / values['sigma8_fid'])**2
         growth = values['f']
         rows = np.asarray(values['k_pkl_pklnw_fk'])
-        out['k_pkl_pklnw_fk'] = np.stack(
-            [rows[0], rows[1] / amplitude, rows[2] / amplitude, rows[3] / growth])
+        k = rows[0]
+        if self.precondition:
+            # The fixed-Mpc amplitude, not sigma8, for the reason given on
+            # `FOLPSDEmulator.precondition`: the 8 Mpc/h window moves with h itself.
+            scale = values['h_anchor'] / self._h_fid
+            amplitude = (values['sigma_mpc_anchor'] / values['sigma8_fid'])**2
+            query = k / scale
+            out['k_pkl_pklnw_fk'] = jnp.stack(
+                [k,
+                 _resample_dilated(k, rows[1], query) / (amplitude * scale**3),
+                 _resample_dilated(k, rows[2], query) / (amplitude * scale**3),
+                 _resample_dilated(k, rows[3], query) / growth])
+        else:
+            amplitude = (values['sigma8'] / values['sigma8_fid'])**2
+            out['k_pkl_pklnw_fk'] = np.stack(
+                [k, rows[1] / amplitude, rows[2] / amplitude, rows[3] / growth])
         out['f0'] = values['f0'] / growth
         # qpar, qper, sigma8, fsigma8 are supplied live; sigma8_fid is a constant
         return out
@@ -5464,15 +5543,32 @@ class FOLPSD3PolesEmulator(_ScaledEmulator):
     def inverse_transform(self, values, params):
         out = {name: value for name, value in values.items() if name.startswith(DERIVED)}
         scalars = self.compute_scalars(params)
-        amplitude = (scalars['sigma8'] / self._sigma8_fid)**2
         rows = jnp.asarray(values['k_pkl_pklnw_fk'])
-        out.update({'k_pkl_pklnw_fk': jnp.stack([rows[0], rows[1] * amplitude,
-                                               rows[2] * amplitude, rows[3] * scalars['f']]),
-                    'f0': values['f0'] * scalars['f'],
+        # The k row is the one `transform` left alone, so it is the same fixed grid at every
+        # node -- which is what makes the `stop_gradient` in
+        # `combine_bias_terms_spectrum3_poles` still correct, and what lets `folps.sigmas` see
+        # exactly the grid the un-emulated pt would hand it.
+        k = rows[0]
+        if self.precondition:
+            scale = scalars['h'] / self._h_fid
+            amplitude = (scalars['sigma_mpc'] / self._sigma8_fid)**2
+            query = k * scale
+            factor = amplitude * scale**3
+            out['k_pkl_pklnw_fk'] = jnp.stack(
+                [k,
+                 _resample_dilated(k, rows[1], query) * factor,
+                 _resample_dilated(k, rows[2], query) * factor,
+                 _resample_dilated(k, rows[3], query) * scalars['f']])
+        else:
+            amplitude = (scalars['sigma8'] / self._sigma8_fid)**2
+            out['k_pkl_pklnw_fk'] = jnp.stack(
+                [k, rows[1] * amplitude, rows[2] * amplitude, rows[3] * scalars['f']])
+        out.update({'f0': values['f0'] * scalars['f'],
                     'f': scalars['f'],
                     'qpar': scalars['qpar'], 'qper': scalars['qper'],
                     'sigma8': scalars['sigma8'], 'fsigma8': scalars['fsigma8'],
-                    'sigma8_fid': self._sigma8_fid})
+                    'sigma8_fid': self._sigma8_fid,
+                    'h_anchor': scalars['h'], 'sigma_mpc_anchor': scalars['sigma_mpc']})
         # computed, not interpolated: see the note in `_ScaledEmulator.inverse_transform`
         out.update({name: value for name, value in scalars.items() if name.startswith(DERIVED)})
         return out

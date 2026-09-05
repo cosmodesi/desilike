@@ -93,6 +93,21 @@ def _flow_on_device(device):
     It still fits at ``XLA_PYTHON_CLIENT_MEM_FRACTION=0.98``, with 0.4 GiB left. Only reach for
     ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` on a small device or a much larger flow.
     A checkpoint written with a GPU-resident flow reloads onto the same device.
+
+    **Do not reach for ``torch.compile`` here.** A fixed-shape micro-benchmark says the inverse
+    should compile well -- 332.9 ms eager against 45.1 ms compiled at 47 parameters and 512
+    points, because the 47 sequential passes of a 256-wide network are launch-overhead bound, not
+    arithmetic bound. On a real LRG3 run it LOSES, badly, in both modes: flow.inverse per step
+    goes 0.113 s eager -> 0.383 s with ``mode='reduce-overhead'`` -> 0.791 s with
+    ``dynamic=True`` (totals 269 / 391 / 536 s).
+
+    The cause is not varying input shapes -- measured, every one of the 312 ``inverse`` calls in
+    an LRG3 run has the identical shape ``(n_active, n_dim)``, so padding buys nothing. It is the
+    retraining cadence: ``Flow.fit`` ran 35 times in that same run (``train_frequency`` is 1 at
+    the production shape), each refit replaces the module's weights, dynamo re-guards, and the
+    recompilation costs more than the compiled kernel saves. A micro-benchmark misses this
+    because it compiles once against frozen weights.
+
     """
     import torch
     from pocomc.flow import Flow as _Flow

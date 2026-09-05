@@ -345,7 +345,20 @@ class BlackjaxMCLMC(_BlackJAXKernel):
             mclmc_kernel_factory, num_steps=steps,
             state=single_state, rng_key=rng_key, **kwargs)
 
-        self.kernel_args.update(dict(L=float(params.L), step_size=float(params.step_size)))
+        L, step_size = float(params.L), float(params.step_size)
+        # A hard -inf boundary makes the energy error undefined, and `mclmc_find_L_and_step_size`
+        # answers by driving L to zero -- blackjax then raises `ZeroDivisionError` from
+        # `partially_refresh_momentum` (`exp(2 * step_size / L)`), or the chain comes back all
+        # NaN. Reproduced on a plain Gaussian with box priors biting at 1.5 sigma: L = 0 exactly.
+        # Fail here, where the cause is nameable, instead of deep inside the integrator.
+        if not np.isfinite(L) or L <= 0. or not np.isfinite(step_size) or step_size <= 0.:
+            raise ValueError(
+                'MCLMC adaptation returned L={:.3g}, step_size={:.3g}. This is what a hard -inf '
+                'boundary in the posterior does to it -- the energy error is undefined at the '
+                'wall and the tuner collapses. Restrict the priors so the sampled region has no '
+                'cliff (e.g. to an emulator\'s trained box), or use a kernel that screens '
+                'impossible points (emcee, pocoMC, nautilus) instead.'.format(L, step_size))
+        self.kernel_args.update(dict(L=L, step_size=step_size))
         adapted_mass_matrix = np.asarray(getattr(params, _mass_matrix_kwarg))
         self._kernel = self._kernel_cls(
             self._logposterior,

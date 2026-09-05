@@ -159,6 +159,11 @@ class Kernel:
     # number internally (e.g. via JAX vmap or numpyro num_chains).
     max_nparallel = 1
 
+    # Whether this kernel calls the posterior with a varying number of rows and so needs every
+    # evaluation padded to a single fixed shape. A jitted posterior recompiles per input shape,
+    # which is a property of the KERNEL's inner loop, not something a user should have to know.
+    enforce_batch_size = False
+
     def init(self, posterior_logpdf, rng, **context):
         """Initialise the kernel before sampling.
 
@@ -238,6 +243,7 @@ class PopulationKernel:
 
     # Population kernels always run one population at a time.
     max_nparallel = 1
+    enforce_batch_size = False
 
     def reset_state(self):
         """Reset lazy-created sampler for a new independent run.  No-op by default."""
@@ -314,6 +320,8 @@ class StaticKernel:
     logger = logging.getLogger('StaticKernel')
     _sampler_cls = 'StaticSampler'
 
+    enforce_batch_size = False
+
     #: Random-number generator, injected by :class:`StaticSampler` before :meth:`get_samples`.
     rng = None
 
@@ -367,7 +375,7 @@ class BaseSampler(ABC):
 
     @default_mpicomm
     def __init__(self, posterior, rng=None, mpicomm=None, output_dir=None,
-                 conditioner=None, batch_size=None):
+                 conditioner=None, batch_size=None, enforce_batch_size=False):
         """
         Parameters
         ----------
@@ -384,6 +392,11 @@ class BaseSampler(ABC):
             Conditioning transform applied between original and working space.
             ``None`` (default) uses :class:`AffineConditioner` with no rescaling
             (identity transform).
+        enforce_batch_size : bool, optional
+            Pad the last chunk so EVERY evaluation sees exactly ``batch_size`` rows (the padding
+            is discarded). Not a user knob: the infrastructure classes read it off
+            ``kernel.enforce_batch_size``, since whether the posterior is called with a varying
+            number of rows is a property of the kernel's inner loop. Needs ``batch_size > 0``.
         batch_size : int or None, optional
             Controls how the pool batches likelihood/posterior calls.
             ``None`` (default) — pass all tasks as one stacked array per rank.
@@ -420,7 +433,8 @@ class BaseSampler(ABC):
         # jax.jit(jax.vmap(...)) so the pool always receives a batched function.
         self.posterior = posterior
 
-        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size)
+        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size,
+                      enforce_batch_size=enforce_batch_size)
 
         # ── output_dir ────────────────────────────────────────────────────────
         if output_dir is not None:
@@ -523,14 +537,17 @@ class BaseSampler(ABC):
         """Total number of scalar dimensions across all varied parameters."""
         return int(_cumsize_params(self.varied_params)[-1])
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         """Create the pool and register the batched evaluators.
 
         Pool-dispatched attributes set here:
         ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf``, ``posterior_logpdf_with_derived``,
         ``likelihood_logpdf``, ``likelihood_logpdf_with_derived``.
         """
-        self.pool = make_pool(mpicomm, batch_size=batch_size)
+        # `enforce_batch_size` pads the last chunk so the callable only ever sees one input
+        # shape; `batch_size` alone leaves the remainder varying with the task count.
+        self.pool = make_pool(mpicomm, batch_size=batch_size,
+                              enforce_batch_size=enforce_batch_size)
         specs = [('prior_ppf',                     self._prior_ppf_one,                       False),
                  ('prior_logpdf',                   self._prior_logpdf_one,                   False),
                  ('posterior_logpdf',               self._posterior_logpdf_one,               False),
@@ -742,7 +759,8 @@ class StaticSampler(BaseSampler):
                  output_dir=None, conditioner=None, batch_size=None):
         self.kernel = kernel
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size if kernel is not None else False)
         if self.kernel is not None:
             self.kernel.rng = self.rng
 
@@ -854,7 +872,8 @@ class MCMCSampler(BaseSampler):
         self._kernels = [kernel]
 
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size)
 
         self.checks = []
         self._thinning = 1
@@ -885,13 +904,14 @@ class MCMCSampler(BaseSampler):
                 del self._saved_rng_states
             self.rng = self._group_rngs[0]
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         color = mpicomm.rank * self._ngroups // mpicomm.size
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
-        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size,
+                         enforce_batch_size=enforce_batch_size)
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
         self._igroup = color
@@ -1303,7 +1323,8 @@ class PopulationSampler(BaseSampler):
         if batch_size is None:
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size)
         if proposal is not None:
             self._set_proposal(proposal)
 
@@ -1332,13 +1353,14 @@ class PopulationSampler(BaseSampler):
         """Sample IDs assigned to this MPI group."""
         return self.sample_ids[self._group_start : self._group_start + self._runs_per_group]
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         color = mpicomm.rank * self._ngroups // mpicomm.size
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
-        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size,
+                         enforce_batch_size=enforce_batch_size)
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
         self._igroup = color

@@ -1647,7 +1647,7 @@ def get_ref_scalars_from_cosmo(z, cosmo, nsteps=200, nodes=48):
 
     Three choices worth knowing:
 
-    * the growth is early-time normalised, D ~ a in matter domination (``znorm=0.``).
+    * the growth is early-time normalised, D ~ a in matter domination.
       Normalising by D(0) makes D a relative growth, and the c_D / c_DM corrections then have to
       absorb the cosmology dependence of D(0) itself: their spread over the w0-wa box goes from
       ~1e-3 to 12%.
@@ -1655,9 +1655,12 @@ def get_ref_scalars_from_cosmo(z, cosmo, nsteps=200, nodes=48):
       correction it anchors is ``qper / (analytic DM ratio)``.  Curvature enters as a series in
       :math:`x^2` for :math:`\sinh(x)/x`, analytic at ``Omega_k = 0`` and needing no branch.
     * massive neutrinos count as matter, :math:`(1 + z)^3`.  True at the redshifts used, not at
-      the start of the growth integration (z ~ 400, kT_nu ~ m), and that is the whole residual:
-      against the tabulated implementation ``invE``, ``DM`` and ``f`` agree to <1e-6 and ``D`` to
-      2.9e-3, or 3.6e-4 as the ratio to the fiducial, which is the only form the corrections use.
+      the start of the growth integration (z ~ 3000, kT_nu ~ m), and that is what is left once
+      the initial condition below is right: scored against CLASS it is a floor of ~1e-3 reached
+      at m_ncdm = 0.45, where every initial condition gives the same answer.
+      (The comparison against the tabulated implementation quoted here previously -- ``invE``,
+      ``DM``, ``f`` to <1e-6 and ``D`` to 2.9e-3 -- was measured with the old ``D = D' = a`` at
+      ``eta_start = -6`` and has not been re-run.)
 
     A preconditioner, not a truth, so a smooth shift is absorbed by the fitted correction.  What
     would not be absorbed is numerator and denominator coming from different functions, which is
@@ -1714,10 +1717,21 @@ def get_ref_scalars_from_cosmo(z, cosmo, nsteps=200, nodes=48):
 
     # The growth equation in eta = ln a, exactly as cosmoprimo writes it: y = (D, D') with
     # y' = A y, A = [[0, 1], [3/2 Omega_cb, -2 - dlnH/dlna]], stepped with RK4.
-    # ln(a) grid.  It starts where cosmoprimo's does, so the initial condition D = D' = a
-    # (matter domination) is imposed at the same place, and ENDS at z, so there is no run to
-    # z = 0 and nothing to interpolate back.
-    eta_start = -6.
+    # ln(a) grid.  It ENDS at z, so there is no run to z = 0 and nothing to interpolate back.
+    #
+    # It does NOT start where cosmoprimo's does, and the initial condition is not cosmoprimo's
+    # `D = D' = a` either -- see the initial condition below.  Deliberate: that pair is the
+    # growing mode only where radiation AND dark energy are both negligible, and at a = e^-6
+    # neither is.  Measured 2026-09-04 against CLASS, over 9 (h, omega_cdm) cells x 10 CPL
+    # points, on the quantity the routing cannot absorb (how much D_analytic / D_true moves with
+    # (w0, wa) at fixed everything else, since ScalingScalarsEmulator does not expand them):
+    #
+    #   eta_start   initial condition                median      max
+    #      -6       D = D' = a  (cosmoprimo's)      7.75e-03   1.42e-02
+    #      -8       D = D' = a                      8.78e-04   1.46e-03
+    #     -10       Meszaros amplitude, D' = a      6.24e-04   1.23e-03
+    #      -8       Meszaros amplitude, local D'    1.74e-04   3.20e-04   <- this one
+    eta_start = -8.
     eta = np.linspace(eta_start, -np.log1p(z), nsteps + 1)
     eta_prev, eta_next = eta[:-1], eta[1:]
     step = jnp.asarray(eta_next - eta_prev)
@@ -1756,8 +1770,30 @@ def get_ref_scalars_from_cosmo(z, cosmo, nsteps=200, nodes=48):
         if steps.shape[0] % 2:
             steps = jnp.concatenate([steps, identity[:1]], axis=0)
         steps = steps[1::2] @ steps[0::2]          # the later step multiplies on the left
+    # Initial condition, growing mode at eta_start, in two pieces.
+    #
+    # AMPLITUDE -- the Meszaros growing mode `D = 1 + 3y/2`, y = a / a_eq, normalised so that
+    # `D -> a` once matter dominates: `D = a + (2/3) a_eq`.  That is the same znorm = 0
+    # convention the c_D / c_DM corrections are built on, now imposed correctly rather than only
+    # where radiation has already become negligible (rho_r / rho_m is still 0.10 at a = e^-6).
+    #
+    # SLOPE -- the growing root of the local indicial equation, `p^2 - c1 p - c2 = 0` for
+    # `D'' = c2 D + c1 D'` (p = 1 in the EdS limit, where c1 = -1/2 and c2 = 3/2).  This is the
+    # piece that matters here: `D' = D` injects a decaying mode whose size depends on how far
+    # from EdS the start is, and dark energy is what moves that with (w0, wa) --
+    # rho_DE / rho_m at a = e^-6 runs 4e-12 at w0 + wa = -1.5 but 2.0e-2 at -0.26.  The
+    # amplitude piece alone buys nothing (7.7e-03 in the table above, i.e. unchanged): it is
+    # w0/wa-independent and cancels in the ratio the corrections take.
+    #
+    # The residual is then the neutrinos-as-matter approximation, which no initial condition can
+    # remove: at m_ncdm = 0.45 every variant converges to ~1e-03.  Below that the gain is 28x
+    # (m_ncdm -> 0), 55x (0.06), 33x (0.25), and the optimal eta_start does not move with the
+    # mass, so -8 is not cancelling against it.
     start = np.exp(eta_start)
-    growth, growth_prime = steps[0] @ jnp.asarray([start, start])
+    coefficient_1, coefficient_2 = coefficients(eta_start)
+    index = 0.5 * (coefficient_1 + jnp.sqrt(coefficient_1**2 + 4. * coefficient_2))
+    initial = start + 2. / 3. * omega_r / omega_m
+    growth, growth_prime = steps[0] @ jnp.stack([initial, index * initial])
 
     return {'invE': 1. / jnp.sqrt(efunc2(z)), 'DM': distance,
             'D': growth, 'f': growth_prime / growth}

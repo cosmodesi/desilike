@@ -23,6 +23,8 @@ from cosmoprimo.cosmology import Cosmology
 
 from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
+from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, get_ref_scalars_from_cosmo,
+                                           theta_analytic, solve_analytic_theta, eisenstein_hu_scales)
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
@@ -1752,8 +1754,7 @@ def _spec_key(method_key, kwargs):
 
 def _amplitude_like(name):
     """Whether a bare ``params.<name>`` requirement could depend on the amplitude."""
-    return (name in ('A_s', 'logA', 'sigma8') + tuple(Cosmology._alias_parameters['logA'])
-            or name.startswith(('sigma8', 'sigma_', 'S8')))
+    return name in AMPLITUDES + ('sigma8',) or name.startswith(('sigma8', 'sigma_', 'S8'))
 
 
 def _sector(method_key):
@@ -2053,127 +2054,6 @@ class _SectionEmulator(CalculatorEmulator):
 # counted from the spectrum's own name rather than listed.
 
 
-def amplitude(params):
-    """:math:`A_s` in whatever spelling was given, or None if the space varies no amplitude.
-
-    The spellings come off `Cosmology`'s own alias table rather than a list here, so one added
-    there is not silently missed -- which would put the amplitude on the grid instead of scaling
-    it: quietly worse, not failing.
-    """
-    for name in ('A_s', 'logA') + tuple(Cosmology._alias_parameters['logA']):
-        if name in params:
-            return params[name] if name == 'A_s' else 1e-10 * jnp.exp(params[name])
-    return None
-
-
-#: Speed of light, km/s.
-_CLIGHT = 299792.458
-#: <p>/T for a relativistic Fermi-Dirac gas: sets where the a^-4 -> a^-3 turn happens.
-_FERMI_DIRAC_MOMENTUM = 3.15137
-#: Boltzmann constant, eV/K.
-_KELVIN_TO_EV = 8.617333262e-5
-
-
-def _theta_analytic(h, omega_b, omega_cdm, w0=-1., wa=0., m_ncdm=(0.06,), N_ur=2.0328,
-                            T_cmb=2.7255, T_ncdm_over_cmb=0.71611, na=2048):
-    r"""``theta_cosmomc`` from closed-form background quantities alone.
-
-    The same definition cosmoprimo derives -- :math:`r_s h / D_M(z_\star)` with the Hu & Sugiyama
-    :math:`z_\star` -- but every ingredient analytic, so this jits, grads and **vmaps** and needs
-    no :class:`Cosmology` instance.
-
-    That is the point. Deriving ``theta_cosmomc`` the ordinary way runs the background, whose only
-    non-closed-form piece is the massive-neutrino density: a Fermi-Dirac integral cosmoprimo caches
-    in a spline PER COSMOLOGY INSTANCE, and so rebuilds inside a trace at every call. Measured,
-    that route costs 1.2 ms jitted and gets WORSE under ``vmap`` (1.86 ms/point); this is 0.21 ms
-    jitted and 0.051 ms/point at ``vmap`` 256. It lives here rather than in cosmoprimo because it
-    exists for :meth:`HarmonicEmulator.to_training`, which runs inside the trace where the exact value
-    cannot be computed at all -- it is behind a ``pure_callback``.
-
-    ``m_ncdm`` is an ordinary argument, not a captured constant, so it can be emulated later.
-
-    Accuracy against the exact derivation over a CMB-only w0waCDM box, h in [0.60, 0.85]: bias
-    +1.6 sigma(theta), **scatter 0.075 sigma(theta)**. The bias is a near-constant offset and
-    calibrates out; uncalibrated it is not ignorable, a box centred on a mis-converted theta having
-    been measured 5.3 sigma off.
-
-    Two traps, both silent:
-
-    * do NOT renormalise :math:`\omega_\nu(a)` so that :math:`\omega_\nu(1) = \sum m_\nu / 93.14`.
-      That rescales the whole profile and corrupts the relativistic limit, which
-      :math:`\omega_\gamma` fixes: measured, 3.7% (158 sigma) of bias.
-    * today's neutrino density must be evaluated at :math:`a = 1`, not taken as the last element of
-      whatever grid is in hand -- on the :math:`r_s` grid that is the density at :math:`a_\star`,
-      which drives :math:`\omega_{de}` negative and the result to NaN.
-    """
-    omega_g = 2.4735e-5 * (T_cmb / 2.7255) ** 4
-    omega_ur = N_ur * 7. / 8. * (4. / 11.) ** (4. / 3.) * omega_g
-
-    def omega_ncdm(a):
-        masses = jnp.atleast_1d(jnp.asarray(m_ncdm))
-        relativistic = 7. / 8. * (4. / 11.) ** (4. / 3.) * omega_g
-        temperature = _KELVIN_TO_EV * T_cmb * T_ncdm_over_cmb
-        y = masses[:, None] * a[None, :] / (_FERMI_DIRAC_MOMENTUM * temperature)
-        return jnp.sum(relativistic / a[None, :] ** 4 * jnp.sqrt(1. + y ** 2), axis=0)
-
-    omega_ncdm0 = omega_ncdm(jnp.ones(1))[0]
-    omega_m = omega_b + omega_cdm + omega_ncdm0
-    omega_de = h ** 2 - omega_m - omega_g - omega_ur
-
-    def one_over_a2H(a):
-        de = omega_de * a ** (-3. * (1. + w0 + wa)) * jnp.exp(-3. * wa * (1. - a))
-        total = (omega_g + omega_ur) / a ** 4 + (omega_b + omega_cdm) / a ** 3 + omega_ncdm(a) + de
-        return _CLIGHT / (a ** 2 * 100. * jnp.sqrt(total))
-
-    zstar = 1048. * (1. + 0.00124 * omega_b ** -0.738) * (
-        1. + (0.0783 * omega_b ** -0.238 / (1. + 39.5 * omega_b ** 0.763))
-        * omega_m ** (0.560 / (1. + 21.1 * omega_b ** 1.81)))
-    astar = 1. / (1. + zstar)
-
-    a_rs = jnp.exp(jnp.linspace(jnp.log(1e-8), jnp.log(astar), na))
-    sound_speed = (3. * (1. + 3e4 * a_rs * omega_b)) ** -0.5
-    rs = jnp.trapezoid(one_over_a2H(a_rs) * sound_speed, a_rs)
-    a_dm = jnp.exp(jnp.linspace(jnp.log(astar), 0., na))
-    return rs / jnp.trapezoid(one_over_a2H(a_dm), a_dm)
-
-
-def _solve_analytic_theta(target, omega_b, omega_cdm, limits=(0.2, 2.5), iterations=44, na=2048,
-                          **kwargs):
-    """The ``h`` whose analytic ``theta_MC_100`` is *target*, by bisection on a closed-form function.
-
-    No engine is touched, so this works inside a trace, which is what
-    :meth:`HarmonicEmulator.from_training` needs -- the exact solve runs a background per iteration and
-    cannot be traced at all.
-
-    Deliberately NOT used to seed :meth:`cosmoprimo.Cosmology.solve`: tried and measured slower,
-    1.23 s/solve against 0.80, because ``bracket`` and ridders still spend their ~10 exact
-    background evaluations wherever they start.
-
-    A bisection whose bracket does not contain the root returns ``nan``, not an endpoint. It is
-    the one thing this has to get right: :meth:`HarmonicEmulator.from_training` calls it to turn a
-    NODE's ``theta_MC_100`` into the ``h`` the calculator is evaluated at, so an endpoint is a
-    node fitted at one theta and recorded at another, and a Chebyshev fit mixes that into every
-    coefficient. Measured on the CMB w0waCDM box at nsigma 3.75, the old ``(0.2, 1.5)`` bracket
-    railed 22 of 817 nodes at ``h = 1.5``, up to 0.0046 in ``theta_MC_100`` -- 19 sigma of the
-    chain's own width -- and said nothing. ``nan`` instead surfaces as an unevaluable node, which
-    the training reports and stops on.
-
-    The default bracket is wide enough for the whitened box the CMB-only w0waCDM posterior asks
-    for, whose corners reach ``h = 1.57``; ``iterations`` keeps the resolution it had.
-    """
-    def residual(h):
-        return 100. * _theta_analytic(h, omega_b, omega_cdm, na=na, **kwargs) - target
-
-    low, high = limits
-    flow, fhigh = residual(low), residual(high)
-    for _ in range(iterations):
-        middle = 0.5 * (low + high)
-        cond = residual(middle) * flow > 0.
-        low = jnp.where(cond, middle, low)
-        high = jnp.where(cond, high, middle)
-    return jnp.where(flow * fhigh > 0., jnp.nan, 0.5 * (low + high))
-
-
 class HarmonicEmulator(_SectionEmulator):
     r"""A cosmology emulated for its :math:`C_\ell`, with the amplitude and optical depth routed.
 
@@ -2199,14 +2079,7 @@ class HarmonicEmulator(_SectionEmulator):
         r"""``{leaf key: factor}`` divided out at training and multiplied back at prediction,
         and no dilation."""
         value = amplitude(params)
-        tau = params.get('tau_reio', None)
-        factors = {}
-        for key, spectrum in self.spectra().items():
-            factor = 1. if value is None else value
-            if tau is not None:
-                # one e^{-tau} per screened leg: 'tt' 2, 'tp' 1, 'pp' 0
-                factor = factor * jnp.exp(-tau * sum(leg != 'p' for leg in spectrum))
-            factors[key] = factor
+        factors = harmonic_scaling(self.spectra(), value, params.get('tau_reio', None))
         if value is not None:
             # the Fourier leaves of a joint cosmology: exact powers of the amplitude
             for key, info in self._leaf_info().items():
@@ -2245,7 +2118,7 @@ class HarmonicEmulator(_SectionEmulator):
 
         Both maps are cheap and traceable, which is the whole reason they can run here: this is
         applied at EVERY prediction, inside the jit, where the exact ``theta`` cannot be computed
-        at all -- it sits behind a ``pure_callback``. :func:`_theta_analytic` is 0.0205
+        at all -- it sits behind a ``pure_callback``. :func:`theta_analytic` is 0.0205
         ms/point under ``vmap``, against the emulator's own 0.0176.
 
         Its ~1.6 sigma(theta) bias does not matter HERE, and that is worth being precise about:
@@ -2260,7 +2133,7 @@ class HarmonicEmulator(_SectionEmulator):
         if 'wa_fld' in params and 'w0_fld' in params:
             params['w0pwa'] = params.pop('wa_fld') + params['w0_fld']
         if 'h' in params:
-            params['theta_MC_100'] = 100. * _theta_analytic(
+            params['theta_MC_100'] = 100. * theta_analytic(
                 params.pop('h'), params['omega_b'], params['omega_cdm'],
                 w0=params.get('w0_fld', -1.),
                 wa=params.get('w0pwa', -1.) - params.get('w0_fld', -1.),
@@ -2271,7 +2144,7 @@ class HarmonicEmulator(_SectionEmulator):
         r"""The inverse, to call the cosmology in ITS parameters: neither ``w0pwa`` nor
         ``theta_MC_100`` is a cosmoprimo input.
 
-        ``h`` comes back through :func:`_solve_analytic_theta`, the bisection on the same closed
+        ``h`` comes back through :func:`solve_analytic_theta`, the bisection on the same closed
         form -- not through ``Cosmology.solve``, which runs a background per iteration. Using the
         SAME function in both directions is what makes the round trip exact.
         """
@@ -2279,7 +2152,7 @@ class HarmonicEmulator(_SectionEmulator):
         if 'w0pwa' in params:
             params['wa_fld'] = params.pop('w0pwa') - params['w0_fld']
         if 'theta_MC_100' in params:
-            params['h'] = _solve_analytic_theta(
+            params['h'] = solve_analytic_theta(
                 params.pop('theta_MC_100'), params['omega_b'], params['omega_cdm'],
                 w0=params.get('w0_fld', -1.), wa=params.get('wa_fld', 0.),
                 **self._background_kwargs(params))
@@ -2323,7 +2196,7 @@ class HarmonicEmulator(_SectionEmulator):
 #   which the next item carries;
 # - the growth, :math:`D(z)` per density leg and :math:`f(z) D(z)` per velocity leg, from the
 #   same analytic w0waCDM core :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`
-#   is built on (:func:`~desilike.theories.galaxy_clustering.template.get_ref_scalars_from_cosmo`).
+#   is built on (:func:`~cosmoprimo.emulators.analytic.get_ref_scalars_from_cosmo`).
 #   That one is a preconditioner rather than an identity -- neutrinos count as matter, radiation
 #   is in the background but not the growth source -- and it is what carries ``w0_fld`` and
 #   ``wa_fld``, and ``h``'s effect on the growth, off the grid.
@@ -2389,14 +2262,12 @@ class _RoutedSectionEmulator(_SectionEmulator):
         same function, and an emulator trained before a change to it must be retrained, not
         redeployed with a stale denominator.
         """
-        from cosmoprimo.emulators.cosmology import _eisenstein_hu_scales
-        from .galaxy_clustering.template import get_ref_scalars_from_cosmo
 
         self._fiducial = Cosmology.from_state(self._anchors['fiducial'])
         scalars = [get_ref_scalars_from_cosmo(float(z), self._fiducial) for z in self._anchors['zs']]
         self._ref = {name: np.array([float(item[name]) for item in scalars])
                      for name in ('invE', 'DM', 'D', 'f')}
-        self._ref_rs_drag = float(_eisenstein_hu_scales(self._fiducial)['rs_drag'])
+        self._ref_rs_drag = float(eisenstein_hu_scales(self._fiducial)['rs_drag'])
 
     def select_params(self, names):
         """Everything but what the leaves let the transform pair carry exactly.
@@ -2408,7 +2279,7 @@ class _RoutedSectionEmulator(_SectionEmulator):
         # The spellings the routing can convert. `sigma8` is deliberately not one for the
         # amplitude: the analytic core reads `A_s` off an eisenstein_hu clone, and the `A_s` that
         # engine derives from a sampled `sigma8` is not the Boltzmann code's.
-        spellings = {'A_s': ('A_s', 'logA') + tuple(Cosmology._alias_parameters['logA']), 'h': ('h', 'H0')}
+        spellings = {'A_s': AMPLITUDES, 'h': ('h', 'H0')}
         kinds, off_grid = {info['kind'] for info in self._leaf_info().values()}, self._off_grid()
         return [name for name in names
                 if not any(name in spellings.get(canonical, (canonical,))
@@ -2440,8 +2311,6 @@ class _RoutedSectionEmulator(_SectionEmulator):
         samples -- so the fiducial is cloned with them and the canonical names are read off the
         clone, exactly as :class:`~desilike.theories.galaxy_clustering.template.ScalingScalarsEmulator`
         does. Traceable: eisenstein_hu is a JAX engine."""
-        from cosmoprimo.emulators.cosmology import _eisenstein_hu_scales
-        from .galaxy_clustering.template import get_ref_scalars_from_cosmo
 
         # `params` are in the training basis, which a sector may have changed
         params = self.from_training(dict(params))
@@ -2504,7 +2373,7 @@ class _RoutedSectionEmulator(_SectionEmulator):
                 # the Eisenstein & Hu fitting formula, in Mpc/h like the leaf: it carries the
                 # unit's h exactly and the dependence on the densities to a few per cent, so what
                 # stays on the grid is the Boltzmann code's correction to a fitting formula
-                factors[leaf] = _eisenstein_hu_scales(cosmo)['rs_drag'] / self._ref_rs_drag
+                factors[leaf] = eisenstein_hu_scales(cosmo)['rs_drag'] / self._ref_rs_drag
             elif kind == 'age':
                 # in Gyr: 1/H0 times a function of the density fractions and the dark energy
                 factors[leaf] = 1. / scale
@@ -2591,7 +2460,7 @@ class ThermodynamicsEmulator(_RoutedSectionEmulator):
     neither ``h`` nor the dark energy -- cosmoprimo returns it in Mpc/h, and that ``h`` is the
     unit -- and only ``omega_b``, ``omega_cdm`` (and a varied neutrino content) stay on the grid.
     The Eisenstein & Hu (1998) fitting formula
-    (:func:`cosmoprimo.emulators.cosmology._eisenstein_hu_scales`) is divided out, unit
+    (:func:`cosmoprimo.emulators.analytic.eisenstein_hu_scales`) is divided out, unit
     included, so the expansion carries only the Boltzmann code's correction to it.
     """
 

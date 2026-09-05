@@ -2089,9 +2089,17 @@ class HarmonicEmulator(_SectionEmulator):
         one; a logit onto ``(-5, 0)`` makes the bound unreachable rather than an edge to cut.
         """
         space = self.space
-        if not any(name in getattr(space, 'params', []) for name in ('wa_fld', 'h')):
+        names = getattr(space, 'params', [])
+        if not any(name in names for name in ('wa_fld', 'h')):
             return space
-        return space.map(self.to_training, transforms={'w0pwa': 'logit_w0pwa'})
+        # the logit only when `w0pwa` is actually one of the mapped names, which takes BOTH of
+        # them varied -- `to_training` builds it from the pair. A space varying `h` with the dark
+        # energy fixed is the ordinary LCDM case, and declaring a transform for a parameter that
+        # is not there is refused by `Space`.
+        transforms = {}
+        if 'wa_fld' in names and 'w0_fld' in names:
+            transforms['w0pwa'] = 'logit_w0pwa'
+        return space.map(self.to_training, transforms=transforms)
 
 
 # ── emulating a cosmology for everything that is not a Cl ─────────────────────

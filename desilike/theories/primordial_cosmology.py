@@ -25,7 +25,8 @@ from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, get_ref_scalars_from_cosmo,
                                            theta_analytic_jit, solve_analytic_theta_jit,
-                                           theta_background_kwargs, eisenstein_hu_scales)
+                                           theta_background_kwargs, eisenstein_hu_scales,
+                                           resample_dilated as _resample_dilated, dilate as _dilate)
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
@@ -1805,84 +1806,6 @@ _OFF_GRID = {'pk': _EXACT_NAMES, 'primordial': _EXACT_NAMES, 'input': _EXACT_NAM
              'rs_drag': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
              'age': ('A_s', 'n_s', 'tau_reio'), 'omega': ('A_s', 'n_s', 'tau_reio'),
              'opaque': ('A_s', 'n_s', 'tau_reio'), 'amplitude': ('tau_reio',), 'cl': ()}
-
-
-def _resample_dilated(k, column, query):
-    r"""``column``, sampled on ``k``, read at ``query``, with a bounded tail off the grid.
-
-    The dilation reads a column sampled on a fixed k grid at :math:`k / s` (or, going the
-    other way, at :math:`k s`), so for :math:`s \ne 1` one end of the query range always falls
-    outside the grid: above ``kmax`` when :math:`s < 1`, below ``kmin`` when :math:`s > 1`.
-
-    ``interpax``'s ``extrap=True`` continues the last *cubic* segment there, which over the
-    ~25% of the log range the ACE ``h`` box reaches is not a small error: measured over
-    h in [0.50041, 0.89957] at z = 0.8 on folps' output grid, the median column's interpolation
-    error in ``h`` is 1.1e-05 across the 434 of 480 grid points that are never extrapolated and
-    4.2e-02 when the other 46 are included -- and every worst point, at every node count, sits
-    at the last grid point. It reaches no data bin (the table is read back at
-    :math:`s\,k_\mathrm{ap}`, well inside), but it is fitted, and it makes every accuracy
-    metric on this emulator misleading.
-
-    A first-order continuation in :math:`\ln k` instead, with the slope read across a WINDOW
-    rather than between neighbours. Bounded, continuous with the last segment, and a smooth
-    function of ``h`` -- which a clamp or a fill value would not be: those put a kink at the
-    ``s`` where each component crosses the boundary, and a kink is worse for a Chebyshev
-    expansion than a wrong-but-smooth value in a region nothing reads.
-
-    The tail is not always in a region nothing reads. ``FOLPSD3PolesEmulator`` resamples the
-    other way at prediction time, and ``folps.sigmas`` integrates the reconstructed rows over the
-    whole grid -- so the tail lands inside the BAO damping.
-
-    **A power law was tried here and removed.** It is the shape these columns actually have at
-    the ends of the grid, and on the bispectrum multipoles over the ACE ``h`` box at 5 nodes it
-    was worth median / max ``|dB/B|`` of 5.6e-06 / 4.4e-05 against the 8.2e-06 / 2.4e-04 this
-    gives -- so a factor 1.5 on the median and 5 on the max, the worst point being the top edge
-    of the box.
-
-    It is also unsafe, because an exponential of a locally-estimated slope has no bound: at
-    ``nk = 480`` the spacing is ``d ln k = 0.013``, so two samples differing by a factor 3 --
-    which the no-wiggle ``Ploop_dt`` does near a zero crossing -- give a slope of 84, and
-    exponentiating that over the 0.30 in ``ln k`` the ACE ``h`` box reaches turned a table value
-    of 445 into 7.5e+13. That was fitted, leaving coefficients of 1e+13 in ``table_now.4``
-    against a median of 1.8e-04, and the emulated chi2 then diverged from the exact one by 1e+15
-    at every posterior sample. Clipping the slope to :math:`|{\rm d}\ln c / {\rm d}\ln k| \le 4`
-    fixed that and kept the accuracy; a first-order tail cannot go wrong that way at all, which
-    is why it is what ships. To take the factor 5 back, restore the power law WITH that clip --
-    the window below is what makes the slope estimate stable, the clip is what makes the
-    exponential safe, and neither is sufficient alone.
-    """
-    import interpax
-
-    # The grid is detached as an abscissa, for the reason spelled out in
-    # `FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`: an emulated calculator emits it
-    # as a traced output whose derivative is exactly zero, and differentiating an interpolation
-    # with respect to its own abscissa is NaN at a node, which `0 * NaN = NaN` then propagates
-    # into every cosmological gradient. It is genuinely constant, so this is exact. `query` keeps
-    # its gradient -- that is where the dilation scale enters.
-    k = jax.lax.stop_gradient(jnp.asarray(k))
-    column = jnp.asarray(column)
-    query = jnp.asarray(query)
-    lnk, lnq = jnp.log(k), jnp.log(jnp.abs(query))
-    out = interpax.interp1d(jnp.clip(query, k[0], k[-1]), k, column, method='cubic')
-
-    def tail(edge, inner, lnedge, lninner):
-        return edge + (edge - inner) / (lnedge - lninner) * (lnq - lnedge)
-
-    # The slope is read across a WINDOW, not between neighbours: a secant over one interval of a
-    # fine grid measures the local noise rather than the trend, and the tail then carries it over
-    # the whole extrapolated range. At nk = 480 this is 9 intervals, d ln k = 0.12 against 0.013.
-    step = max(1, k.size // 50)
-    return jnp.where(query < k[0], tail(column[0], column[step], lnk[0], lnk[step]),
-                     jnp.where(query > k[-1],
-                               tail(column[-1], column[-1 - step], lnk[-1], lnk[-1 - step]),
-                               out))
-
-
-def _dilate(k, value, scale):
-    """*value*, sampled on *k* along its last axis, read at ``k * scale`` row by row."""
-    k, value = np.asarray(k), jnp.asarray(value)
-    rows = jax.vmap(lambda row: _resample_dilated(k, row, k * scale))(value.reshape(-1, k.size))
-    return rows.reshape(value.shape)
 
 
 class _SectionEmulator(CalculatorEmulator):

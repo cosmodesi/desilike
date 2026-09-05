@@ -62,7 +62,7 @@ from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 # the analytic w0waCDM scalars ScalingScalars divides out; imported here as well because
 # callers have always read them off this module
-from cosmoprimo.emulators.analytic import get_ref_scalars_from_cosmo  # noqa: F401
+from cosmoprimo.emulators.analytic import fourier_analytic_scales  # noqa: F401
 from ._multitracer import propose_params_multitracer, assign_params
 
 
@@ -1714,7 +1714,7 @@ class ScalingScalars(Calculator):
         self._fiducial_h = float(self._fiducial.h)
         self._logA_fid = float(np.log(1e10 * self._fiducial.A_s))
         self._ref_fid = {name: float(value) for name, value
-                              in get_ref_scalars_from_cosmo(self.z, self._fiducial.clone(engine='eisenstein_hu')).items()}
+                              in fourier_analytic_scales(self.z, self._fiducial.clone(engine='eisenstein_hu')).items()}
 
     def __call__(self):
         from cosmoprimo import constants
@@ -1741,7 +1741,7 @@ class ScalingScalars(Calculator):
         # the fiducial updated with the current values, so neutrino content, N_ur and the rest
         # of its configuration carry over and only the sampled parameters move
         updates = {name: self.cosmo[name] for name in self._ref_update_names}
-        analytic = get_ref_scalars_from_cosmo(
+        analytic = fourier_analytic_scales(
             self.z, self._fiducial.clone(engine='eisenstein_hu', **updates))
         fid = self._ref_fid
         self.c_qpar = self.qpar / (analytic['invE'] / fid['invE'])
@@ -1886,7 +1886,7 @@ class ScalingScalarsEmulator(CalculatorEmulator):
 
         ``ref_fid`` travels in the anchors and is used as stored: the corrections are ratios
         against it, so numerator and denominator must come from the same
-        :func:`get_ref_scalars_from_cosmo`.  An emulator trained before a change to that
+        :func:`fourier_analytic_scales`.  An emulator trained before a change to that
         function must be retrained, not redeployed.
         """
         from cosmoprimo import Cosmology
@@ -1931,7 +1931,7 @@ class ScalingScalarsEmulator(CalculatorEmulator):
         # only the six the baseline moves; everything else stays at the fiducial, which is the
         # recipe `ScalingScalars.__call__` fitted the corrections against
         updates = {name: cosmo[name] for name in ScalingScalars._ref_update_names}
-        analytic = get_ref_scalars_from_cosmo(
+        analytic = fourier_analytic_scales(
             anchors['z'], self._ref_fiducial.clone(engine='eisenstein_hu', **updates))
         fid = anchors['ref_fid']
         growth = c_D * anchors['sigma8_fid'] * (analytic['D'] / fid['D']) \

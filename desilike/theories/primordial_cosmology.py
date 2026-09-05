@@ -23,8 +23,8 @@ from cosmoprimo.cosmology import Cosmology
 
 from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
-from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, get_ref_scalars_from_cosmo,
-                                           theta_analytic_jit, solve_analytic_theta_jit,
+from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, fourier_analytic_scales,
+                                           theta_analytic, solve_theta_analytic,
                                            theta_background_kwargs, eisenstein_hu_scales,
                                            resample_dilated as _resample_dilated, dilate as _dilate)
 from ..parameter import Parameter, VariableCollection
@@ -1015,7 +1015,7 @@ def _ace_background(method_key, z, backend='cosmoprimo', cosmoprimo_cosmo=None, 
     Conventions, which differ between the two and are silent if got wrong:
 
     - growth is taken from ``DefaultBackground`` explicitly rather than through the engine
-      attribute, as :func:`~desilike.theories.galaxy_clustering.template.get_ref_scalars_from_cosmo`
+      attribute, as :func:`~desilike.theories.galaxy_clustering.template.fourier_analytic_scales`
       does, because an engine may override it with a fitting formula;
     - ``mass='cb'``, because jaxace's growth ODE sources on Omega_cb and that is what the
       linear-pk emulator's ``D`` argument means; ``mass='m'`` would put massive neutrinos in the
@@ -2013,18 +2013,21 @@ class HarmonicEmulator(_SectionEmulator):
         return factors, {}
 
     def _theta_args(self, params):
-        r"""What :func:`~cosmoprimo.emulators.analytic.theta_analytic_jit` takes after the
-        densities, positionally: :math:`w_0`, :math:`w_a`, and the radiation content, read off
-        the cosmology this emulator holds whenever the space does not vary them.
+        r"""What :func:`~cosmoprimo.emulators.analytic.theta_analytic` needs besides the
+        densities: :math:`w_0`, :math:`w_a`, and the radiation content, read off the cosmology
+        this emulator holds whenever the space does not vary them.
 
         ``w_a`` is reconstructed from ``w0pwa``, since by the time this is read the expansion
-        variable is in hand rather than ``wa_fld`` itself.
+        variable is in hand rather than ``wa_fld`` itself. ``m_ncdm`` goes through as an array so
+        that the compiled ``theta_analytic`` sees one argument structure rather than retracing
+        between a tuple of masses and an array of them.
         """
         fiducial = getattr(getattr(self, 'calculator', None), '_fiducial', None)
         kwargs = theta_background_kwargs(params, fiducial)
         w0 = params.get('w0_fld', -1.)
-        return (w0, params.get('w0pwa', -1.) - w0, jnp.asarray(kwargs['m_ncdm']),
-                kwargs['N_ur'], kwargs['T_cmb'])
+        return {'w0': w0, 'wa': params.get('w0pwa', -1.) - w0,
+                'm_ncdm': jnp.atleast_1d(kwargs['m_ncdm']),
+                'N_ur': kwargs['N_ur'], 'T_cmb': kwargs['T_cmb']}
 
     def to_training(self, params):
         r""":math:`(h, w_0, w_a) \rightarrow (\theta_\mathrm{MC}, w_0, w_0 + w_a)`.
@@ -2050,16 +2053,16 @@ class HarmonicEmulator(_SectionEmulator):
         if 'wa_fld' in params and 'w0_fld' in params:
             params['w0pwa'] = params.pop('wa_fld') + params['w0_fld']
         if 'h' in params:
-            params['theta_MC_100'] = 100. * theta_analytic_jit(
+            params['theta_MC_100'] = 100. * theta_analytic(
                 params.pop('h'), params['omega_b'], params['omega_cdm'],
-                *self._theta_args(params))
+                **self._theta_args(params))
         return params
 
     def from_training(self, params):
         r"""The inverse, to call the cosmology in ITS parameters: neither ``w0pwa`` nor
         ``theta_MC_100`` is a cosmoprimo input.
 
-        ``h`` comes back through :func:`solve_analytic_theta`, the bisection on the same closed
+        ``h`` comes back through :func:`solve_theta_analytic`, the bisection on the same closed
         form -- not through ``Cosmology.solve``, which runs a background per iteration. Using the
         SAME function in both directions is what makes the round trip exact.
         """
@@ -2069,9 +2072,9 @@ class HarmonicEmulator(_SectionEmulator):
         if 'theta_MC_100' in params:
             # `wa_fld` is back by now, so `w0pwa` is rebuilt for `_theta_args`, which reads it:
             # the pair must be the one `to_training` used or the round trip is not the identity
-            params['h'] = solve_analytic_theta_jit(
+            params['h'] = solve_theta_analytic(
                 params.pop('theta_MC_100'), params['omega_b'], params['omega_cdm'],
-                *self._theta_args({**params, 'w0pwa': params.get('w0_fld', -1.) + params.get('wa_fld', 0.)}))
+                **self._theta_args({**params, 'w0pwa': params.get('w0_fld', -1.) + params.get('wa_fld', 0.)}))
         return params
 
     def training_space(self):
@@ -2120,7 +2123,7 @@ class HarmonicEmulator(_SectionEmulator):
 #   which the next item carries;
 # - the growth, :math:`D(z)` per density leg and :math:`f(z) D(z)` per velocity leg, from the
 #   same analytic w0waCDM core :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`
-#   is built on (:func:`~cosmoprimo.emulators.analytic.get_ref_scalars_from_cosmo`).
+#   is built on (:func:`~cosmoprimo.emulators.analytic.fourier_analytic_scales`).
 #   That one is a preconditioner rather than an identity -- neutrinos count as matter, radiation
 #   is in the background but not the growth source -- and it is what carries ``w0_fld`` and
 #   ``wa_fld``, and ``h``'s effect on the growth, off the grid.
@@ -2188,7 +2191,7 @@ class _RoutedSectionEmulator(_SectionEmulator):
         """
 
         self._fiducial = Cosmology.from_state(self._anchors['fiducial'])
-        scalars = [get_ref_scalars_from_cosmo(float(z), self._fiducial) for z in self._anchors['zs']]
+        scalars = [fourier_analytic_scales(float(z), self._fiducial) for z in self._anchors['zs']]
         self._ref = {name: np.array([float(item[name]) for item in scalars])
                      for name in ('invE', 'DM', 'D', 'f')}
         self._ref_rs_drag = float(eisenstein_hu_scales(self._fiducial)['rs_drag'])
@@ -2243,7 +2246,7 @@ class _RoutedSectionEmulator(_SectionEmulator):
         fid, zs = self._fiducial, self._anchors['zs']
         cosmo = fid.clone(**{name: given.get(name, value) for name, value in self._anchors['defaults'].items()})
         # the analytic core, at the canonical values the clone resolved
-        scalars = [get_ref_scalars_from_cosmo(float(z), fid.clone(**{name: cosmo[name] for name in self._ref_update_names}))
+        scalars = [fourier_analytic_scales(float(z), fid.clone(**{name: cosmo[name] for name in self._ref_update_names}))
                    for z in zs]
         ratios = {}
         for name, ref in self._ref.items():

@@ -24,7 +24,8 @@ from cosmoprimo.cosmology import Cosmology
 from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, get_ref_scalars_from_cosmo,
-                                           theta_analytic, solve_analytic_theta, eisenstein_hu_scales)
+                                           theta_analytic_jit, solve_analytic_theta_jit,
+                                           theta_background_kwargs, eisenstein_hu_scales)
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
@@ -2088,26 +2089,19 @@ class HarmonicEmulator(_SectionEmulator):
                     factors[key] = value ** power
         return factors, {}
 
-    def _background_kwargs(self, params):
-        """``m_ncdm``, ``N_ur``, ``T_cmb`` for the analytic ``theta``.
+    def _theta_args(self, params):
+        r"""What :func:`~cosmoprimo.emulators.analytic.theta_analytic_jit` takes after the
+        densities, positionally: :math:`w_0`, :math:`w_a`, and the radiation content, read off
+        the cosmology this emulator holds whenever the space does not vary them.
 
-        From *params* when they are being VARIED, and only otherwise from the cosmology's own
-        value. They must NOT be captured as constants: any of them can be sampled, and a captured
-        one would evaluate the emulator's basis at the fiducial while the cosmology used the
-        sampled value -- the two bases then disagree point by point, which is the failure that
-        put an earlier box 5.3 sigma off its posterior.
+        ``w_a`` is reconstructed from ``w0pwa``, since by the time this is read the expansion
+        variable is in hand rather than ``wa_fld`` itself.
         """
         fiducial = getattr(getattr(self, 'calculator', None), '_fiducial', None)
-        kwargs = {}
-        for name in ('m_ncdm', 'N_ur', 'T_cmb'):
-            if name in params:
-                kwargs[name] = params[name]
-            elif fiducial is not None:
-                kwargs[name] = fiducial[name]
-            else:
-                raise ValueError(f'the analytic theta basis needs {name}, which is neither varied '
-                                 f'nor available from a cosmology on this emulator')
-        return kwargs
+        kwargs = theta_background_kwargs(params, fiducial)
+        w0 = params.get('w0_fld', -1.)
+        return (w0, params.get('w0pwa', -1.) - w0, jnp.asarray(kwargs['m_ncdm']),
+                kwargs['N_ur'], kwargs['T_cmb'])
 
     def to_training(self, params):
         r""":math:`(h, w_0, w_a) \rightarrow (\theta_\mathrm{MC}, w_0, w_0 + w_a)`.
@@ -2133,11 +2127,9 @@ class HarmonicEmulator(_SectionEmulator):
         if 'wa_fld' in params and 'w0_fld' in params:
             params['w0pwa'] = params.pop('wa_fld') + params['w0_fld']
         if 'h' in params:
-            params['theta_MC_100'] = 100. * theta_analytic(
+            params['theta_MC_100'] = 100. * theta_analytic_jit(
                 params.pop('h'), params['omega_b'], params['omega_cdm'],
-                w0=params.get('w0_fld', -1.),
-                wa=params.get('w0pwa', -1.) - params.get('w0_fld', -1.),
-                **self._background_kwargs(params))
+                *self._theta_args(params))
         return params
 
     def from_training(self, params):
@@ -2152,10 +2144,11 @@ class HarmonicEmulator(_SectionEmulator):
         if 'w0pwa' in params:
             params['wa_fld'] = params.pop('w0pwa') - params['w0_fld']
         if 'theta_MC_100' in params:
-            params['h'] = solve_analytic_theta(
+            # `wa_fld` is back by now, so `w0pwa` is rebuilt for `_theta_args`, which reads it:
+            # the pair must be the one `to_training` used or the round trip is not the identity
+            params['h'] = solve_analytic_theta_jit(
                 params.pop('theta_MC_100'), params['omega_b'], params['omega_cdm'],
-                w0=params.get('w0_fld', -1.), wa=params.get('wa_fld', 0.),
-                **self._background_kwargs(params))
+                *self._theta_args({**params, 'w0pwa': params.get('w0_fld', -1.) + params.get('wa_fld', 0.)}))
         return params
 
     def training_space(self):

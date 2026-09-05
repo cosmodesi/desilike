@@ -201,6 +201,36 @@ class PrimordialCosmology(Calculator):
                         if coord in kwargs:
                             spec[coord] = np.unique(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
 
+    def get_emulator_cls(self):
+        """The emulator this cosmology's requirements call for.
+
+Answered for every cosmology that flattens to its
+        registered requirements, which is what the routing reads -- an :class:`ACECosmology`
+        included, and there the point is not the Boltzmann call (ACE is already fast) but the
+        routing and the leaf naming, plus training nodes cheap enough to check a box in seconds.
+
+        One sector's emulator when they all belong to one sector (see :func:`_sector`):
+        :class:`HarmonicEmulator` for the Cl (their amplitude and optical depth are analytic,
+        so they are divided out rather than expanded, and the expansion runs in the theta
+        basis), :class:`FourierEmulator`, :class:`BackgroundEmulator` or
+        :class:`ThermodynamicsEmulator` otherwise (the amplitude, tilt, dilation and analytic
+        background are divided out, and what the leaves allow leaves the grid); a
+        :class:`CosmologyEmulator`, one emulator per sector, when they span several. A plain
+        method, so ``Emulator(cosmo, space)`` asks the INSTANCE after its consumers have
+        registered; pass ``cls=CalculatorEmulator`` to force the generic expansion.
+        """
+        if getattr(self, '_conversion', 'cosmoprimo') != 'cosmoprimo':
+            # The routed sections anchor their analytic cores on a cosmoprimo fiducial (see
+            # `_RoutedSectionEmulator.set_ref_fiducial`), which an ACE cosmology only carries
+            # when it converts through one. Anything else gets the generic expansion.
+            # Not a test on `_fiducial` itself: that is set at compile, and this is asked of
+            # cosmologies that have only been constructed.
+            return None
+        sectors = {_sector(spec_key[0]) for spec_key in self._requirements}
+        if len(sectors) > 1:
+            return CosmologyEmulator
+        return CosmologyEmulator.sectors[sectors.pop()] if sectors else FourierEmulator
+
     def __getitem__(self, name):
         # Return parameter value. Free params are already live in _param_values (jit-safe).
         # For anything else (e.g. a derived quantity like 'm_ncdm_tot'), fall back to the
@@ -534,24 +564,6 @@ class CosmoprimoCosmology(PrimordialCosmology):
         Fiducial cosmology — seeds parameter default values and is the base for ``clone``.
         ``None`` falls back to a default ``cosmoprimo.Cosmology(engine=engine)``.
     """
-
-    def get_emulator_cls(self):
-        """The emulator this cosmology's requirements call for.
-
-        One sector's emulator when they all belong to one sector (see :func:`_sector`):
-        :class:`HarmonicEmulator` for the Cl (their amplitude and optical depth are analytic,
-        so they are divided out rather than expanded, and the expansion runs in the theta
-        basis), :class:`FourierEmulator`, :class:`BackgroundEmulator` or
-        :class:`ThermodynamicsEmulator` otherwise (the amplitude, tilt, dilation and analytic
-        background are divided out, and what the leaves allow leaves the grid); a
-        :class:`CosmologyEmulator`, one emulator per sector, when they span several. A plain
-        method, so ``Emulator(cosmo, space)`` asks the INSTANCE after its consumers have
-        registered; pass ``cls=CalculatorEmulator`` to force the generic expansion.
-        """
-        sectors = {_sector(spec_key[0]) for spec_key in self._requirements}
-        if len(sectors) > 1:
-            return CosmologyEmulator
-        return CosmologyEmulator.sectors[sectors.pop()] if sectors else FourierEmulator
 
     @classmethod
     def install(cls, installer):
@@ -1903,6 +1915,29 @@ class _SectionEmulator(CalculatorEmulator):
                 out[leaf] = name
         return out
 
+    def map_space(self, transform, transforms=None):
+        """:meth:`Space.map`, with the limits of every parameter the basis leaves alone put back.
+
+        ``Space.map`` rebuilds the mapped space from its points as ``mean +- nsigma sigma``,
+        which for a bounds-defined space is about 1.7x wider on every axis
+        (:math:`3/\sqrt{12}`) -- including the axes the basis change never touched. A parameter
+        the transform passes through has no image to measure and should keep the limits the
+        caller gave.
+
+        Not a nicety: measured in production, a ``wa_fld`` box of +-0.9 came back as +-1.56 and
+        the training died on a node at ``w0 + wa = 0.56``, where CLASS returns non-finite values.
+        For a chain-shaped space the two agree, since a pass-through parameter's mapped samples
+        are the source's own.
+        """
+        space = self.space
+        mapped = space.map(transform, transforms=transforms or {})
+        for name in mapped.params:
+            if name in space.params:
+                mapped.limits[name] = space.limits[name]
+                if name in getattr(space, 'bounds', {}):
+                    mapped.bounds[name] = space.bounds[name]
+        return mapped
+
     def routing(self, params):
         """``(factors, dilations)``: ``{leaf: factor}`` divided out of the leaf before the fit
         and multiplied back at prediction, and ``{leaf: s}`` for the leaves read at ``k / s``
@@ -2102,7 +2137,7 @@ class HarmonicEmulator(_SectionEmulator):
         transforms = {}
         if 'wa_fld' in names and 'w0_fld' in names:
             transforms['w0pwa'] = 'logit_w0pwa'
-        return space.map(self.to_training, transforms=transforms)
+        return self.map_space(self.to_training, transforms=transforms)
 
 
 # ── emulating a cosmology for everything that is not a Cl ─────────────────────
@@ -2371,7 +2406,7 @@ class BackgroundEmulator(_RoutedSectionEmulator):
     def training_space(self):
         if not self._omega_basis(self.space.params):
             return self.space
-        return self.space.map(self.to_training)
+        return self.map_space(self.to_training)
 
     def _off_grid(self):
         # in the fraction basis the age (its 1/h divided out) and Omega_i(z) are h-free too

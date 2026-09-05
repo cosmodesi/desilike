@@ -174,6 +174,9 @@ class CalculatorEmulator(_Emulator):
         to a dict, but a bare index for one that flattens to a sequence, which says nothing.  A
         routing subclass that knows its calculator's layout names them properly: the names are
         how the EMULATOR keys its state, so they are its business and not the calculator's.
+        The cosmology emulators name each leaf by the requirement that produced it
+        (``'fourier.pk|of=delta_cb,delta_cb'``), which is what lets two of them trained on two
+        calculators be merged by name.
         """
         import jax
 
@@ -285,7 +288,7 @@ class CalculatorEmulator(_Emulator):
         calculator : Calculator, default=None
             The calculator to deploy from, which an emulator read back from a file does not have.
             It supplies the constructor arguments, and it is kept, because prediction can need the
-            calculator itself and not only its class: ``CMBEmulator`` reads ``m_ncdm``, ``N_ur``
+            calculator itself and not only its class: ``HarmonicEmulator`` reads ``m_ncdm``, ``N_ur``
             and ``T_cmb`` off it whenever they are not varied. Pass the one wired into the
             pipeline; that is the right one by construction. A live emulator already holds its
             own, and this replaces it.

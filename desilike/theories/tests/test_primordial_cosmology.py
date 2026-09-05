@@ -515,3 +515,254 @@ if __name__ == '__main__':
 
     test = TestACECosmology()
     test.test_ace()
+
+
+# ── emulating a cosmology ─────────────────────────────────────────────────────
+#
+# What is exact is asserted as exact (the ratio emulated / exact does not move with the
+# parameter, to machine precision), and what is a preconditioner is asserted against a
+# measured number. The growth routing is checked against CLASS: cosmoprimo's eisenstein_hu
+# engine grows with the Carroll-Press-Turner approximation, whose response to w0/wa is not the
+# physical one, so it can validate the amplitude, tilt and dilation but not the growth.
+
+K = np.geomspace(1e-3, 0.5, 300)
+Z = 0.8
+BOUNDS = {'h': (0.63, 0.72), 'omega_cdm': (0.11, 0.13), 'omega_b': (0.021, 0.024),
+          'logA': (2.9, 3.2), 'n_s': (0.94, 0.99), 'w0_fld': (-1.2, -0.8), 'wa_fld': (-0.6, 0.4)}
+
+
+def _fourier_cosmology(engine='eisenstein_hu', free=('w0_fld', 'wa_fld'), harmonic=False, derived=False,
+                       background=False, age=False):
+    from desilike.parameter import Parameter
+    from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+    params = CosmoprimoCosmology.propose_params(fiducial='DESI')
+    for param in params:
+        if param.basename in free:
+            param.update(fixed=False)
+    if derived:
+        params.set(Parameter('sigma8_cb', value=0., derived=True))
+    cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI', params=params)
+    cosmo.add_requirements({
+        'fourier.pk': [{'of': 'delta_cb', 'z': Z, 'k': K}, {'of': 'theta_cb', 'z': Z, 'k': K}],
+        'primordial.pk': [{'k': K}]})
+    if background:
+        cosmo.add_requirements({'background.efunc': [{'z': Z}],
+                                'background.comoving_transverse_distance': [{'z': Z}],
+                                'thermodynamics.rs_drag': None})
+    if age:
+        cosmo.add_requirements({'background.age': None})
+    if harmonic:
+        cosmo.add_requirements({'harmonic.unlensed_cl': [{'ellmax': 60}]})
+    return cosmo
+
+
+def _space(*names):
+    from desilike.emulators import Space
+
+    return Space(bounds={name: BOUNDS[name] for name in names})
+
+
+def _relative(emulator, point, leaf='fourier.pk|of=delta_cb,delta_cb', kmin=0., kmax=np.inf):
+    predicted, exact = emulator.predict(**point)[leaf], emulator.compute(point)[leaf]
+    ratio = np.asarray(predicted) / np.asarray(exact)
+    return ratio[..., (K >= kmin) & (K <= kmax)] if 'pk' in leaf else ratio
+
+
+class TestFourierEmulator:
+
+    def test_leaves_are_named_by_requirement(self):
+        """A leaf is named by what it is, and the name does not move when a requirement is
+        appended -- which is what lets two calculators serving one requirement be stitched."""
+        from desilike.emulators import Emulator
+        from desilike.theories.primordial_cosmology import FourierEmulator
+
+        cosmo = _fourier_cosmology()
+        assert cosmo.get_emulator_cls() is FourierEmulator
+        emulator = Emulator(cosmo, _space('omega_cdm', 'omega_b'))
+        names = emulator.children_leafnames
+        assert 'fourier.pk|of=delta_cb,delta_cb' in names and 'fourier.pk|of=theta_cb,theta_cb' in names
+        assert 'primordial.pk' in names and 'input.h' in names and 'input.logA' in names
+        more = _fourier_cosmology()
+        more.add_requirements({'fourier.sigma8_z': [{'of': 'delta_cb', 'z': Z}]})
+        wider = Emulator(more, _space('omega_cdm', 'omega_b')).children_leafnames
+        assert set(names) < set(wider) and 'fourier.sigma8_z|of=delta_cb,delta_cb' in wider
+
+    def test_what_the_leaves_allow_leaves_the_grid(self):
+        """Every candidate is granted on spectra; a sigma8_z leaf keeps h and n_s, whose
+        dependence it carries through a window and an integral nothing divides out; a derived
+        sigma8 is a sigma8_z leaf like any other."""
+        from desilike.emulators import Emulator
+
+        emulator = Emulator(_fourier_cosmology(), _space(*BOUNDS))
+        assert emulator.params == ['omega_cdm', 'omega_b']
+        assert set(emulator.exact_params) == {'h', 'logA', 'n_s', 'w0_fld', 'wa_fld'}
+        cosmo = _fourier_cosmology()
+        cosmo.add_requirements({'fourier.sigma8_z': [{'of': 'delta_cb', 'z': Z}]})
+        emulator = Emulator(cosmo, _space(*BOUNDS))
+        assert emulator.params == ['h', 'omega_cdm', 'omega_b', 'n_s']
+        # a derived sigma8 is a sigma8_z leaf like any other: routed in the amplitude and the
+        # growth, and keeping h and n_s on the grid for the same reason
+        emulator = Emulator(_fourier_cosmology(derived=True), _space(*BOUNDS))
+        assert emulator.params == ['h', 'omega_cdm', 'omega_b', 'n_s']
+        assert emulator._leaf_info()['derived.sigma8_cb']['kind'] == 'sigma'
+        emulator = Emulator(_fourier_cosmology(), _space(*BOUNDS), exact=('A_s', 'n_s'))
+        assert emulator.params == ['h', 'omega_cdm', 'omega_b', 'w0_fld', 'wa_fld']
+
+    def test_amplitude_and_tilt_are_exact(self):
+        """The ratio emulated / exact is the same number at three amplitudes and three tilts:
+        not small, identical -- the parameter is not interpolated at all. And the input leaves
+        of the parameters that left the grid come back at the sampled value, not the centre."""
+        from desilike.emulators import Emulator
+
+        space = _space('omega_cdm', 'omega_b', 'logA', 'n_s')
+        emulator = Emulator(_fourier_cosmology(free=()), space).train(budget=1)
+        assert emulator.params == ['omega_cdm', 'omega_b']
+        centre = dict(space.center)
+        for name, deltas in [('logA', (-0.12, 0., 0.12)), ('n_s', (-0.02, 0., 0.02))]:
+            ratios = []
+            for delta in deltas:
+                point = {**centre, name: centre[name] + delta}
+                ratios.append(_relative(emulator, point))
+            for ratio in ratios[1:]:
+                np.testing.assert_allclose(ratio, ratios[0], rtol=0., atol=1e-11)
+        point = {**centre, 'logA': 3.15, 'n_s': 0.95}
+        predicted = emulator.predict(**point)
+        assert np.isclose(float(predicted['input.logA']), 3.15) and np.isclose(float(predicted['input.n_s']), 0.95)
+        assert np.allclose(_relative(emulator, point, leaf='primordial.pk'), 1., rtol=1e-10)
+
+    def test_one_emulator_per_sector(self):
+        """Spectra, background and sound horizon are three sectors of a `CosmologyEmulator`,
+        each expanding only what its own leaves keep: with `rs_drag` in one node set, `h` would
+        stay on the power spectrum's grid. The deployed calculator reproduces every requirement
+        of the joint cosmology, and the exact parameters reach it at their sampled values."""
+        from desilike.base import compile
+        from desilike.emulators import Emulator
+        from desilike.theories.primordial_cosmology import (CosmologyEmulator, FourierEmulator,
+                                                             BackgroundEmulator, ThermodynamicsEmulator)
+
+        cosmo = _fourier_cosmology(background=True)
+        assert cosmo.get_emulator_cls() is CosmologyEmulator
+        emulator = Emulator(cosmo, _space(*BOUNDS))
+        sectors = emulator._sectors
+        assert [type(sub) for sub in sectors.values()] == [FourierEmulator, BackgroundEmulator, ThermodynamicsEmulator]
+        assert sectors['fourier'].params == sectors['thermodynamics'].params == ['omega_cdm', 'omega_b']
+        # the background expands in the density fractions, with h a training parameter that
+        # nothing depends on
+        background = sectors['background']
+        assert background.params == ['Omega_cdm', 'Omega_b'] and 'h' in background.exact_params
+        assert set(background.training.params) - set(background.space.params) == {'Omega_cdm', 'Omega_b'}
+        assert 'thermodynamics.rs_drag' in sectors['thermodynamics'].children_leafnames
+        assert 'background.efunc' in sectors['background'].children_leafnames
+        # the age is routed in h (its unit) but not in the dark energy, so it keeps w0 and wa on
+        # this sector's grid -- and on this sector's only
+        with_age = Emulator(_fourier_cosmology(background=True, age=True), _space(*BOUNDS))._sectors
+        assert with_age['background'].params == ['Omega_cdm', 'Omega_b', 'w0_fld', 'wa_fld']
+        assert with_age['fourier'].params == ['omega_cdm', 'omega_b']
+
+        space = _space('omega_cdm', 'omega_b', 'logA', 'n_s')
+        emulator = Emulator(_fourier_cosmology(free=(), background=True, age=True), space).train(budget=1)
+        deployed = emulator.to_calculator()
+        exact = _fourier_cosmology(free=(), background=True, age=True)
+        point = {'omega_cdm': 0.118, 'omega_b': 0.0222, 'logA': 3.1, 'n_s': 0.96}
+        fast, slow = compile(deployed), compile(exact)
+        fast(point), slow(point)
+        for key in [('fourier.pk', dict(of='delta_cb', z=Z, k=K)), ('fourier.pk', dict(of='theta_cb', z=Z, k=K)),
+                    ('background.efunc', dict(z=Z)), ('background.comoving_transverse_distance', dict(z=Z)),
+                    ('thermodynamics.rs_drag', {}), ('background.age', {}), ('primordial.pk', dict(k=K))]:
+            np.testing.assert_allclose(deployed.get(key[0], **key[1]), exact.get(key[0], **key[1]), rtol=2e-3)
+        assert np.isclose(float(deployed._param_values['logA']), 3.1)
+
+
+class TestFourierEmulatorAgainstClass:
+
+    @pytest.fixture(scope='class')
+    def emulator(self):
+        from desilike.emulators import Emulator
+
+        space = _space(*BOUNDS)
+        emulator = Emulator(_fourier_cosmology(engine='class', background=True), space)
+        assert emulator._sectors['fourier'].params == ['omega_cdm', 'omega_b']
+        assert emulator._sectors['background'].params == ['Omega_cdm', 'Omega_b']
+        return emulator.train(budget=1)
+
+    def test_dilation_and_growth_route_h_w0_wa(self, emulator):
+        """h through the dilation and the analytic growth, w0 / wa through the growth alone:
+        none is on the grid, so the residual is the routing's own, measured 2026-09-04 against
+        CLASS at 1e-4 for h moved 10% and, for w0 / wa, below 1e-5 above k = 0.01 but rising
+        towards large scales (5e-4 at k = 3e-3 for w0 moved 0.18, 7e-3 at 1e-3 for wa moved
+        0.5): the analytic growth is scale-free, and CLASS's delta_cb is not quite, there.
+
+        Inside the grid: the dilation reads the reference-frame leaf at k s, and above
+        kmax / s that is the power-law tail, 1.3e-3 on the last points here. A template's grid
+        ends at k = 10, so its tail sits far from any data; this test's ends at 0.5."""
+        centre = dict(emulator.space.center)
+        for name, delta, tolerance in [('h', 0.04, 3e-4), ('h', -0.04, 3e-4), ('w0_fld', -0.18, 3e-4),
+                                       ('wa_fld', 0.45, 5e-4), ('wa_fld', -0.5, 5e-4)]:
+            point = {**centre, name: centre[name] + delta}
+            for leaf in ('fourier.pk|of=delta_cb,delta_cb', 'fourier.pk|of=theta_cb,theta_cb'):
+                ratio = _relative(emulator, point, leaf=leaf, kmin=1e-2, kmax=0.4)
+                assert np.max(np.abs(ratio - 1.)) < tolerance, (name, delta, leaf, np.max(np.abs(ratio - 1.)))
+            for leaf in ('background.efunc', 'background.comoving_transverse_distance', 'thermodynamics.rs_drag'):
+                assert np.max(np.abs(_relative(emulator, point, leaf=leaf) - 1.)) < 1e-3, (name, leaf)
+
+    def test_round_trip_through_hdf5(self, emulator, tmp_path):
+        from desilike.emulators import Emulator
+
+        point = {**emulator.space.center, 'h': 0.7, 'wa_fld': 0.2}
+        path = emulator.write(str(tmp_path / 'fourier.h5'))
+        reloaded = Emulator.read(path)
+        before, after = emulator.predict(**point), reloaded.predict(**point)
+        for key in before:
+            np.testing.assert_allclose(np.asarray(after[key]), np.asarray(before[key]), rtol=1e-12, atol=0.)
+
+
+class TestCosmologyEmulator:
+
+    def test_one_emulator_per_sector(self, tmp_path):
+        """A cosmology serving a CMB likelihood and a full-shape theory dispatches to the
+        composite: the harmonic sector keeps tau on the grid in the theta basis, the Fourier
+        sector has no tau axis and its amplitude off the grid, and the merged prediction
+        matches the joint calculator on both, through a file and through `to_calculator`."""
+        from desilike.base import compile
+        from desilike.emulators import Emulator
+        from desilike.theories.primordial_cosmology import (CosmologyEmulator, HarmonicEmulator,
+                                                             FourierEmulator)
+
+        cosmo = _fourier_cosmology(engine='class', free=('tau_reio',), harmonic=True, background=True)
+        assert cosmo.get_emulator_cls() is CosmologyEmulator
+        from desilike.emulators import Space
+        space = Space(bounds={'omega_cdm': BOUNDS['omega_cdm'], 'logA': BOUNDS['logA'], 'tau_reio': (0.04, 0.07)})
+        emulator = Emulator(cosmo, space)
+        harmonic, fourier = emulator._sectors['harmonic'], emulator._sectors['fourier']
+        assert isinstance(harmonic, HarmonicEmulator) and isinstance(fourier, FourierEmulator)
+        assert set(emulator._sectors) == {'harmonic', 'fourier', 'background', 'thermodynamics'}
+        assert 'tau_reio' in harmonic.params and 'logA' in harmonic.params
+        for name in ('fourier', 'background', 'thermodynamics'):
+            sub = emulator._sectors[name]
+            assert sub.params == ['omega_cdm'] and set(sub.exact_params) == {'logA', 'tau_reio'}, name
+        nodes = emulator.nodes(budget=1)
+        assert len(nodes['fourier']) < len(nodes['harmonic'])
+        emulator.train(budget=1)
+
+        point = {'omega_cdm': 0.118, 'logA': 3.1, 'tau_reio': 0.06}
+        predicted, exact = emulator.predict(**point), emulator.compute(point)
+        assert set(emulator.children_leafnames) <= set(predicted)
+        np.testing.assert_allclose(predicted['fourier.pk|of=delta_cb,delta_cb'],
+                                   exact['fourier.pk|of=delta_cb,delta_cb'], rtol=2e-3)
+        cl = 'harmonic.unlensed_cl|ellmax=60.tt'
+        np.testing.assert_allclose(predicted[cl][2:], exact[cl][2:], rtol=5e-3)
+        assert np.isclose(float(predicted['input.tau_reio']), 0.06)
+
+        reloaded = Emulator.read(emulator.write(str(tmp_path / 'joint.h5')))
+        assert isinstance(reloaded, CosmologyEmulator)
+        again = reloaded.predict(**point)
+        for key in predicted:
+            np.testing.assert_allclose(np.asarray(again[key]), np.asarray(predicted[key]), rtol=1e-12, atol=0.)
+
+        deployed = reloaded.to_calculator(calculator=cosmo)
+        compile(deployed)(point)
+        np.testing.assert_allclose(deployed.get('thermodynamics.rs_drag'), exact['thermodynamics.rs_drag'], rtol=1e-3)
+        np.testing.assert_allclose(deployed.get('fourier.pk', of='delta_cb', z=Z, k=K),
+                                   np.squeeze(exact['fourier.pk|of=delta_cb,delta_cb']), rtol=2e-3)
+        np.testing.assert_allclose(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:], exact[cl][2:], rtol=5e-3)

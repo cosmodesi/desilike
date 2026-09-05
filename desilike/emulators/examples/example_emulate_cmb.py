@@ -96,7 +96,9 @@ print('varied:', [param.basename for param in cosmo.params if not param.fixed])
 
 
 # --- 3. build, size, train -------------------------------------------------------------------
-# `CosmoprimoCosmology.get_emulator_cls` declares CMBEmulator, so this is picked up on its own:
+# `CosmoprimoCosmology.get_emulator_cls` answers HarmonicEmulator for a cosmology whose requirements
+# are all harmonic (FourierEmulator with none, CosmologyEmulator -- one sector each -- with both), so
+# this is picked up on its own:
 # the amplitude and one exp(-tau) per screened leg ('tt' and 'ee' two, 'tp' and 'ep' one, 'pp'
 # none) are divided out before the fit and put back at prediction. Both stay on the grid -- with
 # lensing neither is exact -- so this buys node count, not exactness.

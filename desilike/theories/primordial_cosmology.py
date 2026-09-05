@@ -531,12 +531,23 @@ class CosmoprimoCosmology(PrimordialCosmology):
         ``None`` falls back to a default ``cosmoprimo.Cosmology(engine=engine)``.
     """
 
-    @classmethod
-    def get_emulator_cls(cls):
-        """:class:`CMBEmulator`: the Cl amplitude and optical depth are
-        analytic, so they are divided out rather than expanded.  `Emulator(cosmo, space)` picks
-        this up on its own; pass `cls=CalculatorEmulator` to force the generic expansion."""
-        return CMBEmulator
+    def get_emulator_cls(self):
+        """The emulator this cosmology's requirements call for.
+
+        One sector's emulator when they all belong to one sector (see :func:`_sector`):
+        :class:`HarmonicEmulator` for the Cl (their amplitude and optical depth are analytic,
+        so they are divided out rather than expanded, and the expansion runs in the theta
+        basis), :class:`FourierEmulator`, :class:`BackgroundEmulator` or
+        :class:`ThermodynamicsEmulator` otherwise (the amplitude, tilt, dilation and analytic
+        background are divided out, and what the leaves allow leaves the grid); a
+        :class:`CosmologyEmulator`, one emulator per sector, when they span several. A plain
+        method, so ``Emulator(cosmo, space)`` asks the INSTANCE after its consumers have
+        registered; pass ``cls=CalculatorEmulator`` to force the generic expansion.
+        """
+        sectors = {_sector(spec_key[0]) for spec_key in self._requirements}
+        if len(sectors) > 1:
+            return CosmologyEmulator
+        return CosmologyEmulator.sectors[sectors.pop()] if sectors else FourierEmulator
 
     @classmethod
     def install(cls, installer):
@@ -1699,6 +1710,323 @@ class ACECosmology(PrimordialCosmology):
             self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
 
 
+# ── emulating a cosmology: the leaves, named by requirement ──────────────────
+#
+# A :class:`CosmoprimoCosmology` flattens to its parameter values, one leaf per registered
+# requirement (a dict of spectra for the harmonic ones), then its derived parameters. The
+# generic :class:`~desilike.emulators.CalculatorEmulator` names those leaves by pytree path,
+# which for an array result is a bare position: ``'1'``, ``'2'``. A position says nothing an
+# emulator can route on, and it moves whenever a requirement is added -- the same
+# ``fourier.pk`` is leaf 1 in a cosmology that serves one theory and leaf 3 in one that also
+# serves a CMB likelihood. So every emulator below names each leaf by the requirement that
+# produced it (``'fourier.pk|of=delta_cb,delta_cb'``, ``'harmonic.lensed_cl|ellmax=2500.tt'``),
+# the input parameters by ``'input.<name>'`` and the derived parameters by
+# ``'derived_params.<name>'``. Two cosmologies that share a requirement then share its leaf
+# name, which is what lets :class:`CosmologyEmulator` stitch a harmonic and a Fourier emulator
+# trained on two different calculators into one.
+
+
+def _spec_name(spec_key):
+    """The leaf name of a requirement: its method key and static arguments.
+
+    ``'/'`` is HDF5's group separator and these names are keys of a saved emulator, so one is
+    refused rather than written into a file that cannot be read back.
+    """
+    method_key, static = spec_key
+    parts = []
+    for key, value in static:
+        if isinstance(value, (tuple, list)):
+            value = ','.join(str(item) for item in value)
+        parts.append(f'{key}={value}')
+    name = method_key + ''.join(f'|{part}' for part in parts)
+    if '/' in name:
+        raise ValueError(f'cannot name the requirement {spec_key!r}: "/" in {name!r}')
+    return name
+
+
+def _spec_key(method_key, kwargs):
+    """The key :meth:`PrimordialCosmology.add_requirements` registers *kwargs* under."""
+    static = _normalize_static({key: value for key, value in kwargs.items() if key not in _COORDS})
+    return (method_key, tuple(sorted(static.items())))
+
+
+def _amplitude_like(name):
+    """Whether a bare ``params.<name>`` requirement could depend on the amplitude."""
+    return (name in ('A_s', 'logA', 'sigma8') + tuple(Cosmology._alias_parameters['logA'])
+            or name.startswith(('sigma8', 'sigma_', 'S8')))
+
+
+def _sector(method_key):
+    """The sector a requirement is emulated in: the cosmoprimo section it is read from.
+
+    The primordial spectrum goes with the Fourier one, and a bare ``params.<name>`` with the
+    background unless the name is an amplitude. Each sector gets an emulator of its own in
+    :class:`CosmologyEmulator`, because each depends on a different subset of the parameters:
+    ``rs_drag`` on the densities alone, the background on those and ``h``, ``w0``, ``wa``, the
+    spectra on everything but ``tau_reio`` -- and with one node set for all, a single ``rs_drag``
+    leaf would keep ``h`` on the power spectrum's grid.
+    """
+    section = method_key.split('.', 1)[0]
+    if section in ('fourier', 'primordial'):
+        return 'fourier'
+    if section == 'params':
+        return 'fourier' if _amplitude_like(method_key[len('params.'):]) else 'background'
+    return section
+
+
+#: What a requirement is, for routing: the method key -> a kind whose dependence on the
+#: cosmological parameters the emulators below know.
+_LEAF_KINDS = {'fourier.pk': 'pk', 'fourier.pk_now': 'pk',
+               'fourier.sigma8_z': 'sigma', 'fourier.sigma_rz': 'sigma',
+               'primordial.pk': 'primordial',
+               'background.efunc': 'efunc',
+               'background.comoving_transverse_distance': 'distance',
+               'background.luminosity_distance': 'distance',
+               'background.growth_factor': 'growth', 'background.growth_rate': 'rate',
+               'thermodynamics.rs_drag': 'rs_drag', 'background.age': 'age',
+               'background.Omega_b': 'omega', 'background.Omega_cdm': 'omega',
+               'background.Omega_ncdm_tot': 'omega'}
+
+#: The canonical names a :class:`FourierEmulator` can take off the grid, and per kind of leaf
+#: which of them it lets go: those whose dependence the transform pair divides out (exactly, or
+#: through the analytic growth: ``A_s``, ``n_s``, ``h``, ``w0_fld``, ``wa_fld`` for a
+#: spectrum) and those it does not depend on at all (``tau_reio`` for anything Fourier, the
+#: amplitude for a background quantity). A parameter leaves the grid only when every leaf lets
+#: it -- an opaque ``params.<name>`` leaf keeps everything but what it provably ignores.
+_EXACT_NAMES = ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld')
+_OFF_GRID = {'pk': _EXACT_NAMES, 'primordial': _EXACT_NAMES, 'input': _EXACT_NAMES,
+             'sigma': ('A_s', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'efunc': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'distance': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'growth': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'rate': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'rs_drag': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
+             'age': ('A_s', 'n_s', 'tau_reio'), 'omega': ('A_s', 'n_s', 'tau_reio'),
+             'opaque': ('A_s', 'n_s', 'tau_reio'), 'amplitude': ('tau_reio',), 'cl': ()}
+
+
+def _resample_dilated(k, column, query):
+    r"""``column``, sampled on ``k``, read at ``query``, with a bounded tail off the grid.
+
+    The dilation reads a column sampled on a fixed k grid at :math:`k / s` (or, going the
+    other way, at :math:`k s`), so for :math:`s \ne 1` one end of the query range always falls
+    outside the grid: above ``kmax`` when :math:`s < 1`, below ``kmin`` when :math:`s > 1`.
+
+    ``interpax``'s ``extrap=True`` continues the last *cubic* segment there, which over the
+    ~25% of the log range the ACE ``h`` box reaches is not a small error: measured over
+    h in [0.50041, 0.89957] at z = 0.8 on folps' output grid, the median column's interpolation
+    error in ``h`` is 1.1e-05 across the 434 of 480 grid points that are never extrapolated and
+    4.2e-02 when the other 46 are included -- and every worst point, at every node count, sits
+    at the last grid point. It reaches no data bin (the table is read back at
+    :math:`s\,k_\mathrm{ap}`, well inside), but it is fitted, and it makes every accuracy
+    metric on this emulator misleading.
+
+    A first-order continuation in :math:`\ln k` instead, with the slope read across a WINDOW
+    rather than between neighbours. Bounded, continuous with the last segment, and a smooth
+    function of ``h`` -- which a clamp or a fill value would not be: those put a kink at the
+    ``s`` where each component crosses the boundary, and a kink is worse for a Chebyshev
+    expansion than a wrong-but-smooth value in a region nothing reads.
+
+    The tail is not always in a region nothing reads. ``FOLPSD3PolesEmulator`` resamples the
+    other way at prediction time, and ``folps.sigmas`` integrates the reconstructed rows over the
+    whole grid -- so the tail lands inside the BAO damping.
+
+    **A power law was tried here and removed.** It is the shape these columns actually have at
+    the ends of the grid, and on the bispectrum multipoles over the ACE ``h`` box at 5 nodes it
+    was worth median / max ``|dB/B|`` of 5.6e-06 / 4.4e-05 against the 8.2e-06 / 2.4e-04 this
+    gives -- so a factor 1.5 on the median and 5 on the max, the worst point being the top edge
+    of the box.
+
+    It is also unsafe, because an exponential of a locally-estimated slope has no bound: at
+    ``nk = 480`` the spacing is ``d ln k = 0.013``, so two samples differing by a factor 3 --
+    which the no-wiggle ``Ploop_dt`` does near a zero crossing -- give a slope of 84, and
+    exponentiating that over the 0.30 in ``ln k`` the ACE ``h`` box reaches turned a table value
+    of 445 into 7.5e+13. That was fitted, leaving coefficients of 1e+13 in ``table_now.4``
+    against a median of 1.8e-04, and the emulated chi2 then diverged from the exact one by 1e+15
+    at every posterior sample. Clipping the slope to :math:`|{\rm d}\ln c / {\rm d}\ln k| \le 4`
+    fixed that and kept the accuracy; a first-order tail cannot go wrong that way at all, which
+    is why it is what ships. To take the factor 5 back, restore the power law WITH that clip --
+    the window below is what makes the slope estimate stable, the clip is what makes the
+    exponential safe, and neither is sufficient alone.
+    """
+    import interpax
+
+    # The grid is detached as an abscissa, for the reason spelled out in
+    # `FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`: an emulated calculator emits it
+    # as a traced output whose derivative is exactly zero, and differentiating an interpolation
+    # with respect to its own abscissa is NaN at a node, which `0 * NaN = NaN` then propagates
+    # into every cosmological gradient. It is genuinely constant, so this is exact. `query` keeps
+    # its gradient -- that is where the dilation scale enters.
+    k = jax.lax.stop_gradient(jnp.asarray(k))
+    column = jnp.asarray(column)
+    query = jnp.asarray(query)
+    lnk, lnq = jnp.log(k), jnp.log(jnp.abs(query))
+    out = interpax.interp1d(jnp.clip(query, k[0], k[-1]), k, column, method='cubic')
+
+    def tail(edge, inner, lnedge, lninner):
+        return edge + (edge - inner) / (lnedge - lninner) * (lnq - lnedge)
+
+    # The slope is read across a WINDOW, not between neighbours: a secant over one interval of a
+    # fine grid measures the local noise rather than the trend, and the tail then carries it over
+    # the whole extrapolated range. At nk = 480 this is 9 intervals, d ln k = 0.12 against 0.013.
+    step = max(1, k.size // 50)
+    return jnp.where(query < k[0], tail(column[0], column[step], lnk[0], lnk[step]),
+                     jnp.where(query > k[-1],
+                               tail(column[-1], column[-1 - step], lnk[-1], lnk[-1 - step]),
+                               out))
+
+
+def _dilate(k, value, scale):
+    """*value*, sampled on *k* along its last axis, read at ``k * scale`` row by row."""
+    k, value = np.asarray(k), jnp.asarray(value)
+    rows = jax.vmap(lambda row: _resample_dilated(k, row, k * scale))(value.reshape(-1, k.size))
+    return rows.reshape(value.shape)
+
+
+class _SectionEmulator(CalculatorEmulator):
+    """What every emulator of a :class:`CosmoprimoCosmology` shares.
+
+    * leaves named by requirement (see the section comment above), so the routing keys off
+      what a leaf IS and two calculators serving the same requirement agree on its name;
+    * a description of each leaf -- its kind, its ``of`` pair, its ``z`` and ``k`` grids -- read off
+      the calculator's own requirement registry, which every routing decision below is made
+      from;
+    * the transform pair, written once: each subclass says what to divide out
+      (:meth:`routing`) and this class applies it, both ways, and rebuilds the input leaves of
+      the parameters that left the grid. A parameter handled exactly is held at the box centre
+      while the nodes are evaluated, so its ``input.<name>`` leaf would otherwise be predicted
+      at the centre for ever.
+    """
+
+    def set_children_leafnames(self):
+        aux, calculator = self.aux, self.calculator
+        # in the order `tree_flatten` produces: a dict child flattens in sorted key order
+        names = [f'input.{name}' for name in sorted(calculator._param_values)]
+        for spec_key, spec in aux['ordered_specs']:
+            base = _spec_name(spec_key)
+            result = calculator._results.get(spec_key)
+            if isinstance(result, dict):
+                names += [f'{base}.{key}' for key in sorted(result)]
+            else:
+                names.append(base)
+        names += [f'derived_params.{param.name}' for param in aux['derived_params']]
+        self.children_leafnames = names
+
+    def _leaf_info(self):
+        """``{leaf name: description}`` for every leaf and derived output.
+
+        A description is ``kind`` (see ``_LEAF_KINDS``; ``'input'`` for a parameter leaf,
+        ``'cl'`` for a spectrum, ``'opaque'`` for a ``params.<name>`` requirement whose
+        dependence is unknown), ``of`` (the pair of perturbed quantities), the ``z``/``k``/``r`` grids the
+        requirement was registered on, and ``name`` for a parameter leaf.
+        """
+        cached = getattr(self, '_leaf_info_cache', None)
+        if cached is not None:
+            return cached
+        aux = self.aux
+        specs = {spec_key: spec for spec_key, spec in aux['ordered_specs']}
+        inputs = {param.basename for param in aux['params']}
+
+        def describe(spec_key):
+            method_key, static = spec_key
+            spec, static = specs[spec_key], dict(static)
+            info = {'kind': _LEAF_KINDS.get(method_key), 'method': method_key,
+                    'of': tuple(static.get('of', ())), 'name': None,
+                    'z': spec.get('z'), 'k': spec.get('k'), 'r': spec.get('r')}
+            if method_key.startswith('params.'):
+                name = method_key[len('params.'):]
+                info['name'] = name
+                info['kind'] = ('input' if name in inputs
+                                else 'amplitude' if _amplitude_like(name) else 'opaque')
+            elif method_key.startswith('harmonic.'):
+                info['kind'] = 'cl'
+            elif info['kind'] is None:
+                info['kind'] = 'opaque'
+            return info
+
+        # longest base first: a dict result's leaves are `base + '.' + key`, and the prefix
+        # test must not let a shorter base claim them
+        bases = sorted(((_spec_name(spec_key), spec_key) for spec_key in specs),
+                       key=lambda item: -len(item[0]))
+        info = {}
+        for leaf in self.children_leafnames:
+            if leaf.startswith('input.'):
+                info[leaf] = {'kind': 'input', 'method': 'input', 'of': (),
+                              'name': leaf[len('input.'):], 'z': None, 'k': None, 'r': None}
+                continue
+            if leaf.startswith('derived_params.'):
+                continue
+            for base, spec_key in bases:
+                if leaf == base or leaf.startswith(base + '.'):
+                    info[leaf] = describe(spec_key)
+                    break
+            else:
+                raise ValueError(f'the leaf {leaf!r} matches no registered requirement')
+        # a derived parameter is both a child (`derived_params.`) and a graph output (`derived.`)
+        for name, getter in aux['get_derived'].items():
+            info[f'derived_params.{name}'] = info[f'{DERIVED}{name}'] = describe(_spec_key(*getter))
+        self._leaf_info_cache = info
+        return info
+
+    def _exact_input_leaves(self):
+        """``{leaf: parameter name}`` for the input leaves of the parameters handled exactly."""
+        out = {}
+        for name in self.exact_params:
+            basename = self.graph_params[name].basename if name in self.graph_params else name
+            leaf = f'input.{basename}'
+            if leaf in self.children_leafnames:
+                out[leaf] = name
+        return out
+
+    def routing(self, params):
+        """``(factors, dilations)``: ``{leaf: factor}`` divided out of the leaf before the fit
+        and multiplied back at prediction, and ``{leaf: s}`` for the leaves read at ``k / s``
+        (in the reference frame) before the fit and at ``k s`` after it. Nothing, by default."""
+        return {}, {}
+
+    def transform(self, values, params):
+        factors, dilations = self.routing(params)
+        info, exact = self._leaf_info(), self._exact_input_leaves()
+        out = {}
+        for name, value in values.items():
+            if name in exact:
+                continue
+            if name in factors:
+                # in the leaf's shape when the sizes agree: a derived scalar is stored with
+                # shape () while its factor comes from a z grid of one
+                factor = factors[name]
+                if jnp.size(factor) == jnp.size(value):
+                    factor = jnp.reshape(factor, jnp.shape(value))
+                value = value / factor
+            if name in dilations:
+                # c(k) = P(k / s) / s^3: the leaf in the reference frame, a smooth function of
+                # h rather than the BAO wiggles sliding through the k grid
+                scale = dilations[name]
+                value = _dilate(info[name]['k'], value, 1. / scale) / scale**3
+            out[name] = value
+        return out
+
+    def inverse_transform(self, values, params):
+        factors, dilations = self.routing(params)
+        info, exact = self._leaf_info(), self._exact_input_leaves()
+        out = {}
+        for name, value in values.items():
+            if name in dilations:
+                scale = dilations[name]
+                value = scale**3 * _dilate(info[name]['k'], value, scale)
+            if name in factors:
+                factor = factors[name]
+                if jnp.size(factor) == jnp.size(value):
+                    factor = jnp.reshape(factor, jnp.shape(value))
+                value = value * factor
+            out[name] = value
+        if exact:
+            user = self.from_training(dict(params))
+            for leaf, name in exact.items():
+                out[leaf] = jnp.asarray(user[name])
+        return out
+
+
 # ── emulating a cosmology for its Cl ──────────────────────────────────────────
 #
 # Emulating the CMB spectra a likelihood asks a cosmology for.
@@ -1759,7 +2087,7 @@ def _theta_analytic(h, omega_b, omega_cdm, w0=-1., wa=0., m_ncdm=(0.06,), N_ur=2
     in a spline PER COSMOLOGY INSTANCE, and so rebuilds inside a trace at every call. Measured,
     that route costs 1.2 ms jitted and gets WORSE under ``vmap`` (1.86 ms/point); this is 0.21 ms
     jitted and 0.051 ms/point at ``vmap`` 256. It lives here rather than in cosmoprimo because it
-    exists for :meth:`CMBEmulator.to_training`, which runs inside the trace where the exact value
+    exists for :meth:`HarmonicEmulator.to_training`, which runs inside the trace where the exact value
     cannot be computed at all -- it is behind a ``pure_callback``.
 
     ``m_ncdm`` is an ordinary argument, not a captured constant, so it can be emulated later.
@@ -1814,7 +2142,7 @@ def _solve_analytic_theta(target, omega_b, omega_cdm, limits=(0.2, 2.5), iterati
     """The ``h`` whose analytic ``theta_MC_100`` is *target*, by bisection on a closed-form function.
 
     No engine is touched, so this works inside a trace, which is what
-    :meth:`CMBEmulator.from_training` needs -- the exact solve runs a background per iteration and
+    :meth:`HarmonicEmulator.from_training` needs -- the exact solve runs a background per iteration and
     cannot be traced at all.
 
     Deliberately NOT used to seed :meth:`cosmoprimo.Cosmology.solve`: tried and measured slower,
@@ -1822,7 +2150,7 @@ def _solve_analytic_theta(target, omega_b, omega_cdm, limits=(0.2, 2.5), iterati
     background evaluations wherever they start.
 
     A bisection whose bracket does not contain the root returns ``nan``, not an endpoint. It is
-    the one thing this has to get right: :meth:`CMBEmulator.from_training` calls it to turn a
+    the one thing this has to get right: :meth:`HarmonicEmulator.from_training` calls it to turn a
     NODE's ``theta_MC_100`` into the ``h`` the calculator is evaluated at, so an endpoint is a
     node fitted at one theta and recorded at another, and a Chebyshev fit mixes that into every
     coefficient. Measured on the CMB w0waCDM box at nsigma 3.75, the old ``(0.2, 1.5)`` bracket
@@ -1846,12 +2174,14 @@ def _solve_analytic_theta(target, omega_b, omega_cdm, limits=(0.2, 2.5), iterati
     return jnp.where(flow * fhigh > 0., jnp.nan, 0.5 * (low + high))
 
 
-class CMBEmulator(CalculatorEmulator):
+class HarmonicEmulator(_SectionEmulator):
     r"""A cosmology emulated for its :math:`C_\ell`, with the amplitude and optical depth routed.
 
-    Declared by :meth:`CosmoprimoCosmology.get_emulator_cls`, so ``Emulator(cosmo, space)`` uses
-    it without being told. A cosmology with no harmonic requirement is unaffected: nothing is
-    then recognised as a spectrum and every leaf passes through.
+    Declared by :meth:`CosmoprimoCosmology.get_emulator_cls` for a cosmology whose requirements
+    are all harmonic, and used for the harmonic sector of a :class:`CosmologyEmulator`. A
+    Fourier leaf on the same cosmology gets its amplitude power divided out too, so a joint
+    cosmology forced onto this class is flattened in :math:`A_s` throughout; it is the
+    :math:`\theta_\mathrm{MC}` basis and the optical depth that are specific to the spectra.
     """
 
     def spectra(self):
@@ -1865,8 +2195,9 @@ class CMBEmulator(CalculatorEmulator):
                 for name in getattr(self, 'children_leafnames', [])
                 if name.rsplit('.', 1)[-1] in spectra}
 
-    def scaling(self, params):
-        r"""``{leaf key: factor}`` divided out at training and multiplied back at prediction."""
+    def routing(self, params):
+        r"""``{leaf key: factor}`` divided out at training and multiplied back at prediction,
+        and no dilation."""
         value = amplitude(params)
         tau = params.get('tau_reio', None)
         factors = {}
@@ -1876,8 +2207,13 @@ class CMBEmulator(CalculatorEmulator):
                 # one e^{-tau} per screened leg: 'tt' 2, 'tp' 1, 'pp' 0
                 factor = factor * jnp.exp(-tau * sum(leg != 'p' for leg in spectrum))
             factors[key] = factor
-        return factors
-
+        if value is not None:
+            # the Fourier leaves of a joint cosmology: exact powers of the amplitude
+            for key, info in self._leaf_info().items():
+                power = {'pk': 1., 'sigma': 0.5, 'primordial': 1.}.get(info['kind'], 0.)
+                if power:
+                    factors[key] = value ** power
+        return factors, {}
 
     def _background_kwargs(self, params):
         """``m_ncdm``, ``N_ur``, ``T_cmb`` for the analytic ``theta``.
@@ -1968,15 +2304,410 @@ class CMBEmulator(CalculatorEmulator):
             return space
         return space.map(self.to_training, transforms={'w0pwa': 'logit_w0pwa'})
 
-    def transform(self, values, params):
-        factors = self.scaling(params)
-        return {name: value / factors[name] if name in factors else value
-                for name, value in values.items()}
 
-    def inverse_transform(self, values, params):
-        factors = self.scaling(params)
-        # derived quantities and the parameter leaves are not spectra; they pass through, which
-        # `factors` not naming them already achieves
-        assert not any(name.startswith(DERIVED) for name in factors)
-        return {name: value * factors[name] if name in factors else value
-                for name, value in values.items()}
+# ── emulating a cosmology for everything that is not a Cl ─────────────────────
+#
+# The linear power spectrum a full-shape theory asks a cosmology for -- and the growth, the
+# distances and the sound horizon a BAO or supernova likelihood asks for -- is analytic in more
+# of its parameters than a :math:`C_\ell` is, and pays for none of the harmonic sector's
+# difficulties: no optical depth, no acoustic-peak variable, no lensing. So what is divided
+# out here is divided out exactly, and the parameter leaves the grid:
+#
+# - the amplitude, :math:`P \propto A_s`, :math:`\sigma_8 \propto A_s^{1/2}`;
+# - the tilt, :math:`P \propto (k h / k_\mathrm{pivot})^{n_s - 1}` through the primordial
+#   spectrum alone, the transfer function knowing nothing of it;
+# - ``h``, through the dilation :math:`P_h(k) = s^3 P_\mathrm{fid}(k s)`, :math:`s = h /
+#   h_\mathrm{fid}`, for a spectrum in :math:`(\mathrm{Mpc}/h)^3` on a grid in
+#   :math:`h/\mathrm{Mpc}`: at fixed physical densities the transfer function in
+#   :math:`\mathrm{Mpc}^{-1}` does not move with ``h``, and only the late-time growth does --
+#   which the next item carries;
+# - the growth, :math:`D(z)` per density leg and :math:`f(z) D(z)` per velocity leg, from the
+#   same analytic w0waCDM core :class:`~desilike.theories.galaxy_clustering.template.ScalingScalars`
+#   is built on (:func:`~desilike.theories.galaxy_clustering.template.get_ref_scalars_from_cosmo`).
+#   That one is a preconditioner rather than an identity -- neutrinos count as matter, radiation
+#   is in the background but not the growth source -- and it is what carries ``w0_fld`` and
+#   ``wa_fld``, and ``h``'s effect on the growth, off the grid.
+#
+# Whether a parameter actually leaves the grid is decided per cosmology, from what it serves
+# (``_OFF_GRID`` above): a ``sigma8_z`` leaf keeps ``h`` and ``n_s`` on it,
+# because its top-hat window moves with ``h`` and its tilt dependence is an integral. Whatever
+# stays on the grid is still divided out, so the expansion carries only the residual -- which is
+# the FOLPSD emulator's ``precondition`` mechanism, applied one level down.
+
+
+class _RoutedSectionEmulator(_SectionEmulator):
+    r"""The routing above, for one non-harmonic sector of a cosmology.
+
+    :class:`FourierEmulator`, :class:`BackgroundEmulator` and :class:`ThermodynamicsEmulator`
+    are this, named for the section they serve: the routing is decided leaf by leaf, so the
+    same code does the right thing on a power spectrum, a distance or a sound horizon, and
+    what differs between the sections is only which parameters their leaves let off the grid.
+
+    Identity basis: a ``k`` grid is in :math:`h/\mathrm{Mpc}`, so ``h`` enters directly, and
+    the :math:`\theta_\mathrm{MC}` route would put ``omega_b`` on the grid for nothing.
+    ``exact`` lists, in canonical names, what may leave the grid; :meth:`select_params` grants
+    each one only when every leaf either routes it or does not depend on it. ``tau_reio`` never
+    reaches any of these quantities and always leaves.
+    """
+    exact = _EXACT_NAMES
+
+    #: What the analytic core moves: the fiducial is cloned with these, in canonical spellings,
+    #: and everything else stays at its fiducial value.
+    _ref_update_names = ('h', 'omega_b', 'omega_cdm', 'm_ncdm', 'N_eff', 'Omega_k', 'w0_fld',
+                         'wa_fld')
+
+    def __init__(self, calculator, space, exact=None, **options):
+        """As the base, plus the anchors the analytic core is written against, so a saved
+        emulator predicts with no calculator at hand.
+
+        *exact* overrides the class's list of what may leave the grid, in canonical names:
+        ``exact=('A_s', 'n_s', 'tau_reio')`` keeps ``h``, ``w0_fld`` and ``wa_fld`` expanded
+        (still divided out, so the expansion carries the residual only). The reason to: the
+        analytic growth is a preconditioner, and against CLASS its residual on a ``delta_cb``
+        spectrum is below 1e-4 at every k for a 10% change in ``h`` but reaches 7e-3 at
+        k = 1e-3 h/Mpc for ``wa_fld`` moved by 0.5 -- below 1.4e-4 from k = 3e-3 up -- which
+        an analysis reaching such scales may not want to leave uninterpolated.
+        """
+        if exact is not None:
+            self.exact = tuple(exact)
+        super().__init__(calculator, space, **options)
+        self._anchors = {
+            # the eisenstein_hu clone, not the fiducial itself: its state names an engine, and
+            # a saved emulator should not need the Boltzmann code the fiducial was built with
+            # just to rebuild the analytic core
+            'fiducial': self.calculator._fiducial.clone(engine='eisenstein_hu').__getstate__(),
+            'defaults': {param.basename: float(np.sum(np.atleast_1d(param.value)))
+                         for param in self.calculator.params},
+            'zs': np.array(sorted({float(z) for info in self._leaf_info().values()
+                                   if info['z'] is not None for z in np.atleast_1d(info['z'])}))}
+        self.set_ref_fiducial()
+
+    def set_ref_fiducial(self):
+        """Rebuild the fiducial and its analytic scalars from the anchors, once.
+
+        Recomputed rather than stored: the growth ratios are numerator over denominator from the
+        same function, and an emulator trained before a change to it must be retrained, not
+        redeployed with a stale denominator.
+        """
+        from cosmoprimo.emulators.cosmology import _eisenstein_hu_scales
+        from .galaxy_clustering.template import get_ref_scalars_from_cosmo
+
+        self._fiducial = Cosmology.from_state(self._anchors['fiducial'])
+        scalars = [get_ref_scalars_from_cosmo(float(z), self._fiducial) for z in self._anchors['zs']]
+        self._ref = {name: np.array([float(item[name]) for item in scalars])
+                     for name in ('invE', 'DM', 'D', 'f')}
+        self._ref_rs_drag = float(_eisenstein_hu_scales(self._fiducial)['rs_drag'])
+
+    def select_params(self, names):
+        """Everything but what the leaves let the transform pair carry exactly.
+
+        A candidate is granted only when every leaf either routes it (its dependence is divided
+        out) or is independent of it: one ``sigma8_z`` leaf keeps ``h`` on the grid for the
+        whole emulator, since its window moves with ``h`` and nothing here follows that.
+        """
+        # The spellings the routing can convert. `sigma8` is deliberately not one for the
+        # amplitude: the analytic core reads `A_s` off an eisenstein_hu clone, and the `A_s` that
+        # engine derives from a sampled `sigma8` is not the Boltzmann code's.
+        spellings = {'A_s': ('A_s', 'logA') + tuple(Cosmology._alias_parameters['logA']), 'h': ('h', 'H0')}
+        kinds, off_grid = {info['kind'] for info in self._leaf_info().values()}, self._off_grid()
+        return [name for name in names
+                if not any(name in spellings.get(canonical, (canonical,))
+                           and all(canonical in off_grid[kind] for kind in kinds)
+                           for canonical in self.exact)]
+
+    def _off_grid(self):
+        """Per kind of leaf, what it lets off the grid: ``_OFF_GRID``, unless a sector's
+        expansion basis makes more of its leaves independent of a parameter."""
+        return _OFF_GRID
+
+    def _exact_input_leaves(self):
+        """As the base, for every parameter of the user's space that is not expanded -- not only
+        those handled exactly, but also those the training basis replaced: ``omega_b`` is not a
+        training parameter of a sector expanding in ``Omega_b``, and its leaf is rebuilt from
+        :meth:`from_training` like the others."""
+        out = {}
+        for name in self.space.params:
+            if name in self.params:
+                continue
+            basename = self.graph_params[name].basename if name in self.graph_params else name
+            leaf = f'input.{basename}'
+            if leaf in self.children_leafnames:
+                out[leaf] = name
+        return out
+
+    def routing(self, params):
+        """*params* are in the user's spelling -- ``H0``, ``logA``, whatever the pipeline
+        samples -- so the fiducial is cloned with them and the canonical names are read off the
+        clone, exactly as :class:`~desilike.theories.galaxy_clustering.template.ScalingScalarsEmulator`
+        does. Traceable: eisenstein_hu is a JAX engine."""
+        from cosmoprimo.emulators.cosmology import _eisenstein_hu_scales
+        from .galaxy_clustering.template import get_ref_scalars_from_cosmo
+
+        # `params` are in the training basis, which a sector may have changed
+        params = self.from_training(dict(params))
+        given = {self.graph_params[name].basename if name in self.graph_params else name: value
+                 for name, value in params.items()}
+        fid, zs = self._fiducial, self._anchors['zs']
+        cosmo = fid.clone(**{name: given.get(name, value) for name, value in self._anchors['defaults'].items()})
+        # the analytic core, at the canonical values the clone resolved
+        scalars = [get_ref_scalars_from_cosmo(float(z), fid.clone(**{name: cosmo[name] for name in self._ref_update_names}))
+                   for z in zs]
+        ratios = {}
+        for name, ref in self._ref.items():
+            values = jnp.array([item[name] for item in scalars]) if scalars else jnp.zeros(0)
+            # DM is 0 at z = 0: a ratio of nothing to nothing is 1
+            ratios[name] = jnp.where(ref != 0., values / np.where(ref != 0., ref, 1.), 1.)
+        amplitude_ratio = cosmo['A_s'] / fid['A_s']
+        h, n_s, k_pivot = cosmo['h'], cosmo['n_s'], fid['k_pivot']
+        scale = h / fid['h']
+
+        def at(name, z):
+            return ratios[name][np.searchsorted(zs, np.atleast_1d(z))]
+
+        def growth(z, of):
+            factor = 1.
+            for name in of:
+                factor = factor * at('D', z)
+                if str(name).startswith('theta'):
+                    factor = factor * at('f', z)
+            return factor
+
+        factors, dilations = {}, {}
+        for leaf, info in self._leaf_info().items():
+            kind = info['kind']
+            if kind == 'pk':
+                k = np.asarray(info['k'])
+                # the tilt on the leaf's own grid, at the live h: after the dilation reads this
+                # at k / s the primordial factor is (k h_fid / k_pivot)^(n_s - 1), h-free
+                tilt = (k * h / k_pivot) ** (n_s - fid['n_s'])
+                factors[leaf] = amplitude_ratio * growth(info['z'], info['of'])[:, None] * tilt[None, :]
+                dilations[leaf] = scale
+            elif kind == 'sigma':
+                factor = amplitude_ratio ** 0.5 * growth(info['z'], info['of'][:1])
+                factors[leaf] = factor[:, None] if info['r'] is not None else factor
+            elif kind == 'primordial':
+                # cosmoprimo's primordial spectrum: h^3 A_s (k h / k_pivot)^(n_s - 1) on a grid
+                # in h/Mpc -- measured, not read: the h^3 is the (Mpc/h)^3 volume
+                k = np.asarray(info['k'])
+                factors[leaf] = (amplitude_ratio * scale ** 3
+                                 * (k * h / k_pivot) ** (n_s - 1.)
+                                 / (k * fid['h'] / k_pivot) ** (fid['n_s'] - 1.))
+            elif kind == 'efunc':
+                factors[leaf] = 1. / at('invE', info['z'])
+            elif kind == 'distance':
+                factors[leaf] = at('DM', info['z'])
+            elif kind == 'growth':
+                factors[leaf] = at('D', info['z'])
+            elif kind == 'rate':
+                factors[leaf] = at('f', info['z'])
+            elif kind == 'rs_drag':
+                # the Eisenstein & Hu fitting formula, in Mpc/h like the leaf: it carries the
+                # unit's h exactly and the dependence on the densities to a few per cent, so what
+                # stays on the grid is the Boltzmann code's correction to a fitting formula
+                factors[leaf] = _eisenstein_hu_scales(cosmo)['rs_drag'] / self._ref_rs_drag
+            elif kind == 'age':
+                # in Gyr: 1/H0 times a function of the density fractions and the dark energy
+                factors[leaf] = 1. / scale
+        return factors, dilations
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state['anchors'] = self._anchors
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._anchors = state['anchors']
+        self.set_ref_fiducial()
+
+
+class FourierEmulator(_RoutedSectionEmulator):
+    r"""A cosmology emulated for its power spectra (``fourier.*`` and ``primordial.*``).
+
+    Declared by :meth:`CosmoprimoCosmology.get_emulator_cls` when those are all it serves, and
+    the Fourier sector of a :class:`CosmologyEmulator` otherwise. Everything in ``exact`` leaves
+    the grid for a set of spectra; a ``sigma8_z`` leaf keeps ``h`` and ``n_s`` on it.
+    """
+
+
+class BackgroundEmulator(_RoutedSectionEmulator):
+    r"""A cosmology emulated for its background (``background.*`` and a bare ``params.<name>``).
+
+    The background is a function of today's density fractions: :math:`E(z)^2 = \sum_i \Omega_i
+    g_i(z)`, and a distance in Mpc/h, the growth factor and rate, the age in units of
+    :math:`1/H_0` and :math:`\Omega_i(z)` all follow from it, so with :math:`\Omega_b`,
+    :math:`\Omega_{cdm}`, :math:`\Omega_k` and :math:`(w_0, w_a)` fixed, ``h`` has dropped
+    out -- up to the radiation fraction :math:`\omega_\gamma / h^2`, set by ``T_cmb``, and the
+    neutrino transition, set by the physical mass: a few 1e-5 at the redshifts a likelihood
+    asks for. So this sector expands in :math:`(\Omega_b, \Omega_{cdm})` rather than in the
+    physical densities (:meth:`training_space`), ``h`` leaves the grid because nothing depends
+    on it, and the two leaves whose unit carries ``h`` -- ``rs_drag`` is not here, ``age`` is --
+    have that power divided out. ``w0_fld`` and ``wa_fld`` leave through the analytic w0waCDM
+    core, which also flattens what stays. A BAO or supernova likelihood's cosmology is emulated
+    with this alone.
+
+    The basis change applies when the pipeline samples ``h`` with ``omega_b`` / ``omega_cdm``;
+    with ``H0`` or ``Omega_m`` sampled it is not needed or not attempted, and ``age`` and
+    :math:`\Omega_i(z)` then keep ``h`` on the grid.
+    """
+    _DENSITIES = {'omega_b': 'Omega_b', 'omega_cdm': 'Omega_cdm'}
+
+    def _omega_basis(self, params):
+        """Whether *params* (the user's) are the ones the basis change converts."""
+        return 'h' in params and any(name in params for name in self._DENSITIES)
+
+    def to_training(self, params):
+        r""":math:`(h, \omega_b, \omega_{cdm}) \rightarrow (h, \Omega_b, \Omega_{cdm})`; ``h``
+        stays a training parameter, one that then leaves the grid."""
+        if not self._omega_basis(params):
+            return params
+        return {self._DENSITIES.get(name, name): value / params['h'] ** 2 if name in self._DENSITIES else value
+                for name, value in params.items()}
+
+    def from_training(self, params):
+        if not self._omega_basis(self.space.params):
+            return params
+        fractions = {fraction: density for density, fraction in self._DENSITIES.items()
+                     if density in self.space.params}
+        return {fractions.get(name, name): value * params['h'] ** 2 if name in fractions else value
+                for name, value in params.items()}
+
+    def training_space(self):
+        if not self._omega_basis(self.space.params):
+            return self.space
+        return self.space.map(self.to_training)
+
+    def _off_grid(self):
+        # in the fraction basis the age (its 1/h divided out) and Omega_i(z) are h-free too
+        if not self._omega_basis(self.space.params):
+            return _OFF_GRID
+        return {**_OFF_GRID, 'age': _OFF_GRID['age'] + ('h',), 'omega': _OFF_GRID['omega'] + ('h',)}
+
+
+class ThermodynamicsEmulator(_RoutedSectionEmulator):
+    r"""A cosmology emulated for its sound horizon (``thermodynamics.*``).
+
+    ``rs_drag`` is set before recombination, so at fixed physical densities it depends on
+    neither ``h`` nor the dark energy -- cosmoprimo returns it in Mpc/h, and that ``h`` is the
+    unit -- and only ``omega_b``, ``omega_cdm`` (and a varied neutrino content) stay on the grid.
+    The Eisenstein & Hu (1998) fitting formula
+    (:func:`cosmoprimo.emulators.cosmology._eisenstein_hu_scales`) is divided out, unit
+    included, so the expansion carries only the Boltzmann code's correction to it.
+    """
+
+
+# ── one cosmology, one emulator per sector ────────────────────────────────────
+
+
+class CosmologyEmulator(_SectionEmulator):
+    r"""A cosmology serving several sectors, emulated as one emulator per sector.
+
+    The sectors do not want the same expansion. The spectra want the
+    :math:`\theta_\mathrm{MC}` basis and the optical depth on the grid; the Fourier leaves want
+    ``h`` directly, never depend on ``tau_reio``, and are exactly linear in :math:`A_s`; the
+    background and the sound horizon depend on fewer parameters still. One node set over the
+    union of parameters would spend a ``tau`` axis on outputs that ignore it, keep ``h`` on
+    the power spectrum's grid for the sake of one ``rs_drag`` leaf, and put the Cl on an ``h``
+    grid no low-order polynomial survives (measured, a budget-3 box in ``h`` gave dchi2 of
+    2e16).
+
+    So each sector (see :func:`_sector`) gets an emulator of its own on a calculator of its
+    own -- a clone of the cosmology registered with that sector's requirements only, so a
+    background node never pays for a lensed Cl. Their leaves are named by requirement, so
+    :meth:`predict` is a merge and :meth:`to_calculator` needs nothing the base does not
+    already do.
+
+    ``budget``, ``checkpoint`` and the other training options may be given per sector as a
+    dict keyed by the sector names; a plain value goes to all.
+    """
+    sectors = {'harmonic': HarmonicEmulator, 'fourier': FourierEmulator,
+               'background': BackgroundEmulator, 'thermodynamics': ThermodynamicsEmulator}
+
+    def __init__(self, calculator, space, exact=None, **options):
+        super().__init__(calculator, space, **options)
+        root = self.calculator
+        self._sectors = {}
+        for name, cls in self.sectors.items():
+            specs = [(spec_key, spec) for spec_key, spec in self.aux['ordered_specs']
+                     if _sector(spec_key[0]) == name]
+            if not specs:
+                continue
+            # A cosmology like the emulated one, registered with this sector's requirements
+            # only. Fresh parameter nodes, not the pipeline's: one node shared by two separately
+            # compiled graphs is its own bug. A derived parameter goes with the sector its
+            # getter is read from.
+            params = [param.clone() for param in root.params]
+            params += [param.clone() for param in root.derived_params
+                       if _sector(root._get_derived[param.name][0]) == name]
+            args, kwargs = root._init
+            sub = type(root)(*args, **{**kwargs, 'params': VariableCollection(params)})
+            requirements = {}
+            for spec_key, spec in specs:
+                requirements.setdefault(spec_key[0], []).append(
+                    {**spec['static'], **{coord: spec[coord] for coord in _COORDS if coord in spec}})
+            sub.add_requirements(requirements)
+            # `exact` belongs to the routed sectors (see `_RoutedSectionEmulator.__init__`)
+            self._sectors[name] = cls(sub, space, **(options if name == 'harmonic' else dict(options, exact=exact)))
+        if len(self._sectors) < 2:
+            raise ValueError(f'{type(self).__name__} is for a cosmology serving several sectors; '
+                             f'this one serves {list(self._sectors)} -- use that sector\'s '
+                             f'emulator directly')
+
+    def _per_sector(self, value, name):
+        if isinstance(value, dict) and value and set(value) <= set(self._sectors):
+            return value.get(name)
+        return value
+
+    @property
+    def trained(self):
+        return bool(self._sectors) and all(sub.trained for sub in self._sectors.values())
+
+    def nodes(self, budget=None, **kwargs):
+        """``{sector: nodes}``: each sector sizes its own run."""
+        return {name: sub.nodes(budget=self._per_sector(budget, name),
+                                **{key: self._per_sector(value, name) for key, value in kwargs.items()})
+                for name, sub in self._sectors.items()}
+
+    def train(self, budget=None, checkpoint=None, **kwargs):
+        for name, sub in self._sectors.items():
+            path = self._per_sector(checkpoint, name)
+            if path is not None and not isinstance(checkpoint, dict):
+                path = Path(path)
+                path = path.with_name(f'{path.stem}_{name}{path.suffix}')
+            sub.train(budget=self._per_sector(budget, name), checkpoint=path,
+                      **{key: self._per_sector(value, name) for key, value in kwargs.items()})
+        return self
+
+    def predict(self, **params):
+        out = {}
+        # every sector predicts the input leaves, each correctly (see `_SectionEmulator`), and
+        # each derived parameter is predicted by the one sector that holds it
+        for sub in self._sectors.values():
+            out.update(sub.predict(**params))
+        missing = [name for name in self.children_leafnames if name not in out]
+        if missing:
+            raise RuntimeError(f'no sector predicts the leaves {missing}')
+        return out
+
+    def to_calculator(self, *args, calculator=None, **kwargs):
+        deployed = super().to_calculator(*args, calculator=calculator, **kwargs)
+        # a sector read back from a file has no calculator, and the harmonic one reads the
+        # fiducial's neutrino content off it whenever that is not varied
+        for sub in self._sectors.values():
+            if getattr(sub, 'calculator', None) is None:
+                sub.calculator = self.calculator
+        return deployed
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        state['sectors'] = {name: sub.__getstate__() for name, sub in self._sectors.items()}
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._sectors = {name: CalculatorEmulator.from_state(sub)
+                         for name, sub in state['sectors'].items()}
+
+    def __repr__(self):
+        inner = ', '.join(f'{name}={sub!r}' for name, sub in self._sectors.items())
+        return f'{type(self).__name__}({inner})'

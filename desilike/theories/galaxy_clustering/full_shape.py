@@ -31,7 +31,8 @@ import interpax
 from ...base import Calculator, get_params
 from cosmoprimo.emulators.tools.utils import cardinal_cubic_weights, lagrange_weights
 from ...parameter import Parameter, VariableCollection
-from ..primordial_cosmology import CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog, _sigma_tophat
+from ..primordial_cosmology import (CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog,
+                                   _sigma_tophat, _resample_dilated)
 from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
 from ...emulators.api import CalculatorEmulator, DERIVED

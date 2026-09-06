@@ -1958,11 +1958,32 @@ class _SectionEmulator(CalculatorEmulator):
         """
         space = self.space
         mapped = space.map(transform, transforms=transforms or {})
+        # the image's own range, measured from the mapped points. `Space` folds the extent it
+        # is given into `limits` and does not keep it, so it has to be recomputed here; the
+        # samples are stored in the same (possibly transformed) convention as `limits`.
+        samples = getattr(mapped, 'samples', None)
+        extent = {} if samples is None else {
+            name: (float(samples[:, index].min()), float(samples[:, index].max()))
+            for index, name in enumerate(mapped.params)}
         for name in mapped.params:
             if name in space.params:
                 mapped.limits[name] = space.limits[name]
                 if name in getattr(space, 'bounds', {}):
                     mapped.bounds[name] = space.bounds[name]
+            elif name in extent:
+                # `bounds` as well as `limits`: the background sector's space is correlated, so
+                # the engine whitens and lays its grid on a rotated ellipsoid whose axis-aligned
+                # hull reaches outside the per-axis limits. `bounds` is what the region may not
+                # leave, and it is what `_shrink_to_limits` cuts against.
+                # A name the basis INTRODUCED has no source limits to restore, and `Space` takes
+                # its limits as `mean +- nsigma sigma` widened to the extent -- fine for a
+                # near-Gaussian image and wrong for a skewed one. `Omega_cdm = omega_cdm / h^2`
+                # over the ACE domain runs 0.10 to 0.64, and three sigma about its mean reaches
+                # NEGATIVE density: measured, a node at `Omega_cdm = -0.053`, where CLASS returns
+                # non-finite and one such node poisons every coefficient. The image's own
+                # bounding box is what the region actually is, and it contains every point the
+                # source box maps to, so coverage is not at risk.
+                mapped.limits[name] = mapped.bounds[name] = extent[name]
         return mapped
 
     def routing(self, params):

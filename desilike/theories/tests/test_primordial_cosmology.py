@@ -766,3 +766,36 @@ class TestCosmologyEmulator:
         np.testing.assert_allclose(deployed.get('fourier.pk', of='delta_cb', z=Z, k=K),
                                    np.squeeze(exact['fourier.pk|of=delta_cb,delta_cb']), rtol=2e-3)
         np.testing.assert_allclose(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:], exact[cl][2:], rtol=5e-3)
+
+
+def test_a_derived_leaf_keeps_its_own_redshift():
+    """A derived sigma8 is one number at one redshift, and the requirement it reads may serve
+    several: a template asks `fourier.sigma8_z` at z = 0.8 and the derived parameter at z = 0, so
+    the merged grid is two long.
+
+    The routing factor has to follow the getter, not the merged grid, or it broadcasts the scalar
+    it divides into a vector. That is not caught by anything local -- the emulator trains, writes
+    and predicts -- and surfaces hundreds of steps into a chain as emcee refusing a blob array
+    whose width moved under it (measured: a 12-wide derived row against a 14-wide one).
+    """
+    from desilike.base import build
+    from desilike.emulators import Emulator
+    from desilike.parameter import Parameter
+    from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+    params = CosmoprimoCosmology.propose_params(fiducial='DESI')
+    for name in ('sigma8_m', 'sigma8_cb'):
+        params.set(Parameter(name, value=0., derived=True))
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI', params=params)
+    cosmo.add_requirements({'fourier.pk': [{'of': 'delta_cb', 'z': Z, 'k': K}],
+                            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': Z}]})
+    build(cosmo)
+    emulator = Emulator(cosmo, _space('omega_cdm', 'logA')).train(budget=1)
+    point = {'omega_cdm': 0.121, 'logA': 3.05}
+    predicted, exact = emulator.predict(**point), emulator.compute(point)
+    for name in ('sigma8_m', 'sigma8_cb'):
+        for leaf in (f'derived.{name}', f'derived_params.{name}'):
+            assert np.ndim(predicted[leaf]) == 0, (leaf, np.shape(predicted[leaf]))
+            np.testing.assert_allclose(predicted[leaf], exact[leaf], rtol=1e-3)
+    # the requirement itself keeps the merged grid it was registered on
+    assert np.shape(predicted['fourier.sigma8_z|of=delta_cb,delta_cb']) == (2,)

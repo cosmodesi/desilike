@@ -1918,7 +1918,17 @@ class _SectionEmulator(CalculatorEmulator):
                 raise ValueError(f'the leaf {leaf!r} matches no registered requirement')
         # a derived parameter is both a child (`derived_params.`) and a graph output (`derived.`)
         for name, getter in aux['get_derived'].items():
-            info[f'derived_params.{name}'] = info[f'{DERIVED}{name}'] = describe(_spec_key(*getter))
+            # the getter's OWN coordinates, not the requirement's merged grid. A derived sigma8
+            # is one number at one redshift, while `fourier.sigma8_z` may serve several -- a
+            # template at z = 0.8 and this at z = 0 -- and a factor built over the merged grid
+            # broadcasts the scalar it divides into a vector. Measured: two derived sigma8 leaves
+            # turned a 12-wide derived row into a 14-wide one, and emcee died on the mismatch
+            # several hundred steps in, where the walkers' blobs no longer lined up.
+            method_key, kwargs = getter
+            described = dict(describe(_spec_key(*getter)))
+            described.update({coord: np.atleast_1d(kwargs[coord])
+                              for coord in _COORDS if coord in kwargs})
+            info[f'derived_params.{name}'] = info[f'{DERIVED}{name}'] = described
         self._leaf_info_cache = info
         return info
 

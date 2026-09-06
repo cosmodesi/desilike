@@ -25,7 +25,7 @@ from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, fourier_analytic_scales,
                                            theta_analytic, solve_theta_analytic,
-                                           theta_background_kwargs, eisenstein_hu_scales,
+                                           theta_background_kwargs, eisenstein_hu_scales, nonzero,
                                            resample_dilated as _resample_dilated, dilate as _dilate)
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
@@ -1771,6 +1771,20 @@ def _amplitude_like(name):
     return name in AMPLITUDES + ('sigma8',) or name.startswith(('sigma8', 'sigma_', 'S8'))
 
 
+#: ``params.<name>`` requirements cosmoprimo derives from the input parameters alone -- no
+#: Boltzmann call, no perturbations -- so a routed sector can divide the exact value out and let
+#: every parameter leave its grid. Deliberately a list rather than a rule: anything not on it
+#: keeps the conservative treatment, and getting it wrong here is an emulator that interpolates
+#: nothing and reports no error. The amplitude spellings are handled before this
+#: (:func:`_amplitude_like`), since ``sigma8`` needs the Fourier section and is not derivable
+#: this way.
+_INPUT_DERIVED = frozenset((
+    'h', 'H0', 'Omega_m', 'omega_m', 'Omega_cdm', 'omega_cdm', 'Omega_b', 'omega_b',
+    'Omega_k', 'omega_k', 'Omega_ncdm_tot', 'omega_ncdm_tot', 'm_ncdm_tot', 'm_ncdm',
+    'N_eff', 'N_ur', 'N_ncdm', 'T_cmb', 'w0_fld', 'wa_fld', 'n_s', 'alpha_s', 'k_pivot',
+    'tau_reio', 'Omega_de', 'Omega_Lambda', 'Omega_g', 'Omega_ur', 'Omega_r'))
+
+
 def _sector(method_key):
     """The sector a requirement is emulated in: the cosmoprimo section it is read from.
 
@@ -1817,7 +1831,9 @@ _OFF_GRID = {'pk': _EXACT_NAMES, 'primordial': _EXACT_NAMES, 'input': _EXACT_NAM
              'rate': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
              'rs_drag': ('A_s', 'n_s', 'h', 'tau_reio', 'w0_fld', 'wa_fld'),
              'age': ('A_s', 'n_s', 'tau_reio'), 'omega': ('A_s', 'n_s', 'tau_reio'),
-             'opaque': ('A_s', 'n_s', 'tau_reio'), 'amplitude': ('tau_reio',), 'cl': ()}
+             'opaque': ('A_s', 'n_s', 'tau_reio'), 'amplitude': ('tau_reio',), 'cl': (),
+             # divided by its own exact value, so nothing about it is interpolated
+             'cosmo_param': _EXACT_NAMES}
 
 
 class _SectionEmulator(CalculatorEmulator):
@@ -1874,7 +1890,8 @@ class _SectionEmulator(CalculatorEmulator):
                 name = method_key[len('params.'):]
                 info['name'] = name
                 info['kind'] = ('input' if name in inputs
-                                else 'amplitude' if _amplitude_like(name) else 'opaque')
+                                else 'amplitude' if _amplitude_like(name)
+                                else 'cosmo_param' if name in _INPUT_DERIVED else 'opaque')
             elif method_key.startswith('harmonic.'):
                 info['kind'] = 'cl'
             elif info['kind'] is None:
@@ -2336,6 +2353,13 @@ class _RoutedSectionEmulator(_SectionEmulator):
                 # unit's h exactly and the dependence on the densities to a few per cent, so what
                 # stays on the grid is the Boltzmann code's correction to a fitting formula
                 factors[leaf] = eisenstein_hu_scales(cosmo)['rs_drag'] / self._ref_rs_drag
+            elif kind == 'cosmo_param':
+                # the exact value, off the same clone the analytic core is built on: the leaf is
+                # a function of the sampled parameters and of nothing else, so dividing by it
+                # leaves the constant 1 for the interpolant and every parameter can leave this
+                # sector's grid. `nonzero` because a fixed Omega_k is exactly 0, and a factor
+                # that is divided out and multiplied back cancels whatever it is.
+                factors[leaf] = nonzero(cosmo[info['name']])
             elif kind == 'age':
                 # in Gyr: 1/H0 times a function of the density fractions and the dark energy
                 factors[leaf] = 1. / scale

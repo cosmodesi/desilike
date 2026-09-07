@@ -388,8 +388,19 @@ class Installer(object):
         ----------
         section : str, default=None
             Section; typically this will be calculator's name.
-        ro : bool, default=None
-            Read-only?
+        ro : bool, default=False
+            Read the data through the read-only alias declared by the ``'ro'`` configuration
+            entry, if there is one. Pass this wherever data is *opened*, and leave it off
+            wherever data is *written* -- an install must land on the canonical path.
+
+            ``'ro'`` is a ``(from, to)`` prefix pair, or a list of them, and exists because the
+            fastest path to read a file is often not the path it was installed at. On Perlmutter
+            ``/global/cfs`` is projected to compute nodes through a read-write DVS mount, while
+            ``/dvs_ro/cfs`` serves the same bytes over a caching read-only one; with every MPI
+            rank independently reading the same 2.8 GB of ACT DR6 lensing data, that difference
+            is the whole startup cost. Only some prefixes have a mirror -- ``/global/common``
+            and ``/global/homes`` do not -- which is why this is a declared rule and not a
+            blanket rewrite.
 
         Returns
         -------
@@ -405,9 +416,21 @@ class Installer(object):
             except KeyError:
                 toret = str(base_dir / section)
         if ro:
-            ro = self.get('ro', None)
-            if ro is not None:
-                toret = toret.replace(*ro)
+            rules = self.get('ro', None) or []
+            # one (from, to) pair, or a list of them: `/global/cfs` has a read-only mirror and
+            # `/global/common` does not, so a site generally needs more than one rule
+            if rules and isinstance(rules[0], str):
+                rules = [rules]
+            for source, target in rules:
+                if toret.startswith(source):
+                    aliased = target + toret[len(source):]
+                    # only when it is actually there: a rule that is wrong, or right only on one
+                    # machine, then costs nothing instead of turning into a missing-file error
+                    # somewhere far from the configuration that caused it -- which is what makes
+                    # it safe to leave a site's `'ro'` set in a shared configuration
+                    if os.path.exists(aliased):
+                        toret = aliased
+                    break
         return toret
 
     def write(self, config, update=True):

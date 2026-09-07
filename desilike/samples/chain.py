@@ -1,5 +1,6 @@
 """MCSamples — Samples subclass that adds weights, log-posterior, and statistics."""
 
+import logging
 import os
 import re
 
@@ -516,6 +517,140 @@ class MCSamples(Samples):
         cov_arr = (D.T @ (X - mu)) * W / denom  # (total_flat_size, total_flat_size)
         params_objs = [VariableCollection.__getitem__(self, name) for name in names]
         return Covariance(cov_arr, params=params_objs)
+
+    @classmethod
+    def from_getdist(cls, samples, concatenate=None):
+        """Build an :class:`MCSamples` from a :class:`getdist.MCSamples`.
+
+        The inverse of :meth:`to_getdist`, and written to round-trip with it: names, latex labels,
+        derived flags, the weights and the log-posterior all come back, and a parameter whose
+        range getdist knows comes back as a :class:`~..parameter.Parameter` carrying that range as
+        its prior -- which is where :meth:`to_getdist` reads ``ranges`` from. Anything without a
+        finite range stays a plain :class:`~..parameter.Variable`, since a `Variable` has no prior
+        to put one in.
+
+        Requires the ``getdist`` package.
+
+        Parameters
+        ----------
+        samples : getdist.MCSamples
+        concatenate : bool, default=None
+            Whether to join getdist's separate chains into one. ``None`` keeps them separate when
+            there are several -- returning a list -- and returns the single chain otherwise, which
+            is what makes the round trip through :meth:`to_getdist` give back what went in.
+
+        Returns
+        -------
+        MCSamples, or a list of them when *samples* holds several chains and they are not joined.
+        """
+        from ..parameter import Parameter
+
+        names = samples.paramNames.names
+
+        def latex(param):
+            """getdist's label in desilike's convention: bare, without `$` delimiters.
+
+            getdist is not consistent about this and neither are the files it reads -- the
+            published DESI reference chains give `$w_a$` for one parameter and `H_0` for the
+            next. Stored as-is, the wrapped ones become `$$w_a$$` once `latex(inline=True)` adds
+            its own pair, and matplotlib's mathtext refuses that at draw time, far from here.
+            """
+            label = (param.label or '').strip()
+            while label.startswith('$') and label.endswith('$') and len(label) > 1:
+                label = label[1:-1].strip()
+            return label
+        # `getSeparateChains` raises when the object was built from a plain array rather than read
+        # from files, which is exactly what `to_getdist` produces -- hence the fallback.
+        try:
+            chains, isscalar = samples.getSeparateChains(), False
+        except Exception:
+            chains, isscalar = [samples], True
+
+        lower, upper = samples.ranges.lower, samples.ranges.upper
+        toret = []
+        for chain in chains:
+            new = cls()
+            for index, param in enumerate(names):
+                low, high = lower.get(param.name, None), upper.get(param.name, None)
+                # A Parameter only where there is something to carry: `Variable` has no prior, so
+                # inventing an infinite one would just be a different object for no information.
+                if low is None and high is None:
+                    var = Variable(param.name, latex=latex(param),
+                                   derived=bool(getattr(param, 'isDerived', False)))
+                else:
+                    var = Parameter(param.name, latex=latex(param),
+                                    derived=bool(getattr(param, 'isDerived', False)),
+                                    prior=dict(limits=(-np.inf if low is None else float(low),
+                                                       np.inf if high is None else float(high))))
+                new.set(var, np.asarray(chain.samples[:, index]))
+            weights = np.asarray(chain.weights)
+            integer = np.rint(weights)
+            # Integer multiplicities are a `fweight`, anything else an `aweight`: the two mean
+            # different things downstream, and a cobaya chain's multiplicities are integers that
+            # would otherwise be demoted to floats.
+            if np.allclose(weights, integer, atol=0., rtol=1e-9):
+                new.fweight = integer.astype('i4')
+            else:
+                new.aweight = weights
+            new.logposterior = -np.asarray(chain.loglikes)
+            toret.append(new)
+
+        if isscalar:
+            return toret[0] if (concatenate or concatenate is None) else toret
+        return cls.concatenate(*toret) if concatenate else toret
+
+    @classmethod
+    def read_getdist(cls, base_fn, ichains=None, concatenate=False, burnin=None, **kwargs):
+        """Read chains from disk in a format getdist understands, as :class:`MCSamples`.
+
+        Delegates the parsing to ``getdist.loadMCSamples`` and converts with
+        :meth:`from_getdist`. That is deliberate rather than parsing the files here: getdist reads
+        both the CosmoMC layout (``.paramnames`` beside ``_{i}.txt``) and the cobaya one, where
+        there is no ``.paramnames`` at all and the column names live in the ``#`` header with the
+        rest in ``.updated.yaml``. The published DESI reference chains are the second kind, so a
+        reader that assumed the first would not open them.
+
+        Parameters
+        ----------
+        base_fn : str, Path
+            Chain root -- the common prefix, without ``_{i}.txt``.
+        ichains : int, list, default=None
+            Which chains to keep, by position. A single number returns that one chain rather than
+            a list of one. ``None`` keeps them all.
+        concatenate : bool, default=False
+            Join the chains into one.
+        burnin : float, default=None
+            Fraction of each chain to drop, passed to getdist as ``ignore_rows``. Published chains
+            generally have burn-in left in, so this is usually wanted -- 0.3 is the convention in
+            this codebase.
+        **kwargs
+            Extra getdist ``settings`` entries, merged over ``ignore_rows``.
+
+        Returns
+        -------
+        MCSamples, or a list of them.
+        """
+        from getdist import loadMCSamples
+
+        settings = dict(kwargs.pop('settings', None) or {})
+        if burnin is not None:
+            settings['ignore_rows'] = burnin
+        logging.getLogger(cls.__name__).info(f'Loading getdist chains from {base_fn}.')
+        samples = loadMCSamples(str(base_fn), settings=settings or None, **kwargs)
+
+        # `from_getdist` without concatenating first, so `ichains` can select before anything is
+        # joined -- joining and then slicing rows would not be the same thing.
+        chains = cls.from_getdist(samples, concatenate=False)
+        if not isinstance(chains, list):
+            chains = [chains]
+        isscalar = ichains is not None and np.ndim(ichains) == 0
+        if ichains is not None:
+            chains = [chains[index] for index in ([ichains] if isscalar else ichains)]
+        if concatenate:
+            return cls.concatenate(*chains)
+        if isscalar:
+            return chains[0]
+        return chains[0] if len(chains) == 1 else chains
 
     def to_getdist(self, params=None, label=None, **kwargs):
         """Return a :class:`getdist.MCSamples` object from this chain.

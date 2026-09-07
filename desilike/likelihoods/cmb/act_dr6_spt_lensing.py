@@ -75,7 +75,7 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
                 data_dir = packaged
             else:
                 from desilike.install import Installer
-                data_dir = os.path.join(Installer().data_dir(self.installer_section), self.version)
+                data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
 
         only_spt = (variant == 'spt3g')
         if only_spt:

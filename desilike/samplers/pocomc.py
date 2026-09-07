@@ -185,12 +185,26 @@ class PocoMC(PopulationKernel):
         Parameters
         ----------
         n_steps : int or None, optional
-            MCMC rejuvenation steps per SMC iteration. ``None`` (default) uses ``n_dim // 2``.
-            Under-rejuvenated particles bias the marginals narrow on a non-Gaussian target:
-            measured against a known truth at 13 parameters, ``n_steps = 6`` gives a width
-            0.944 +- 0.008 of the truth, 10 gives 0.979, 15 gives 0.994 +- 0.004 and 40 gives
-            0.993, while a Gaussian target shows none of it. Raising it costs proportionally
-            more likelihood calls per iteration.
+            MCMC rejuvenation steps per SMC iteration. ``None`` (default) uses ``n_dim // 2``,
+            which is pocoMC's own default. Under-rejuvenated particles bias the marginals
+            narrow on a non-Gaussian target, and the requirement grows with dimension, so
+            ``n_dim // 2`` is not enough at either size measured. Against a known truth:
+
+            ===========  =========  ==========================
+            n_dim        n_steps    sampled width / true width
+            ===========  =========  ==========================
+            13           6          0.944 +- 0.008
+            13           10         0.979
+            13           15         0.994 +- 0.004
+            13           40         0.993
+            25           12         0.948
+            25           15         0.976
+            ===========  =========  ==========================
+
+            So 15 suffices at 13 parameters but not at 25, where it still leaves 2.4% on the
+            mean and 5.6% on the worst parameter; a Gaussian target shows none of this. Cost is
+            proportional, so raise it deliberately rather than by default. The threshold at 45
+            parameters is not measured.
         device : str or None, optional
             Torch device for the normalizing flow, e.g. ``'cuda'``, or ``'cpu'`` to pin it to
             the host. ``None`` (default) follows JAX: the flow goes on the GPU if JAX is using

@@ -83,7 +83,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
     def __init__(self, data_dir=None, cosmo=None, params=None):
         if data_dir is None:
             from desilike.install import Installer
-            data_dir = os.path.join(Installer().data_dir(self.installer_section), 'CamSpec_NPIPE')
+            data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), 'CamSpec_NPIPE')
         self._load_data(data_dir)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
@@ -323,7 +323,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
             self.ell_cuts = ell_cuts
         if data_file is None:
             from desilike.install import Installer
-            data_file = os.path.join(Installer().data_dir(self.installer_section),
+            data_file = os.path.join(Installer().data_dir(self.installer_section, ro=True),
                                      'CamSpec_NPIPE_cmb_sacc.fits')
         self._load_data(data_file)
         if cosmo is None:

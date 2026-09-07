@@ -651,7 +651,7 @@ class PlanckPR3TTLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -688,7 +688,7 @@ class PlanckPR3TTTEEELikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -728,7 +728,7 @@ class PlanckPR3TTTEEELiteLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -765,7 +765,7 @@ class PlanckPR3LowlTTLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -802,7 +802,7 @@ class PlanckPR3LowlEELikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -862,7 +862,7 @@ class PlanckPR3LowlEESroll2Likelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod

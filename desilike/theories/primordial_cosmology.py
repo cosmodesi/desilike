@@ -2444,14 +2444,36 @@ class BackgroundEmulator(_RoutedSectionEmulator):
         return 'h' in params and any(name in params for name in self._DENSITIES)
 
     def to_training(self, params):
-        r""":math:`(h, \omega_b, \omega_{cdm}) \rightarrow (h, \Omega_b, \Omega_{cdm})`; ``h``
-        stays a training parameter, one that then leaves the grid."""
+        r""":math:`(h, \omega_b, \omega_{cdm}) \rightarrow (h, \Omega_b, \Omega_{cdm})`, and
+        :math:`(w_0, w_a) \rightarrow (w_0, w_0 + w_a)`; ``h`` stays a training parameter, one
+        that then leaves the grid.
+
+        The dark-energy pair is remapped for the same reason
+        :meth:`HarmonicEmulator.to_training` remaps it: ``w0 + wa`` is bounded above, and it is
+        the sum, not either parameter alone, that is bounded, so no per-axis limit expresses
+        it. Naming the sum lets
+        :meth:`training_space` put a logit on it and make the bound unreachable. Routing does not
+        exempt this sector -- ``efunc`` and the distances are exact in ``w0_fld`` and ``wa_fld``,
+        but exact means divided by the analytic w0waCDM core, and that core is what diverges
+        where ``w0 + wa > 0``, so an unphysical node poisons the scaling rather than escaping it.
+        """
+        params = dict(params)
+        if 'wa_fld' in params and 'w0_fld' in params:
+            params['w0pwa'] = params.pop('wa_fld') + params['w0_fld']
+        return self._to_densities(params)
+
+    def _to_densities(self, params):
+        """The density half of the basis change, on its own -- :meth:`training_space` needs to
+        apply the two halves in separate `Space.map` calls, see the note there."""
         if not self._omega_basis(params):
             return params
         return {self._DENSITIES.get(name, name): value / params['h'] ** 2 if name in self._DENSITIES else value
                 for name, value in params.items()}
 
     def from_training(self, params):
+        params = dict(params)
+        if 'w0pwa' in params:
+            params['wa_fld'] = params.pop('w0pwa') - params['w0_fld']
         if not self._omega_basis(self.space.params):
             return params
         fractions = {fraction: density for density, fraction in self._DENSITIES.items()
@@ -2460,9 +2482,42 @@ class BackgroundEmulator(_RoutedSectionEmulator):
                 for name, value in params.items()}
 
     def training_space(self):
+        names = getattr(self.space, 'params', [])
+        # The logit whenever the dark-energy pair is varied, whether or not the density basis
+        # applies. Without it the box is a rectangle in raw `wa_fld` and reaches `mean + nsigma
+        # sigma` there: measured on the SPA w0waCDM box, `wa = +2.830` at `w0 = -1.294`, so
+        # `w0 + wa = +1.54`, where the dark-energy density diverges and the background overflows
+        # -- `params.H0`, `background.efunc`, `.comoving_transverse_distance` and `.age` all came
+        # back non-finite, and a Smolyak grid cannot absorb even one such node.
+        transforms = {'w0pwa': 'logit_w0pwa'} if {'wa_fld', 'w0_fld'} <= set(names) else {}
+        # The density fractions get a log for the same reason the dark-energy sum gets a logit:
+        # they are strictly positive, and this box is a plain rectangle at `mean +- nsigma sigma`
+        # (the samples are dropped just below, see the note there), so a wide fraction crosses
+        # zero. Measured at nsigma 3.75 on the SPA box: `Omega_cdm` reached -0.037 and `Omega_b`
+        # -0.0065, and a negative density is a non-finite background, not a slightly wrong one --
+        # `params.H0`, `Omega_m`, `Omega_Lambda`, `Omega_k`, `background.age` and `efunc` all
+        # came back nan together. In the log the bound is unreachable instead of an edge to trim.
+
+        # In two maps rather than one. `Space.map` filters the mapped points through
+        # `self.contains`, which tests the parameter names as they were before the map -- so a
+        # single map that both renames the
+        # densities and introduces `w0pwa` leaves nothing for the limits to be measured from, and
+        # they come back nan. Mapping the dark-energy pair on its own keeps every name `contains`
+        # knows, so the limits are the chain's own range: measured, w0 + wa in [-4.46, -0.107]
+        # against the raw box's +2.83.
+        space = self.space
+        if transforms:
+            space = space.map(lambda params: {**{name: value for name, value in params.items()
+                                                 if name != 'wa_fld'},
+                                              'w0pwa': params['w0_fld'] + params['wa_fld']}
+                              if 'wa_fld' in params else params, transforms=transforms)
         if not self._omega_basis(self.space.params):
-            return self.space
-        mapped = self.map_space(self.to_training)
+            return space
+        # The log goes on the second map rather than the first: `Omega_b` / `Omega_cdm` do not exist
+        # until `_to_densities` has renamed them, and `Space` refuses a transform naming a
+        # parameter it does not have.
+        mapped = space.map(self._to_densities,
+                           transforms={name: 'log' for name in self._DENSITIES.values()})
         # As a plain box, dropping the samples the map carries -- and with them the whitening.
         # `Omega_b` and `Omega_cdm` are both `omega / h^2`, so their image is a narrow band
         # (correlation 0.85, and -0.96 and -0.84 against `h`) whose shape says nothing about the
@@ -2474,9 +2529,42 @@ class BackgroundEmulator(_RoutedSectionEmulator):
         # background node is 0.04 s.
         from desilike.emulators import Space
 
-        return Space(bounds={name: tuple(mapped.limits[name]) for name in mapped.params},
-                     levels=dict(getattr(mapped, 'levels', {}) or {}),
-                     transforms=dict(getattr(mapped, 'transforms', {}) or {}))
+        # The transform is carried from before the density map as well as after it: the second
+        # `Space.map` does not propagate the first's, and `bounds` here are already in the
+        # expansion variable. Dropping the declaration would leave the engine reading a logit
+        # value as a raw `w0 + wa` and placing nodes out to +3.8 -- worse than the bug this fixes.
+        declared = {**{name: value for name, value in (getattr(space, 'transforms', {}) or {}).items()
+                       if value is not None},
+                    **{name: value for name, value in (getattr(mapped, 'transforms', {}) or {}).items()
+                       if value is not None}}
+        # `bounds` go in unmapped and are transformed by `Space` on the way in -- it maps once, at
+        # construction. `mapped.limits` are already in the expansion variable, so a declared
+        # transform would be applied a second time and the logit of a logit is nan. Invert them
+        # back for exactly the names that carry one.
+        from cosmoprimo.emulators.tools.utils import TRANSFORMS
+
+        transforms = {name: value for name, value in declared.items() if name in mapped.params}
+        bounds = {}
+        for name in mapped.params:
+            low, high = mapped.limits[name]
+            spec = transforms.get(name)
+            if spec is not None:
+                inverse = (TRANSFORMS[spec] if isinstance(spec, str) else spec)[1]
+                low, high = float(inverse(low)), float(inverse(high))
+            bounds[name] = (low, high)
+        space = Space(bounds=bounds, levels=dict(getattr(mapped, 'levels', {}) or {}),
+                      transforms=transforms)
+        # The samples are attached after construction rather than passed in. Passing them would have
+        # `Space` measure a mean and covariance from them, `is_correlated()` would be true, and
+        # the engine would whiten -- which is exactly what the note above rejects. Setting them
+        # here keeps the box a plain rectangle (no mean, no covariance, no rotation) while still
+        # giving `measure='samples'` the pool it needs: `Emulator._engine` reads `space.samples`
+        # by name for engines that declare `wants_samples`. Without this the polynomial engine
+        # raises "needs the samples the space was measured from" on this sector alone.
+        # They are in the expansion variable, which is what that measure expects.
+        space.samples = getattr(mapped, 'samples', None)
+        space.weights = getattr(mapped, 'weights', None)
+        return space
 
     def _off_grid(self):
         # in the fraction basis the age (its 1/h divided out) and Omega_i(z) are h-free too

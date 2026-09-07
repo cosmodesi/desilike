@@ -57,7 +57,7 @@ class _BasePlanckLowlEENativeLikelihood(Likelihood):
     def __init__(self, data_dir=None, cosmo=None, calib=True, params=None):
         if data_dir is None:
             from desilike.install import Installer
-            data_dir = Installer().data_dir(self.installer_section)
+            data_dir = Installer().data_dir(self.installer_section, ro=True)
         table = np.loadtxt(os.path.join(data_dir, self._table_file_name))
         nell = self._lmax - self._lmin + 1
         if table.shape != (self._nsteps, nell):

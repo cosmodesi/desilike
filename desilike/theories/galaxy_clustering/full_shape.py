@@ -1630,20 +1630,23 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         Ps0 = jnp.einsum('b,lbx->lx', b11, bird.P11l)
         Ps1 = jnp.einsum('b,lbx->lx', bloop, bird.Ploopl) + jnp.einsum('b,lbx->lx', bct, bird.Pctl)
         if bird.with_stoch:
+            nd = bird.co.nd
+            ce0, ce1, ce2 = (biasX[f'ce{i:d}'] for i in (0, 1, 2))
             # Match pybird's setBias: stochastic terms divided by co.nd (the number density).
-            bst = jnp.array([biasX['ce0'], biasX['ce1'] / (kmX * kmY), biasX['ce2'] / (kmX * kmY)]) / bird.co.nd
+            ce0, ce1, ce2 = ce0 / nd, ce1 / (kmX * kmY * nd), ce2 / (kmX * kmY * nd)
+            bst = jnp.array([ce0, ce1, ce2])
             Ps1 = Ps1 + jnp.einsum('b,lbx->lx', bst, bird.Pstl)
         return jnp.nan_to_num(Ps0 + Ps1, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
 
     def __call__(self):
         bird = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
+        bird.co.nd = self._nbar
         if isinstance(self.b1, tuple):  # cross-spectrum of two tracers
             self.poles = self._fullps_cross(bird, self._build_params(0), self._build_params(1))
         else:
             import pybird.bird as bird_module
             bird_module.np = jnp
             self._pt = bird
-            bird.co.nbar = self._nbar
             bird.setreducePslb(self._build_params(), what='full')
             bird_module.np = np
             self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
@@ -1845,7 +1848,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         import pybird.bird as bird_module
         bird_module.np = jnp
         self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
-        self._pt.co.nbar = self._nbar
+        self._pt.co.nd = self._nbar
         self._pt.setreduceCflb(self._build_params(), what='full')
         bird_module.np = np
         self.poles = self._pt.fullCf

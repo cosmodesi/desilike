@@ -1,1 +1,0 @@
-from .des_y3 import DESY3Observable

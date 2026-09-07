@@ -1,4 +1,8 @@
-from .minuit import MinuitProfiler
-from .bobyqa import BOBYQAProfiler
-from .scipy import ScipyProfiler
-from .optax import OptaxProfiler
+"""desilike.profilers — likelihood profiling (maximize, profile, grid, covariance)."""
+
+from .base import Profiler, Kernel
+from ..conditioning import AffineConditioner
+from .minuit import Minuit
+from .scipy import Scipy
+from .bobyqa import BOBYQA
+from .optax import Optax

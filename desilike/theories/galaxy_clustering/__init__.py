@@ -1,16 +1,18 @@
-from .base import APEffect
-from .bao import (DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles,
-                  ResummedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles,
-                  FlexibleBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles)
-from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
-                         TNSTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles,
-                         LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                         REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                         PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
-                         FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
-                         FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles,
-                         GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles)
-from .png import PNGTracerPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
-from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
-                             BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,
-                             BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor)
+from .template import (Spectrum2Template, CosmoprimoCosmology, BAOSpectrum2Template, BAOPhaseShiftSpectrum2Template, FixedSpectrum2Template, ShapeFitSpectrum2Template, DirectSpectrum2Template,
+                       TurnOverSpectrum2Template, TurnOverTheory, ShapeFitTheory)
+from .bao import (DampedBAOWigglesPTSpectrum2Poles, ResummedBAOWigglesPTSpectrum2Poles,
+                  DampedBAOWigglesTracerSpectrum2Poles, ResummedBAOWigglesTracerSpectrum2Poles,
+                  SpectrumToCorrelation,
+                  DampedBAOWigglesPTCorrelation2Poles, ResummedBAOWigglesPTCorrelation2Poles,
+                  DampedBAOWigglesTracerCorrelation2Poles, ResummedBAOWigglesTracerCorrelation2Poles)
+from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, KaiserTracerCorrelation2Poles,
+                         TNSPTSpectrum2Poles, TNSTracerSpectrum2Poles, TNSTracerCorrelation2Poles,
+                         LPTVelocileptorsPTSpectrum2Poles, LPTVelocileptorsTracerSpectrum2Poles, LPTVelocileptorsTracerCorrelation2Poles,
+                         REPTVelocileptorsPTSpectrum2Poles, REPTVelocileptorsTracerSpectrum2Poles, REPTVelocileptorsTracerCorrelation2Poles,
+                         PyBirdPTSpectrum2Poles, PyBirdTracerSpectrum2Poles,
+                         PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
+                         FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
+                         FOLPSPTSpectrum3Poles, FOLPSTracerSpectrum3Poles, RedshiftSmearing,
+                         FKPTJAXPTSpectrum2Poles, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
+                         JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
+from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles

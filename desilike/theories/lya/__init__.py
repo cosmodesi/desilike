@@ -1,1 +1,0 @@
-from .power_template import P1DPowerSpectrumExtractor

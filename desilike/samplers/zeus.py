@@ -1,132 +1,95 @@
+"""Zeus ensemble slice sampler kernel."""
+
 import logging
-import random
+import warnings
 
 import numpy as np
 
-from desilike.samples import Chain
-from desilike import utils
-from .base import BaseBatchPosteriorSampler
-from .utils import numpy_to_python_random_state
+try:
+    import zeus as _zeus
+    ZEUS_INSTALLED = True
+except ModuleNotFoundError:
+    ZEUS_INSTALLED = False
+
+from .base import Kernel
 
 
-class ZeusSampler(BaseBatchPosteriorSampler):
+class Zeus(Kernel):
+    """Ensemble slice sampler (``zeus``).
 
-    """
-    Wrapper for the zeus sampler (Ensemble Slice Sampling method).
-
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/minaskar/zeus
     - https://arxiv.org/abs/2002.06212
     - https://arxiv.org/abs/2105.03468
     """
 
-    name = 'zeus'
+    logger = logging.getLogger('Zeus')
+    _sampler_cls = 'EnsembleSampler'
 
-    def __init__(self, *args, nwalkers=None, light_mode=False, **kwargs):
+    def __init__(self, nwalkers=None, **kwargs):
         """
-        Initialize zeus sampler.
-
         Parameters
         ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
-
-        nwalkers : int, str, default=None
-            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any,
-            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-            Can be given in dimension units, e.g. ``'3 * ndim'``.
-
-        light_mode : bool, default=False
-            If ``True`` then no expansions are performed after the tuning phase.
-            This can significantly reduce the number of likelihood evaluations but works best in target distributions that are approximately Gaussian.
-
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        nwalkers : int or None
+            Number of walkers.  ``None`` defers to ``4 * ndim``.
+        **kwargs
+            Extra keyword arguments forwarded to ``zeus.EnsembleSampler``.
         """
-        super(ZeusSampler, self).__init__(*args, **kwargs)
-        ndim = len(self.varied_params)
-        if nwalkers is None:
-            shapes = self.mpicomm.bcast([chain.shape if chain is not None else None for chain in self.chains], root=0)
-            if any(shape is not None for shape in shapes):
-                try:
-                    nwalkers = shapes[0][1]
-                    assert all(shape[1] == nwalkers for shape in shapes)
-                except (IndexError, AssertionError) as exc:
-                    raise ValueError('Impossible to find number of walkers from input chains of shapes {}'.format(shapes)) from exc
-            else:
-                nwalkers = 2 * max((int(2.5 * ndim) + 1) // 2, 2)
-        self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': ndim})
-        import zeus
-        handlers = logging.root.handlers.copy()
-        level = logging.root.level
-        self.sampler = zeus.EnsembleSampler(self.nwalkers, ndim, self.logposterior, verbose=False, light_mode=bool(light_mode), vectorize=True)
-        logging.root.handlers = handlers
-        logging.root.level = level
-
-    def run(self, *args, **kwargs):
-        """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
-
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
-
-        Parameters
-        ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
-
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
-
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        thin_by : int, default=1
-            Thin samples by this factor.
-        """
-        return super(ZeusSampler, self).run(*args, **kwargs)
-
-    def _run_one(self, start, niterations=300, thin_by=1, progress=False):
-        py_random_state_bak, np_random_state_bak = random.getstate(), np.random.get_state()
-        random.setstate(numpy_to_python_random_state(self.rng.get_state()))  # self.rng is same for all ranks
-        np.random.set_state(self.rng.get_state())
-        #self.sampler.__dict__.update(getattr(self, '_state', {}))
-        for _ in self.sampler.sample(start=start, iterations=niterations, progress=progress, thin_by=thin_by):
-            pass
-        chain = self.sampler.get_chain()
-        data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_log_prob()]
-        #self._state = self.sampler.__dict__.copy()
-        self.sampler.reset()
-        random.setstate(py_random_state_bak)
-        np.random.set_state(np_random_state_bak)
-        return Chain(data=data, params=self.varied_params + ['logposterior'])
+        self.nwalkers = nwalkers
+        self._kwargs = kwargs
 
     @classmethod
-    def install(cls, config):
-        config.pip('zeus-mcmc')
+    def install(cls, installer):
+        installer.pip('zeus-mcmc')
+
+    def init(self, posterior, rng, **context):
+        if not ZEUS_INSTALLED:
+            raise ImportError("The 'zeus-mcmc' package is required but not installed.")
+
+        plain_log_prob_fn, with_derived_log_prob_fn = posterior
+        # zeus infers "blobs" from whether log_prob_fn returns a tuple; the with-derived
+        # core always returns a (logpost, derived) tuple even when there are no derived
+        # params (derived is then a zero-width array), which desyncs from the blobs0=None
+        # passed below. Use the plain scalar-returning core in that case.
+        self._log_prob_fn = with_derived_log_prob_fn if context.get('nderived', 0) else plain_log_prob_fn
+        ndim = context['ndim']
+
+        if self.nwalkers is None:
+            self.nwalkers = 4 * ndim
+
+        if rng is not None:
+            warnings.warn('Zeus does not support random seeds. Results are not deterministic.')
+
+        self._ndim = ndim
+        self._pool = context['pool']
+        self._sampler = None
+
+    def run(self, n_steps, state):
+        position, derived, logposterior = state
+        nderived = derived.shape[-1]
+
+        if self._sampler is None:
+            import logging as _logging
+            handlers = _logging.root.handlers.copy()
+            level = _logging.root.level
+            self._sampler = _zeus.EnsembleSampler(
+                nwalkers=self.nwalkers, ndim=self._ndim,
+                logprob_fn=self._log_prob_fn, pool=self._pool, **self._kwargs)
+            _logging.root.handlers = handlers
+            _logging.root.level = level
+
+        samples = np.zeros((n_steps, self.nwalkers, self._ndim))
+        log_post = np.zeros((n_steps, self.nwalkers))
+        if nderived:
+            derived_out = np.zeros((n_steps, self.nwalkers, nderived))
+        for step_idx, step_state in enumerate(self._sampler.sample(
+                position, log_prob0=logposterior,
+                blobs0=np.array(derived) if nderived else None,
+                iterations=n_steps, progress=False)):
+            coords, log_prob_step, blobs = step_state
+            samples[step_idx, :, :] = coords
+            log_post[step_idx, :] = log_prob_step
+            if nderived:
+                derived_out[step_idx, :, :] = np.array(blobs).reshape(self.nwalkers, nderived)
+
+        return samples, (derived_out if nderived else None), {'logposterior': log_post}

@@ -609,9 +609,9 @@ class Profiles:
         def _fmt(val, ref=None):
             if ref is None or ref == 0.:
                 return f'{val:.{sigfigs}g}'
-            mag = int(np.floor(np.log10(abs(ref)))) - (sigfigs - 1)
-            rounded = round(float(val), -mag)
-            decimals = max(0, -mag)
+            mag = np.int32(np.floor(np.log10(abs(ref)))) - (sigfigs - 1)
+            rounded = np.round(float(val), -mag)
+            decimals = np.max([0, -mag])
             return f'{rounded:.{decimals}f}'
 
         rows = []

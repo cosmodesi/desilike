@@ -4010,6 +4010,51 @@ def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False, backend='jax
     return de_model, md, fid_comet, cosmo_fid
 
 
+def _comet_redshift_smearing(redshift_smearing, tracers=None, backend='jax'):
+    """Wrap a redshift-smearing kernel for the COMET classes, or return None.
+
+    The kernel is jax-traceable by contract (see :class:`RedshiftSmearing`), and comet only
+    honours ``extra_damping`` on its jax path, so the numpy backend is refused here rather
+    than failing later inside comet.
+
+    An already-wrapped :class:`RedshiftSmearing` passes straight through, so a tracer and its
+    PT can hold the *same* node: the damping is applied by the PT, but the parameter has to be
+    visible one level up, where the FOLPS classes put it and where the pipeline reads nuisance
+    priors from (``get_params(theory, level=1)``).
+    """
+    if redshift_smearing is None:
+        return None
+    if backend == 'numpy':
+        raise NotImplementedError('redshift_smearing requires the jax backend: the kernel is '
+                                  "jax-traceable, and comet's extra_damping is jax-only")
+    if isinstance(redshift_smearing, RedshiftSmearing):
+        return redshift_smearing
+    return RedshiftSmearing(redshift_smearing, tracers=tracers)
+
+
+def _comet_spectrum2_extra_damping(redshift_smearing):
+    """Compose the single-field kernel into comet's ``extra_damping`` for the power spectrum.
+
+    The two galaxies of a pair are displaced independently, hence :math:`D^2`. comet calls
+    this with the observed (pre-AP) :math:`k\\mu`, so the composition is the same one
+    :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles` applies to ``pkmu``.
+    """
+    if redshift_smearing is None:
+        return None
+    return lambda kmu: redshift_smearing.apply(kmu)**2
+
+
+def _comet_spectrum3_extra_damping(redshift_smearing):
+    """Compose the single-field kernel into comet's ``extra_damping`` for the bispectrum.
+
+    One factor per field -- the three galaxies are displaced independently, unlike a pair,
+    which gives :math:`D^2` above. comet calls this with the observed (pre-AP)
+    :math:`k_i \\mu_i`, matching the folps convention in :func:`_patch_folps_bispectrum`.
+    """
+    if redshift_smearing is None:
+        return None
+    apply = redshift_smearing.apply
+    return lambda k1mu1, k2mu2, k3mu3: apply(k1mu1) * apply(k2mu2) * apply(k3mu3)
 
 
 class COMETPTSpectrum2Poles(Calculator):
@@ -4044,7 +4089,8 @@ class COMETPTSpectrum2Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, backend='jax', **kwargs):
+    def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, backend='jax',
+                 redshift_smearing=None, **kwargs):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -4058,8 +4104,10 @@ class COMETPTSpectrum2Poles(Calculator):
         self.ells = tuple(ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
         self._backend = backend
+        self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None,
+                      redshift_smearing=None, **kwargs):
         _comet_register_cosmo_requirements(self.cosmo)
         self._use_mpc = False
         self._model = model
@@ -4100,7 +4148,8 @@ class COMETPTSpectrum2Poles(Calculator):
                         NP0=0.0, NP20=0.0, NP22=0.0).items()}
         q_tr_lo = (_wrap(qper), _wrap(qpar))
         px = md.PX_ell(self.k, params, list(self.ells), X_list=list(self._diagrams),
-                       de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6])
+                       de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6],
+                       extra_damping=_comet_spectrum2_extra_damping(self.redshift_smearing))
         # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
         # moveaxis(2→0) → (nX, nell, nk)
         self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
@@ -4284,7 +4333,8 @@ class COMETTracerSpectrum2Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax'):
+    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax',
+                 redshift_smearing=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -4306,14 +4356,21 @@ class COMETTracerSpectrum2Poles(Calculator):
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
+            self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
         else:
             if pt is None:
                 pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo).items() if value is not None}
+            # The damping rides comet's own mu quadrature, inside PX_ell(), so the PT is what
+            # applies it -- but the node is held here too, so that logvsmear sits at the same
+            # depth as for the FOLPS classes. Forwarded only when given, so a pt that carries
+            # its own kernel keeps it.
+            self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
+            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model)
 
-    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
+    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None,
+                      redshift_smearing=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
@@ -4386,7 +4443,8 @@ class COMETTracerSpectrum2Poles(Calculator):
             pell_params['avir'] = avir
         poles = md.Pell(self.k, pell_params, list(self.ells),
                         de_model=self._de_model, q_tr_lo=(qper, qpar),
-                        ell_for_recon=[0, 2, 4, 6])
+                        ell_for_recon=[0, 2, 4, 6],
+                        extra_damping=_comet_spectrum2_extra_damping(self.redshift_smearing))
         # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
         self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
         # Fold in comet's derived-coordinate check: _range_nan_factor is 1.0 when the
@@ -4570,7 +4628,8 @@ class COMETPTSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+                 redshift_smearing=None):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -4586,8 +4645,10 @@ class COMETPTSpectrum3Poles(Calculator):
         self._backend = backend
         if backend == 'numpy':
             self._is_external = True
+        self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+                      redshift_smearing=None, **kwargs):
         _comet_register_cosmo_requirements(self.cosmo)
         self._use_mpc = False
         self._model = model
@@ -4629,7 +4690,8 @@ class COMETPTSpectrum3Poles(Calculator):
         diagrams = list(self._diagrams)
         parts = md.BX_ell_Sugi(self.k, params, ell=list(self.ells), X_list=diagrams,
                                 de_model=self._de_model, q_tr_lo=(qper, qpar),
-                                quad_deg=self.quad_deg, mu12_transform=self.mu12_transform)
+                                quad_deg=self.quad_deg, mu12_transform=self.mu12_transform,
+                                extra_damping=_comet_spectrum3_extra_damping(self.redshift_smearing))
         # With X_list provided, parts = {(l1,l2,L): ndarray(npair, ndiag)} (nparams=1 already squeezed).
         # Build table of shape (ndiag, nell, npair).
         self.table = xp.stack(
@@ -4714,7 +4776,8 @@ class COMETTracerSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
+    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+                 redshift_smearing=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -4742,14 +4805,20 @@ class COMETTracerSpectrum3Poles(Calculator):
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
+            self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
         else:
             if pt is None:
                 pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo).items() if value is not None}
+            # The damping rides comet's own angular quadrature, inside BX_ell_Sugi(), so the PT
+            # is what applies it -- but the node is held here too, so that logvsmear sits at
+            # the same depth as for the FOLPS classes; see COMETTracerSpectrum2Poles.
+            self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
+            pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+                      redshift_smearing=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
@@ -4826,7 +4895,8 @@ class COMETTracerSpectrum3Poles(Calculator):
 
         parts = md.Bell_Sugi(self.k, bell_params, ell=list(self.ells),
                              de_model=self._de_model, q_tr_lo=(self.qper, self.qpar),
-                             quad_deg=self.quad_deg, mu12_transform=self.mu12_transform)
+                             quad_deg=self.quad_deg, mu12_transform=self.mu12_transform,
+                             extra_damping=_comet_spectrum3_extra_damping(self.redshift_smearing))
         # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
         # xp.squeeze handles both shapes uniformly.
         self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)

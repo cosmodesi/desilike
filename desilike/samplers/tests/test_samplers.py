@@ -919,3 +919,66 @@ def test_sampler_accepts_an_uncompiled_calculator():
 
     already = compile(posterior())
     assert samplers.Sampler(already, samplers.Grid()).posterior is already
+
+
+@pytest.mark.mpi_skip
+def test_kernel_state_reuse(likelihood, tmp_path):
+    """An adapted mass matrix is saved with the samples and reused on resume.
+
+    Adaptation dominates a gradient sampler's cost -- NUTS on a 10-parameter emulated posterior
+    spent 1774 s of a 2045 s run in warmup -- so a resumed run must not re-derive it.
+    """
+    pytest.importorskip('numpyro')
+    run_kwargs = dict(min_steps=20, max_steps=20, check_every=20,
+                      adaptation=dict(steps=30, dense_mass=True))
+
+    sampler_1 = samplers.Sampler(likelihood, kernel=samplers.NumpyroNUTS(), rng=42,
+                                 output_dir=tmp_path)
+    sampler_1.run(**run_kwargs)
+    saved = sorted(tmp_path.glob('kernel_state_*.pkl'))
+    assert saved, 'adapted kernel state was not written'
+    import pickle
+    with open(saved[0], 'rb') as fstream:
+        state = pickle.load(fstream)
+    assert 'inverse_mass_matrix' in state
+    # The whole sampler state must round-trip, not just the metric: restoring the metric alone
+    # leaves numpyro to rebuild momentum / adaptation state / RNG, which puts a discontinuity at
+    # the join (measured -0.26 sigma, Gelman-Rubin 6.97 over the following steps).
+    assert 'hmc_state' in state, 'full HMCState was not persisted'
+    imm_1 = np.asarray(state['inverse_mass_matrix'])
+
+    # A second sampler over the same directory must restore it rather than re-adapt.
+    sampler_2 = samplers.Sampler(likelihood, kernel=samplers.NumpyroNUTS(), rng=43,
+                                 output_dir=tmp_path)
+    assert sampler_2._saved_kernel_states, 'saved kernel state was not read back'
+    sampler_2.run(**run_kwargs)
+    imm_2 = np.asarray(sampler_2._kernels[0].kernel_kwargs['inverse_mass_matrix'])
+    assert np.allclose(imm_1, imm_2), 'resumed run did not reuse the saved mass matrix'
+    assert sampler_2._kernels[0].kernel_kwargs.get('adapt_mass_matrix') is False
+
+
+@pytest.mark.mpi_skip
+def test_kernel_state_needs_resumed_chains(likelihood, tmp_path):
+    """A saved metric must NOT be applied to a fresh `ref` start.
+
+    The metric and step size are tuned to the typical set.  Applying them to dispersed reference
+    draws with adaptation skipped diverges -- measured Gelman-Rubin 1e29 on the real posterior --
+    so the reuse is conditioned on the chains having been restored too.
+    """
+    pytest.importorskip('numpyro')
+    run_kwargs = dict(min_steps=20, max_steps=20, check_every=20,
+                      adaptation=dict(steps=30, dense_mass=True))
+    samplers.Sampler(likelihood, kernel=samplers.NumpyroNUTS(), rng=42,
+                     output_dir=tmp_path).run(**run_kwargs)
+    assert sorted(tmp_path.glob('kernel_state_*.pkl'))
+    # Keep the adapted state, drop the chains: the incoherent case.
+    for path in list(tmp_path.glob('samples_*.h5')) + list(tmp_path.glob('rng_*.json')):
+        path.unlink()
+    sampler = samplers.Sampler(likelihood, kernel=samplers.NumpyroNUTS(), rng=43,
+                               output_dir=tmp_path)
+    assert not getattr(sampler, '_resumed_samples', False)
+    results = sampler.run(**run_kwargs)
+    # Adaptation must have run, so the kernel holds a freshly adapted metric and finite samples.
+    assert sampler._kernels[0].kernel_kwargs.get('inverse_mass_matrix') is not None
+    if sampler.mpicomm.rank == 0:
+        assert np.all(np.isfinite(results['logposterior']))

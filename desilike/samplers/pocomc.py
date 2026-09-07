@@ -180,10 +180,17 @@ class PocoMC(PopulationKernel):
 
     logger = logging.getLogger('PocoMC')
 
-    def __init__(self, device=None, **kwargs):
+    def __init__(self, device=None, n_steps=None, **kwargs):
         """
         Parameters
         ----------
+        n_steps : int or None, optional
+            MCMC rejuvenation steps per SMC iteration. ``None`` (default) uses ``n_dim // 2``.
+            Under-rejuvenated particles bias the marginals narrow on a non-Gaussian target:
+            measured against a known truth at 13 parameters, ``n_steps = 6`` gives a width
+            0.944 +- 0.008 of the truth, 10 gives 0.979, 15 gives 0.994 +- 0.004 and 40 gives
+            0.993, while a Gaussian target shows none of it. Raising it costs proportionally
+            more likelihood calls per iteration.
         device : str or None, optional
             Torch device for the normalizing flow, e.g. ``'cuda'``, or ``'cpu'`` to pin it to
             the host. ``None`` (default) follows JAX: the flow goes on the GPU if JAX is using
@@ -199,6 +206,7 @@ class PocoMC(PopulationKernel):
             sequential passes instead of ``n_dim``.
         """
         self._device = device
+        self._n_steps = n_steps
         self._kwargs = kwargs
         self._sampler = None
 
@@ -229,8 +237,11 @@ class PocoMC(PopulationKernel):
                     # that owns the run, so a kernel that checkpoints nothing leaves none behind.
                     self._output_dir.mkdir(parents=True, exist_ok=True)
                 prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_bounds, self._ndim, self._rng)
+                n_steps = self._n_steps
+                if n_steps is None:
+                    n_steps = max(self._ndim // 2, 1)
                 init_kwargs = update_kwargs(
-                    dict(**self._kwargs), 'pocoMC',
+                    dict(n_steps=int(n_steps), **self._kwargs), 'pocoMC',
                     prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,
                     n_dim=self._ndim, pool=self._pool,
                     output_dir=self._output_dir,

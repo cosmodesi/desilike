@@ -5,6 +5,7 @@ from functools import partial
 
 import numpy as np
 import jax
+from jax import numpy as jnp
 
 try:
     import blackjax
@@ -131,6 +132,49 @@ class _BlackJAXKernel(Kernel):
         self._kernel = kernel
         self._state = None   # initialised lazily on first run / after adapt
         self._total_likelihood_evaluations = 0
+
+    def get_state(self):
+        """Adapted metric, step size and chain state, for reuse by a resumed run.
+
+        BlackJAX carries less hidden state than NumPyro: momentum is resampled every step and the
+        RNG is passed per call, so the chain state is just ``(position, logdensity,
+        logdensity_grad)``.  Persisting it alongside ``kernel_args`` is therefore complete --
+        unlike the metric-only case, which leaves the sampler to restart cold and puts a
+        discontinuity at the join.
+        """
+        if self._state is None:
+            return None
+        state = {key: np.asarray(value) for key, value in self.kernel_args.items()}
+        # BlackJAX kernels do not keep `_ndim`; take it from the restored chain state instead.
+        state['ndim'] = np.asarray(np.shape(np.asarray(self._state.position))[-1])
+        state['nchains'] = np.asarray(self._nsamples_parallel)
+        state['chain_state'] = jax.device_get(self._state)
+        return state
+
+    def set_state(self, state):
+        """Restore a saved metric and chain state; returns True so warmup is skipped."""
+        if 'chain_state' not in state or 'inverse_mass_matrix' not in state:
+            return False
+        ndim = int(np.shape(np.asarray(state['chain_state'].position))[-1])
+        if 'ndim' in state and int(state['ndim']) != ndim:
+            self.logger.warning('Saved kernel state is inconsistent (%d vs %d parameters); '
+                                're-adapting.', int(state['ndim']), ndim)
+            return False
+        if int(state.get('nchains', self._nsamples_parallel)) != self._nsamples_parallel:
+            self.logger.warning('Saved kernel state is for %d chains, this run has %d; '
+                                're-adapting.', int(state['nchains']), self._nsamples_parallel)
+            return False
+        for key in list(self.kernel_args):
+            if key in state:
+                value = state[key]
+                self.kernel_args[key] = float(value) if value.ndim == 0 else np.asarray(value)
+        self._kernel = self._kernel_cls(
+            self._logposterior, **self.kernel_args, **self.fixed_kernel_args)
+        self._make_steps = (make_steps_vmap_factory(self._kernel.step) if self._nsamples_parallel > 1
+                            else make_steps_factory(self._kernel.step))
+        self._state = jax.tree_util.tree_map(jnp.asarray, state['chain_state'])
+        _log_adaptation(self.logger, self.kernel_args)
+        return True
 
     def _init_state_single(self, initial_position):
         try:

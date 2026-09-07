@@ -216,7 +216,7 @@ Answered for every cosmology that flattens to its
         :class:`ThermodynamicsEmulator` otherwise (the amplitude, tilt, dilation and analytic
         background are divided out, and what the leaves allow leaves the grid); a
         :class:`CosmologyEmulator`, one emulator per sector, when they span several. A plain
-        method, so ``Emulator(cosmo, space)`` asks the INSTANCE after its consumers have
+        method, so ``Emulator(cosmo, space)`` asks the instance after its consumers have
         registered; pass ``cls=CalculatorEmulator`` to force the generic expansion.
         """
         if getattr(self, '_conversion', 'cosmoprimo') != 'cosmoprimo':
@@ -1840,7 +1840,7 @@ class _SectionEmulator(CalculatorEmulator):
     """What every emulator of a :class:`CosmoprimoCosmology` shares.
 
     * leaves named by requirement (see the section comment above), so the routing keys off
-      what a leaf IS and two calculators serving the same requirement agree on its name;
+      what a leaf is, and two calculators serving the same requirement agree on its name;
     * a description of each leaf -- its kind, its ``of`` pair, its ``z`` and ``k`` grids -- read off
       the calculator's own requirement registry, which every routing decision below is made
       from;
@@ -1918,7 +1918,7 @@ class _SectionEmulator(CalculatorEmulator):
                 raise ValueError(f'the leaf {leaf!r} matches no registered requirement')
         # a derived parameter is both a child (`derived_params.`) and a graph output (`derived.`)
         for name, getter in aux['get_derived'].items():
-            # the getter's OWN coordinates, not the requirement's merged grid. A derived sigma8
+            # the getter's own coordinates, not the requirement's merged grid. A derived sigma8
             # is one number at one redshift, while `fourier.sigma8_z` may serve several -- a
             # template at z = 0.8 and this at z = 0 -- and a factor built over the merged grid
             # broadcasts the scalar it divides into a vector. Measured: two derived sigma8 leaves
@@ -1971,18 +1971,19 @@ class _SectionEmulator(CalculatorEmulator):
                 if name in getattr(space, 'bounds', {}):
                     mapped.bounds[name] = space.bounds[name]
             elif name in extent:
-                # `bounds` as well as `limits`: the background sector's space is correlated, so
-                # the engine whitens and lays its grid on a rotated ellipsoid whose axis-aligned
-                # hull reaches outside the per-axis limits. `bounds` is what the region may not
-                # leave, and it is what `_shrink_to_limits` cuts against.
-                # A name the basis INTRODUCED has no source limits to restore, and `Space` takes
-                # its limits as `mean +- nsigma sigma` widened to the extent -- fine for a
+                # A name the basis introduced has no source limits to restore, and `Space`
+                # takes its limits as `mean +- nsigma sigma` widened to the extent -- fine for a
                 # near-Gaussian image and wrong for a skewed one. `Omega_cdm = omega_cdm / h^2`
                 # over the ACE domain runs 0.10 to 0.64, and three sigma about its mean reaches
-                # NEGATIVE density: measured, a node at `Omega_cdm = -0.053`, where CLASS returns
+                # negative density: measured, a node at `Omega_cdm = -0.053`, where CLASS returns
                 # non-finite and one such node poisons every coefficient. The image's own
                 # bounding box is what the region actually is, and it contains every point the
                 # source box maps to, so coverage is not at risk.
+                #
+                # `bounds` as well as `limits`, because the background sector's space is
+                # correlated: the engine whitens and lays its grid on a rotated ellipsoid whose
+                # axis-aligned hull reaches outside the per-axis limits, and `bounds` is what
+                # `_shrink_to_limits` cuts against. With `limits` alone the box was unchanged.
                 mapped.limits[name] = mapped.bounds[name] = extent[name]
         return mapped
 
@@ -2178,7 +2179,7 @@ class HarmonicEmulator(_SectionEmulator):
         names = getattr(space, 'params', [])
         if not any(name in names for name in ('wa_fld', 'h')):
             return space
-        # the logit only when `w0pwa` is actually one of the mapped names, which takes BOTH of
+        # the logit only when `w0pwa` is actually one of the mapped names, which takes both of
         # them varied -- `to_training` builds it from the pair. A space varying `h` with the dark
         # energy fixed is the ordinary LCDM case, and declaring a transform for a parameter that
         # is not there is refused by `Space`.
@@ -2461,7 +2462,21 @@ class BackgroundEmulator(_RoutedSectionEmulator):
     def training_space(self):
         if not self._omega_basis(self.space.params):
             return self.space
-        return self.map_space(self.to_training)
+        mapped = self.map_space(self.to_training)
+        # As a plain box, dropping the samples the map carries -- and with them the whitening.
+        # `Omega_b` and `Omega_cdm` are both `omega / h^2`, so their image is a narrow band
+        # (correlation 0.85, and -0.96 and -0.84 against `h`) whose shape says nothing about the
+        # posterior: it is the basis change talking. A whitened grid follows that band, and a
+        # point that moves `omega_cdm` alone at fixed `h` steps across it and is refused as "off
+        # the node cloud" -- measured, `omega_cdm = 0.1511` inside a box reaching 0.1599, which
+        # cut the tail off a chain. Every corner of the box is a valid background, since `h` is
+        # exact here and nothing else constrains the pair, so filling it costs only nodes, and a
+        # background node is 0.04 s.
+        from desilike.emulators import Space
+
+        return Space(bounds={name: tuple(mapped.limits[name]) for name in mapped.params},
+                     levels=dict(getattr(mapped, 'levels', {}) or {}),
+                     transforms=dict(getattr(mapped, 'transforms', {}) or {}))
 
     def _off_grid(self):
         # in the fraction basis the age (its 1/h divided out) and Omega_i(z) are h-free too

@@ -74,6 +74,57 @@ class _NumpyroKernel(Kernel):
         self._mcmc_nsteps = 0
         self._mcmc_started = False
 
+    # Keys worth persisting: everything adaptation derived.  `_current_position` is not among
+    # them -- the sampler restores positions from the saved chains themselves.
+    _state_keys = ('inverse_mass_matrix', 'step_size', 'adapt_step_size', 'adapt_mass_matrix')
+
+    def get_state(self):
+        """Adapted metric, step size and the full sampler state, for reuse by a resumed run."""
+        if self.kernel_kwargs.get('inverse_mass_matrix', None) is None:
+            return None
+        state = {key: np.asarray(self.kernel_kwargs[key])
+                 for key in self._state_keys if key in self.kernel_kwargs}
+        # A metric is only valid for the geometry it was adapted to.  Stamp the dimension and the
+        # chain count so a restore against a different shape is refused rather than silently wrong.
+        state['ndim'] = np.asarray(self._ndim)
+        state['nchains'] = np.asarray(self._nsamples_parallel)
+        # The METRIC alone is not enough to continue a chain: restoring it and restarting from the
+        # saved positions leaves numpyro to rebuild momentum, adaptation state and RNG from
+        # scratch, which showed up as a -0.26 sigma jump at the join and Gelman-Rubin 6.97 over
+        # the following 600 steps.  Persist the whole HMCState so the resumed run continues
+        # exactly as an uninterrupted one would.
+        if self._mcmc is not None and getattr(self._mcmc, 'last_state', None) is not None:
+            state['hmc_state'] = jax.device_get(self._mcmc.last_state)
+        return state
+
+    def set_state(self, state):
+        """Restore a saved metric and rebuild the kernel; returns True so warmup is skipped."""
+        if 'inverse_mass_matrix' not in state:
+            return False
+        if 'ndim' in state and int(state['ndim']) != self._ndim:
+            self.logger.warning('Saved kernel state is for %d parameters, this run has %d; '
+                                're-adapting.', int(state['ndim']), self._ndim)
+            return False
+        if 'nchains' in state and int(state['nchains']) != self._nsamples_parallel:
+            self.logger.warning('Saved kernel state is for %d chains, this run has %d; '
+                                're-adapting.', int(state['nchains']), self._nsamples_parallel)
+            return False
+        for key in self._state_keys:
+            if key in state:
+                value = state[key]
+                self.kernel_kwargs[key] = (bool(value) if key.startswith('adapt_')
+                                           else (float(value) if key == 'step_size' else value))
+        self._numpyro_kernel = getattr(numpyro.infer, self._numpyro_cls)(
+            potential_fn=self._potential_fn, **self.kernel_kwargs)
+        self._mcmc, self._mcmc_nsteps, self._mcmc_started = None, 0, False
+        # Held until run() builds the MCMC, then installed as post_warmup_state so the chain
+        # continues from the saved momentum / adaptation state / RNG rather than restarting.
+        self._resume_hmc_state = state.get('hmc_state', None)
+        if self._resume_hmc_state is not None:
+            self._current_position = np.asarray(self._resume_hmc_state.z)
+        _log_adaptation(self.logger, self.kernel_kwargs)
+        return True
+
     def adapt(self, state, **kwargs):
         """Run NumPyro warmup and rebuild the kernel with adapted parameters.
 
@@ -255,6 +306,21 @@ class _NumpyroKernel(Kernel):
         run_steps = self._mcmc_nsteps
 
         mcmc = self._mcmc
+        resume_state = getattr(self, '_resume_hmc_state', None)
+        if resume_state is not None and not self._mcmc_started:
+            # Continue a chain saved by a previous PROCESS: hand numpyro the whole state, so
+            # momentum, adaptation state and RNG carry over exactly.
+            mcmc.post_warmup_state = jax.tree_util.tree_map(jnp.asarray, resume_state)
+            # `init_params` is still required: with a `potential_fn`, numpyro calls
+            # `sampler.init` whenever the kernel has no `_sample_fn` yet -- which is always true
+            # for a kernel rebuilt in a new process -- and only then keeps our `init_state`
+            # (mcmc.py: `init_state = new_init_state if init_state is None else init_state`).
+            mcmc.run(mcmc.post_warmup_state.rng_key, extra_fields=self._extra_fields,
+                     init_params=self._current_position)
+            self._mcmc_started = True
+            self._resume_hmc_state = None
+            self._current_position = mcmc.last_state.z
+            return self._collect(mcmc, n_steps, run_steps)
         if self._mcmc_started:
             mcmc.post_warmup_state = mcmc.last_state
             mcmc.run(mcmc.post_warmup_state.rng_key, extra_fields=self._extra_fields)

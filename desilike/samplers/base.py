@@ -2,6 +2,7 @@
 
 import copy
 import json
+import pickle
 import math
 import sys
 import logging
@@ -211,6 +212,20 @@ class Kernel:
 
         """
         raise NotImplementedError
+
+    def get_state(self):
+        """Return adapted kernel state to persist alongside the samples, or None.
+
+        Adaptation is often the dominant cost of a gradient sampler -- NUTS on a 10-parameter
+        emulated posterior spent 1774 s of a 2045 s run in warmup -- and it is state that a
+        resumed run should not have to re-derive.  Kernels that adapt a metric override this
+        (and :meth:`set_state`) to round-trip it through the output directory.
+        """
+        return None
+
+    def set_state(self, state):
+        """Restore state written by :meth:`get_state`; return True if adaptation can be skipped."""
+        return False
 
     def adapt(self, initial_position=None, **kwargs):
         """Run warmup / adaptation.  No-op by default.
@@ -1176,8 +1191,22 @@ class MCMCSampler(BaseSampler):
 
         if adaptation is not None:
             if self.pool.main:
+                saved = getattr(self, '_saved_kernel_states', {})
+                # Only reuse an adapted metric when the CHAINS were restored too.  The metric and
+                # step size are tuned to the typical set; applying them to a fresh dispersed
+                # `ref` draw, with adaptation now skipped, diverges (measured: Gelman-Rubin 1e29).
+                # A genuine resume always has both, so this only refuses the incoherent case.
+                resumed = getattr(self, '_resumed_samples', False)
                 for batch_idx in range(n_batches):
                     batch_start = batch_idx * self._batch_nparallel
+                    if not resumed and batch_idx in saved:
+                        self.logger.info('Saved kernel state found but chains were not resumed; '
+                                         're-adapting rather than starting from `ref` with a '
+                                         'metric tuned elsewhere.')
+                    if resumed and batch_idx in saved and self._kernels[batch_idx].set_state(saved[batch_idx]):
+                        self.logger.info('Reusing adapted kernel state from %s; skipping warmup.',
+                                         self.output_dir)
+                        continue
                     self._kernels[batch_idx].adapt(self._get_state(batch_start), **adaptation)
                 self.pool.stop_wait()
             else:
@@ -1255,6 +1284,13 @@ class MCMCSampler(BaseSampler):
                     json.dump(self._group_rngs[local_idx].bit_generator.state, fstream)
                 self._round_samples[local_idx].write(
                     self.output_dir / f'samples_{sample_id}.h5')
+            # Adapted kernel state (mass matrix, step size): saved so a resumed run reuses it
+            # instead of re-paying warmup, which dominates a gradient sampler's cost.
+            for batch_idx, kernel in enumerate(self._kernels):
+                state = kernel.get_state()
+                if state:
+                    with open(self.output_dir / f'kernel_state_{batch_idx}.pkl', 'wb') as fstream:
+                        pickle.dump(state, fstream)
         if self.mpicomm.rank == 0:
             with open(self.output_dir / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
@@ -1270,6 +1306,14 @@ class MCMCSampler(BaseSampler):
                         self._saved_rng_states[local_idx] = json.load(fstream)
                 if samples_path.exists():
                     self._round_samples[local_idx] = MCSamples.read(samples_path)
+                    self._resumed_samples = True
+        self._saved_kernel_states = {}
+        if self.pool.main:
+            for batch_idx in range(len(getattr(self, '_kernels', []) or [])):
+                path = self.output_dir / f'kernel_state_{batch_idx}.pkl'
+                if path.exists():
+                    with open(path, 'rb') as fstream:
+                        self._saved_kernel_states[batch_idx] = pickle.load(fstream)
         checks_path = self.output_dir / 'checks.json'
         if checks_path.exists():
             with open(checks_path, 'r') as fstream:

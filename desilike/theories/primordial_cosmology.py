@@ -25,7 +25,7 @@ from ..base import Calculator
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, fourier_analytic_scales,
                                            theta_analytic, solve_theta_analytic,
-                                           theta_background_kwargs, eisenstein_hu_scales, nonzero,
+                                           eisenstein_hu_scales, nonzero,
                                            resample_dilated as _resample_dilated, dilate as _dilate)
 from ..parameter import Parameter, VariableCollection
 from ..install import Installer
@@ -1942,50 +1942,21 @@ class _SectionEmulator(CalculatorEmulator):
                 out[leaf] = name
         return out
 
-    def map_space(self, transform, transforms=None):
-        """:meth:`Space.map`, with the limits of every parameter the basis leaves alone put back.
+    def _transforms(self):
+        """Expansion variables needing a transform, as ``{name: spec}``, in the MAPPED names.
 
-        ``Space.map`` rebuilds the mapped space from its points as ``mean +- nsigma sigma``,
-        which for a bounds-defined space is about 1.7x wider on every axis
-        (:math:`3/\sqrt{12}`) -- including the axes the basis change never touched. A parameter
-        the transform passes through has no image to measure and should keep the limits the
-        caller gave.
-
-        Not a nicety: measured in production, a ``wa_fld`` box of +-0.9 came back as +-1.56 and
-        the training died on a node at ``w0 + wa = 0.56``, where CLASS returns non-finite values.
-        For a chain-shaped space the two agree, since a pass-through parameter's mapped samples
-        are the source's own.
+        Declared here rather than inline in :meth:`training_space` so a subclass adds its own by
+        calling ``super()`` -- and because a transform may only be declared for a name the
+        mapping introduces, which is the one rule tying the two together.
         """
-        space = self.space
-        mapped = space.map(transform, transforms=transforms or {})
-        # the image's own range, measured from the mapped points. `Space` folds the extent it
-        # is given into `limits` and does not keep it, so it has to be recomputed here; the
-        # samples are stored in the same (possibly transformed) convention as `limits`.
-        samples = getattr(mapped, 'samples', None)
-        extent = {} if samples is None else {
-            name: (float(samples[:, index].min()), float(samples[:, index].max()))
-            for index, name in enumerate(mapped.params)}
-        for name in mapped.params:
-            if name in space.params:
-                mapped.limits[name] = space.limits[name]
-                if name in getattr(space, 'bounds', {}):
-                    mapped.bounds[name] = space.bounds[name]
-            elif name in extent:
-                # A name the basis introduced has no source limits to restore, and `Space`
-                # takes its limits as `mean +- nsigma sigma` widened to the extent -- fine for a
-                # near-Gaussian image and wrong for a skewed one. `Omega_cdm = omega_cdm / h^2`
-                # over the ACE domain runs 0.10 to 0.64, and three sigma about its mean reaches
-                # negative density: measured, a node at `Omega_cdm = -0.053`, where CLASS returns
-                # non-finite and one such node poisons every coefficient. The image's own
-                # bounding box is what the region actually is, and it contains every point the
-                # source box maps to, so coverage is not at risk.
-                #
-                # `bounds` as well as `limits`, because the background sector's space is
-                # correlated: the engine whitens and lays its grid on a rotated ellipsoid whose
-                # axis-aligned hull reaches outside the per-axis limits, and `bounds` is what
-                # `_shrink_to_limits` cuts against. With `limits` alone the box was unchanged.
-                mapped.limits[name] = mapped.bounds[name] = extent[name]
-        return mapped
+        names = set(getattr(self.space, 'params', []))
+        # `w0 + wa` is bounded above -- CAMB's PPF refuses w0 + wa > 0 ("giving w>0 at high
+        # redshift"), stricter than cosmoprimo's own 1/3 radiation-domination check, and 0 is the
+        # hard prior the analysis applies. It is the SUM that is bounded, so no per-axis limit
+        # expresses it; a logit onto (-5, 0) makes the bound unreachable rather than an edge to
+        # cut back from, and a Smolyak grid is unisolvent, so one node past it is not a smaller
+        # problem but a singular one.
+        return {'w0pwa': 'logit_w0pwa'} if {'w0_fld', 'wa_fld'} <= names else {}
 
     def routing(self, params):
         """``(factors, dilations)``: ``{leaf: factor}`` divided out of the leaf before the fit
@@ -2107,11 +2078,11 @@ class HarmonicEmulator(_SectionEmulator):
         between a tuple of masses and an array of them.
         """
         fiducial = getattr(getattr(self, 'calculator', None), '_fiducial', None)
-        kwargs = theta_background_kwargs(params, fiducial)
         w0 = params.get('w0_fld', -1.)
         return {'w0': w0, 'wa': params.get('w0pwa', -1.) - w0,
-                'm_ncdm': jnp.atleast_1d(kwargs['m_ncdm']),
-                'N_ur': kwargs['N_ur'], 'T_cmb': kwargs['T_cmb']}
+                'm_ncdm': jnp.atleast_1d(params.get('m_ncdm', fiducial['m_ncdm'])),
+                'N_ur': params.get('N_ur', fiducial['N_ur']),
+                'T_cmb': params.get('T_cmb', fiducial['T_cmb'])}
 
     def to_training(self, params):
         r""":math:`(h, w_0, w_a) \rightarrow (\theta_\mathrm{MC}, w_0, w_0 + w_a)`.
@@ -2165,28 +2136,36 @@ class HarmonicEmulator(_SectionEmulator):
         """The user's space, re-expressed in the expansion basis by mapping its points.
 
         Paired with :meth:`to_training`, as :class:`Space` requires. ``Space.map`` transforms
-        points rather than propagating a Jacobian, and ``Space`` applies the declared transform to
-        those samples itself, so mean, covariance and limits all end up in the expansion variable
-        without the caller arranging it.
+        points rather than propagating a Jacobian, and applies the declared transform to those
+        points itself, so mean, covariance and limits all end up in the expansion variable without
+        the caller arranging it.
 
-        The transform matters because ``w0 + wa`` is bounded above: CAMB's PPF refuses
-        ``w0 + wa > 0`` ("giving w>0 at high redshift"), stricter than cosmoprimo's own ``< 1/3``
-        radiation-domination check, and 0 is also the hard prior the analysis applies. A Smolyak
-        grid is unisolvent, so one node past the bound is not a smaller problem but a singular
-        one; a logit onto ``(-5, 0)`` makes the bound unreachable rather than an edge to cut.
+        A plain box, not an ellipsoid on the principal axes. Whitened, the nodes fill a band across
+        the box and the box's off-diagonal corners hold none, so
+        :meth:`~cosmoprimo.emulators.tools.engines.BaseEngine.outside` refuses points that are
+        inside every one of their own limits. Measured on DESI DR2 BAO + CMB-SPA in w0waCDM, the
+        whitened sector answered 66.68% of that posterior -- the missing third refused as off the
+        node cloud, not outside the box -- and the truncation reached the chain as a hard wall at
+        `w0 = -0.16`, costing 13.3% of the published w0 marginal while Gelman-Rubin read 1.00.
+        Uncorrelated it answers 99.87%.
+
+        The whitening is not what buys the accuracy here, which is why this costs nothing. Both
+        arms trained at budget 3 (330 nodes), `|dchi2|` against exact CLASS on 96 draws of the
+        reference chain: whitened 1.442 but finite on only 61 of them, uncorrelated 1.466 finite
+        on all 96, and better at the 95th percentile (3.266 against 3.304). The 350x that whitening
+        is worth elsewhere is a Chebyshev-grid measurement, where the rotation is what orients the
+        grid onto the posterior; with a regression engine at ``measure='samples'`` the candidate
+        pool is already the chain, so the nodes are posterior-shaped either way and the rotation
+        adds only the mask. Reconsider this if the engine changes.
         """
-        space = self.space
-        names = getattr(space, 'params', [])
+        names = getattr(self.space, 'params', [])
+        # Nothing to map: the basis change is `h -> theta_MC_100` and the dark-energy pair, and a
+        # space with neither varies nothing this expansion re-expresses.
         if not any(name in names for name in ('wa_fld', 'h')):
-            return space
-        # the logit only when `w0pwa` is actually one of the mapped names, which takes both of
-        # them varied -- `to_training` builds it from the pair. A space varying `h` with the dark
-        # energy fixed is the ordinary LCDM case, and declaring a transform for a parameter that
-        # is not there is refused by `Space`.
-        transforms = {}
-        if 'wa_fld' in names and 'w0_fld' in names:
-            transforms['w0pwa'] = 'logit_w0pwa'
-        return self.map_space(self.to_training, transforms=transforms)
+            space = self.space
+        else:
+            space = self.space.map(self.to_training, transforms=self._transforms())
+        return space.uncorrelated()
 
 
 # ── emulating a cosmology for everything that is not a Cl ─────────────────────
@@ -2329,9 +2308,17 @@ class _RoutedSectionEmulator(_SectionEmulator):
                  for name, value in params.items()}
         fid, zs = self._fiducial, self._anchors['zs']
         cosmo = fid.clone(**{name: given.get(name, value) for name, value in self._anchors['defaults'].items()})
-        # the analytic core, at the canonical values the clone resolved
-        scalars = [fourier_analytic_scales(float(z), fid.clone(**{name: cosmo[name] for name in self._ref_update_names}))
-                   for z in zs]
+        # the analytic core, at the canonical values the clone resolved. `m_ncdm` goes back as the
+        # TOTAL: `cosmo['m_ncdm']` is per-species -- three entries under a degenerate hierarchy --
+        # while a fiducial that declares one takes the sum and re-splits it, and handing it the
+        # list raises "neutrino_hierarchy cannot be passed with a list for m_ncdm, only with a
+        # sum". Summing is not a workaround for that check: the total is the quantity the
+        # hierarchy is a statement about, and it is what the fiducial was cloned from. With no
+        # hierarchy declared the list has one entry and the sum is that entry, unchanged.
+        update = {name: cosmo[name] for name in self._ref_update_names}
+        if 'm_ncdm' in update:
+            update['m_ncdm'] = jnp.sum(jnp.atleast_1d(update['m_ncdm']))
+        scalars = [fourier_analytic_scales(float(z), fid.clone(**update)) for z in zs]
         ratios = {}
         for name, ref in self._ref.items():
             values = jnp.array([item[name] for item in scalars]) if scalars else jnp.zeros(0)
@@ -2481,90 +2468,41 @@ class BackgroundEmulator(_RoutedSectionEmulator):
         return {fractions.get(name, name): value * params['h'] ** 2 if name in fractions else value
                 for name, value in params.items()}
 
+    def _transforms(self):
+        """The dark-energy logit, plus a log on each density fraction.
+
+        Strictly positive quantities on a box that is a plain rectangle (see
+        :meth:`training_space`), so a wide fraction crosses zero: measured at nsigma 3.75 on the
+        SPA box, ``Omega_cdm`` reached -0.037 and ``Omega_b`` -0.0065, and a negative density is a
+        non-finite background rather than a slightly wrong one -- ``params.H0``, ``Omega_m``,
+        ``Omega_Lambda``, ``Omega_k``, ``background.age`` and ``efunc`` all came back nan
+        together. In the log the bound is unreachable instead of an edge to trim.
+        """
+        transforms = super()._transforms()
+        if self._omega_basis(self.space.params):
+            transforms.update({name: 'log' for name in self._DENSITIES.values()})
+        return transforms
+
     def training_space(self):
-        names = getattr(self.space, 'params', [])
-        # The logit whenever the dark-energy pair is varied, whether or not the density basis
-        # applies. Without it the box is a rectangle in raw `wa_fld` and reaches `mean + nsigma
-        # sigma` there: measured on the SPA w0waCDM box, `wa = +2.830` at `w0 = -1.294`, so
-        # `w0 + wa = +1.54`, where the dark-energy density diverges and the background overflows
-        # -- `params.H0`, `background.efunc`, `.comoving_transverse_distance` and `.age` all came
-        # back non-finite, and a Smolyak grid cannot absorb even one such node.
-        transforms = {'w0pwa': 'logit_w0pwa'} if {'wa_fld', 'w0_fld'} <= set(names) else {}
-        # The density fractions get a log for the same reason the dark-energy sum gets a logit:
-        # they are strictly positive, and this box is a plain rectangle at `mean +- nsigma sigma`
-        # (the samples are dropped just below, see the note there), so a wide fraction crosses
-        # zero. Measured at nsigma 3.75 on the SPA box: `Omega_cdm` reached -0.037 and `Omega_b`
-        # -0.0065, and a negative density is a non-finite background, not a slightly wrong one --
-        # `params.H0`, `Omega_m`, `Omega_Lambda`, `Omega_k`, `background.age` and `efunc` all
-        # came back nan together. In the log the bound is unreachable instead of an edge to trim.
+        """A plain rectangle over the image, rather than an ellipsoid on its principal axes.
 
-        # In two maps rather than one. `Space.map` filters the mapped points through
-        # `self.contains`, which tests the parameter names as they were before the map -- so a
-        # single map that both renames the
-        # densities and introduces `w0pwa` leaves nothing for the limits to be measured from, and
-        # they come back nan. Mapping the dark-energy pair on its own keeps every name `contains`
-        # knows, so the limits are the chain's own range: measured, w0 + wa in [-4.46, -0.107]
-        # against the raw box's +2.83.
-        space = self.space
-        if transforms:
-            space = space.map(lambda params: {**{name: value for name, value in params.items()
-                                                 if name != 'wa_fld'},
-                                              'w0pwa': params['w0_fld'] + params['wa_fld']}
-                              if 'wa_fld' in params else params, transforms=transforms)
-        if not self._omega_basis(self.space.params):
-            return space
-        # The log goes on the second map rather than the first: `Omega_b` / `Omega_cdm` do not exist
-        # until `_to_densities` has renamed them, and `Space` refuses a transform naming a
-        # parameter it does not have.
-        mapped = space.map(self._to_densities,
-                           transforms={name: 'log' for name in self._DENSITIES.values()})
-        # As a plain box, dropping the samples the map carries -- and with them the whitening.
-        # `Omega_b` and `Omega_cdm` are both `omega / h^2`, so their image is a narrow band
-        # (correlation 0.85, and -0.96 and -0.84 against `h`) whose shape says nothing about the
-        # posterior: it is the basis change talking. A whitened grid follows that band, and a
-        # point that moves `omega_cdm` alone at fixed `h` steps across it and is refused as "off
-        # the node cloud" -- measured, `omega_cdm = 0.1511` inside a box reaching 0.1599, which
-        # cut the tail off a chain. Every corner of the box is a valid background, since `h` is
-        # exact here and nothing else constrains the pair, so filling it costs only nodes, and a
-        # background node is 0.04 s.
-        from desilike.emulators import Space
+        ``Omega_b`` and ``Omega_cdm`` are both ``omega / h^2``, so their image is a narrow band
+        (correlation 0.85, and -0.96 and -0.84 against ``h``) whose shape says nothing about the
+        posterior: it is the basis change talking. A whitened grid follows that band, and a point
+        that moves ``omega_cdm`` alone at fixed ``h`` steps across it and is refused as off the
+        node cloud -- measured, ``omega_cdm = 0.1511`` inside a box reaching 0.1599, which cut the
+        tail off a chain. Every corner of this box is a valid background, since ``h`` is exact
+        here and nothing else constrains the pair, so filling it costs only nodes, and a
+        background node is 0.04 s.
 
-        # The transform is carried from before the density map as well as after it: the second
-        # `Space.map` does not propagate the first's, and `bounds` here are already in the
-        # expansion variable. Dropping the declaration would leave the engine reading a logit
-        # value as a raw `w0 + wa` and placing nodes out to +3.8 -- worse than the bug this fixes.
-        declared = {**{name: value for name, value in (getattr(space, 'transforms', {}) or {}).items()
-                       if value is not None},
-                    **{name: value for name, value in (getattr(mapped, 'transforms', {}) or {}).items()
-                       if value is not None}}
-        # `bounds` go in unmapped and are transformed by `Space` on the way in -- it maps once, at
-        # construction. `mapped.limits` are already in the expansion variable, so a declared
-        # transform would be applied a second time and the logit of a logit is nan. Invert them
-        # back for exactly the names that carry one.
-        from cosmoprimo.emulators.tools.utils import TRANSFORMS
+        :meth:`~cosmoprimo.emulators.tools.space.Space.uncorrelated` keeps the samples while
+        dropping the covariance, which is what ``measure='samples'`` needs to draw candidates from.
 
-        transforms = {name: value for name, value in declared.items() if name in mapped.params}
-        bounds = {}
-        for name in mapped.params:
-            low, high = mapped.limits[name]
-            spec = transforms.get(name)
-            if spec is not None:
-                inverse = (TRANSFORMS[spec] if isinstance(spec, str) else spec)[1]
-                low, high = float(inverse(low)), float(inverse(high))
-            bounds[name] = (low, high)
-        space = Space(bounds=bounds, levels=dict(getattr(mapped, 'levels', {}) or {}),
-                      transforms=transforms)
-        # The samples are attached after construction rather than passed in. Passing them would have
-        # `Space` measure a mean and covariance from them, `is_correlated()` would be true, and
-        # the engine would whiten -- which is exactly what the note above rejects. Setting them
-        # here keeps the box a plain rectangle (no mean, no covariance, no rotation) while still
-        # giving `measure='samples'` the pool it needs: `Emulator._engine` reads `space.samples`
-        # by name for engines that declare `wants_samples`. Without this the polynomial engine
-        # raises "needs the samples the space was measured from" on this sector alone.
-        # They are in the expansion variable, which is what that measure expects.
-        space.samples = getattr(mapped, 'samples', None)
-        space.weights = getattr(mapped, 'weights', None)
-        return space
+        Mapped here rather than through ``super()``: the base returns the user's space untouched,
+        which is right for the sectors that expand in it (fourier, thermodynamics) and would leave
+        this one unmapped.
+        """
+        return self.space.map(self.to_training, transforms=self._transforms()).uncorrelated()
 
     def _off_grid(self):
         # in the fraction basis the age (its 1/h divided out) and Omega_i(z) are h-free too

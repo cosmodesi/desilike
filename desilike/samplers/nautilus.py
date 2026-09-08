@@ -27,12 +27,18 @@ class Nautilus(PopulationKernel):
 
     logger = logging.getLogger('Nautilus')
 
+    # No kernel-level default: how many rows a posterior evaluation can carry is a property of
+    # the likelihood, not of nautilus, so it is passed in rather than guessed here. Given one,
+    # `run` sizes `n_batch` so that each rank's share is exactly that many rows.
+    _batch_size = None
+
     def __init__(self, **kwargs):
         """
         Parameters
         ----------
         **kwargs
-            Extra keyword arguments forwarded to ``nautilus.Sampler``.
+            Extra keyword arguments forwarded to ``nautilus.Sampler``. ``n_batch`` is derived
+            from the pool in :meth:`run` unless given here.
         """
         self._kwargs = kwargs
         self._sampler = None
@@ -69,6 +75,37 @@ class Nautilus(PopulationKernel):
             if not self._initialized:
                 if self._output_dir is not None:
                     self._output_dir.mkdir(parents=True, exist_ok=True)  # holds nautilus.h5
+                # One posterior evaluation per rank per iteration, as wide as the pool allows.
+                # nautilus hands the pool `n_batch` points and `MPIPool.map` gives rank r the
+                # slice tasks[r::size], so n_batch = batch_size * size makes each rank's share
+                # exactly one full chunk: a single jitted call, always the same shape.
+                #
+                # nautilus' own default is ceil(100 / size) * size, whose per-rank share shrinks
+                # as ranks are added -- 25 rows at 4 ranks, 1 at 128. That is both too wide to
+                # fit at small rank counts (25 stacked P+B evaluations asked for 71.5 GiB) and
+                # too narrow to amortise the jit at large ones.
+                batch_size = self._pool.batch_size
+                if batch_size and 'n_batch' not in self._kwargs:
+                    self._kwargs['n_batch'] = int(batch_size) * self._pool.size
+                    # n_batch also paces the algorithm: a new bound is placed once `n_update`
+                    # (default n_live) points have been added, and the test is only made between
+                    # batches. Past that, bounds land late -- nautilus' own docstring warns of
+                    # it -- so at large rank counts lower `batch_size` rather than let the
+                    # product run away.
+                    n_update = self._kwargs.get('n_update', self._kwargs.get('n_live', 2000))
+                    if self._kwargs['n_batch'] > n_update:
+                        self.logger.warning(
+                            f"n_batch = batch_size x nranks = {self._kwargs['n_batch']} exceeds "
+                            f'n_update = {n_update}: bounds will be placed later than intended. '
+                            f'Lower batch_size (or raise n_live / n_update).')
+                elif batch_size is None:
+                    # The silent path: the pool stacks every task a rank received into one
+                    # evaluation, and how many that is comes from nautilus' n_batch rather than
+                    # from anything the likelihood was sized for.
+                    self.logger.warning(
+                        'No batch_size given, so each rank stacks its whole share of n_batch = '
+                        f"{self._kwargs.get('n_batch', 'ceil(100 / nranks) x nranks')} into a "
+                        'single posterior evaluation. Pass batch_size to bound it.')
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'nautilus',
                     prior=self._prior_ppf, likelihood=self._likelihood_logpdf_with_derived,

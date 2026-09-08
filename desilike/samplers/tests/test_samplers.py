@@ -334,6 +334,45 @@ def test_ensemble_proposal_start():
             f'{name}: walkers start at {np.mean(values)}, proposal centred on {center[i]}'
 
 
+# ── Nautilus batching ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize('batch_size', [16, 64, None, 0])
+def test_nautilus_n_batch(batch_size):
+    """`n_batch` is sized so each rank evaluates exactly one full batch per iteration.
+
+    nautilus hands the pool `n_batch` points and `MPIPool.map` gives rank r the slice
+    tasks[r::size], so `n_batch = batch_size * size` is what makes a rank's share one jitted
+    call of a fixed width. Left to itself nautilus uses ceil(100 / size) * size, whose per-rank
+    share shrinks as ranks are added -- wide enough to exhaust memory on a few ranks, too narrow
+    to amortise the jit on many.
+
+    Without a `batch_size` there is no width to derive one from, so nautilus' own formula stands
+    (100 at one rank); same for ``batch_size=0``, which evaluates one point per call.
+    """
+    pytest.importorskip('nautilus')
+    _skip_if_mpi()
+    likelihood = make_likelihood()
+    kernel = samplers.Nautilus(n_networks=1, n_live=300)
+    kwargs = {} if batch_size is None else dict(batch_size=batch_size)
+    sampler = samplers.Sampler(likelihood, kernel=kernel, rng=42, **kwargs)
+    assert sampler.pool.batch_size == batch_size
+    sampler.run(n_eff=0, n_like_max=10)
+    if batch_size:
+        assert kernel._sampler.n_batch == batch_size * sampler.pool.size
+    else:
+        assert kernel._sampler.n_batch == 100
+
+
+def test_nautilus_n_batch_explicit():
+    """An explicitly requested `n_batch` is not overridden by the derived one."""
+    pytest.importorskip('nautilus')
+    _skip_if_mpi()
+    kernel = samplers.Nautilus(n_networks=1, n_live=300, n_batch=37)
+    sampler = samplers.Sampler(make_likelihood(), kernel=kernel, rng=42, batch_size=16)
+    sampler.run(n_eff=0, n_like_max=10)
+    assert kernel._sampler.n_batch == 37
+
+
 # ── PocoMC Gaussian proposal ──────────────────────────────────────────────────
 
 @pytest.mark.mpi_skip

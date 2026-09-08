@@ -3123,10 +3123,52 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             )
             missing = [name for name in required if out.get(name) is None]
             if missing:
-                raise ValueError(
-                    "HDKI/EFT_DE requires the EFTCAMB interpolators: "
-                    + ', '.join(missing)
-                )
+                # No interpolators were handed in: take them from the template's cosmology.
+                #
+                # Why here, at call time, and not once in __init__: this node sits below the
+                # cosmology node, and the EFT engines ('mochiclass', 'heftcamb') tabulate h1, h3,
+                # h5 -- the functions that make mu(k, eta) = h1 (1 + k^2 h5) / (1 + k^2 h3) -- for
+                # the cosmology they were just run with. In a fit that cosmology changes at every
+                # step (h, omega_cdm, w0, wa, and the Horndeski coefficients themselves if they are
+                # sampled), so splines built once at the fiducial would freeze mu(k, eta) while
+                # P(k) moves. That also matters for the emulator: it differentiates THIS node with
+                # respect to the cosmological parameters, and with frozen splines the derivatives
+                # would miss the response of the EFT sector. Rebuilding per call keeps the loop
+                # kernels and the linear spectrum consistent by construction.
+                #
+                # Why the cosmoprimo object and not the desilike node: the node's get_background()
+                # is a requirements proxy (efunc, distances, ...) and does not expose the EFT
+                # functions; the engine's Background does, through ``eft_interpolators()``, which
+                # returns fkptjax-keyed CubicSplines and raises CosmologyComputationError on a
+                # non-finite h function. Cost: one background evaluation on a 512-point eta grid,
+                # negligible against the kernel ODE solve that follows.
+                #
+                # Explicit ``eftcamb_h*_interp`` (constructor or mg_params_override) still win:
+                # they are the fixed-cosmology cross-check path of the notebooks, and a partial
+                # override keeps only what it names.
+                background = None
+                for candidate in (getattr(self.template.cosmo, '_cosmo', None),
+                                  getattr(self.template.cosmo, 'cosmo', None),
+                                  self.template.cosmo):
+                    if candidate is None or not hasattr(candidate, 'get_background'):
+                        continue
+                    try:
+                        background = candidate.get_background()
+                    except Exception:
+                        continue
+                    if hasattr(background, 'eft_interpolators'):
+                        break
+                    background = None
+                if background is None:
+                    raise ValueError(
+                        "HDKI/EFT_DE requires the EFTCAMB interpolators "
+                        + ', '.join(missing)
+                        + ", or a template cosmology whose engine provides "
+                        "Background.eft_interpolators() (cosmoprimo 'mochiclass' / 'heftcamb')"
+                    )
+                interpolators = background.eft_interpolators()
+                for name in missing:
+                    out[name] = interpolators[name]
         return out
 
     def __call__(self):

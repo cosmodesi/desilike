@@ -555,3 +555,122 @@ def geweke(chains, params=None, first=0.1, last=0.5):
 
     # Stack along a new last axis: scalar → (nchains,); (*var_shape,) → (*var_shape, nchains).
     return np.stack(toret, axis=-1)
+
+
+# ── importance-sampling diagnostics ───────────────────────────────────────────
+
+def kish_ess(log_weights):
+    """Kish's effective sample size ``(sum w)^2 / sum w^2`` from log-weights.
+
+    Parameters
+    ----------
+    log_weights : array
+        Unnormalized log-weights; any additive constant cancels.
+
+    Returns
+    -------
+    float
+        Effective sample size, between 1 and ``log_weights.size``.
+    """
+    log_weights = np.asarray(log_weights, dtype='f8')
+    log_weights = log_weights[np.isfinite(log_weights)]
+    if not log_weights.size:
+        return 0.
+    weights = np.exp(log_weights - log_weights.max())
+    return float(weights.sum()**2 / (weights**2).sum())
+
+
+def systematic_resample(weights, nsamples, rng):
+    r"""Systematic resampling of *weights*, returning *nsamples* indices.
+
+    A single uniform draw :math:`u \sim \mathcal{U}(0, 1)` places a regular comb of
+    :math:`N` positions on the unit interval, and each position picks the index whose
+    normalized cumulative weight first exceeds it:
+
+    .. math::
+
+        p_k = \frac{u + k}{N}, \quad k = 0, \dots, N - 1, \qquad
+        i_k = \min \Big\{ i : \sum_{j \le i} \bar{w}_j \ge p_k \Big\},
+        \quad \bar{w}_j = \frac{w_j}{\sum_l w_l}.
+
+    A particle of normalized weight :math:`\bar{w}_i` therefore appears either
+    :math:`\lfloor N \bar{w}_i \rfloor` or :math:`\lceil N \bar{w}_i \rceil` times, never
+    more and never fewer -- the counts are exactly the multinomial ones rounded, with only
+    the single shared :math:`u` left random. That is the whole reason to prefer it:
+    unbiased like multinomial resampling, at the same cost, but with lower variance, which
+    makes it the standard choice inside sequential Monte Carlo.
+
+    Parameters
+    ----------
+    weights : array
+        Non-negative weights; normalized internally.
+    nsamples : int
+        Number of indices to draw.
+    rng : numpy.random.Generator
+        Random number generator, supplying the single uniform offset.
+
+    Returns
+    -------
+    numpy.ndarray, shape ``(nsamples,)``
+        Indices into *weights*.
+    """
+    weights = np.asarray(weights, dtype='f8')
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 0.:
+        raise ValueError('weights must contain at least one positive finite value.')
+    positions = (rng.random() + np.arange(nsamples)) / nsamples
+    index = np.searchsorted(np.cumsum(weights / total), positions)
+    return np.clip(index, 0, weights.size - 1)
+
+
+def _gpd_shape(tail):
+    """Zhang & Stephens (2009) profile-likelihood estimate of the GPD shape parameter."""
+    ntail = tail.size
+    ngrid = 30 + int(np.sqrt(ntail))
+    grid = 1. - np.sqrt(ngrid / (np.arange(1, ngrid + 1) - 0.5))
+    grid /= 3. * tail[int(ntail / 4 + 0.5) - 1]
+    grid += 1. / tail[-1]
+    shapes = np.log1p(-grid[:, None] * tail).mean(axis=-1)
+    profile = ntail * (np.log(-grid / shapes) - shapes - 1.)
+    weights = 1. / np.exp(profile[:, None] - profile).sum(axis=-1)
+    theta = (grid * weights).sum() / weights.sum()
+    shape = np.log1p(-theta * tail).mean()
+    # Weakly informative prior on the shape, as in the reference implementation.
+    return (ntail * shape + 10. * 0.5) / (ntail + 10.)
+
+
+def pareto_khat(log_weights):
+    """Pareto-smoothed importance-sampling diagnostic k-hat.
+
+    A generalized-Pareto distribution is fitted to the upper tail of the weights;
+    its shape parameter k estimates the number of finite moments of the weight
+    distribution. ``k < 0.5`` is fine, ``0.5-0.7`` is usable, ``> 0.7`` means the
+    weight variance is effectively infinite and :func:`kish_ess` is optimistic --
+    the failure mode to watch when a proposal under-covers the target in the tails,
+    where a healthy-looking Kish ESS hides a broken correction.
+
+    .. rubric:: References
+    - Vehtari et al., https://arxiv.org/abs/1507.02646
+
+    Parameters
+    ----------
+    log_weights : array
+        Unnormalized log-weights.
+
+    Returns
+    -------
+    float
+        Estimated shape parameter, or ``nan`` when the tail is too short or
+        degenerate to fit.
+    """
+    log_weights = np.asarray(log_weights, dtype='f8')
+    log_weights = log_weights[np.isfinite(log_weights)]
+    nsamples = log_weights.size
+    ntail = int(min(nsamples / 5., 3. * np.sqrt(nsamples)))
+    if ntail < 5:
+        return np.nan
+    ordered = np.sort(log_weights - log_weights.max())
+    tail = np.exp(ordered[-ntail:]) - np.exp(ordered[-ntail - 1])
+    if not np.all(tail > 0):
+        return np.nan
+    return float(_gpd_shape(tail))

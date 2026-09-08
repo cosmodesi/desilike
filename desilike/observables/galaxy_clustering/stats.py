@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import lsstypes as types
 from matplotlib import pyplot as plt
 
-from ...base import Calculator, Parameter, compile, copy, replace, get_params as _get_params
+from ...base import Calculator, Parameter, build, copy, replace, get_params as _get_params
 from ...base import _iter_calculators
 from ...theories.galaxy_clustering.template import Spectrum2Template
 from ... import plotting
@@ -44,7 +44,7 @@ def _compute_flattheory_nobao(observable):
     template_node = next(calc for calc in _iter_calculators(nobao_observable.theory)
                          if isinstance(calc, Spectrum2Template))
     replace(nobao_observable, template_node, template_node.clone(only_now=True))
-    nobao_graph = compile(nobao_observable)
+    nobao_graph = build(nobao_observable)
     current_params = {param.name: param._value for param in _get_params(nobao_graph)
                       if param._value is not None}
     nobao_graph(current_params)
@@ -182,10 +182,6 @@ class Spectrum2PolesObservable(Calculator):
     Computes ``flattheory = window_matrix @ theory.poles.ravel()`` and stores
     ``flatdata`` for comparison by a likelihood.
 
-    A theory that sets ``can_include_window = True`` is handed the window matrix instead, and
-    if it reports ``is_windowed`` afterwards its ``poles`` are already the data vector and no
-    convolution is applied here.
-
     Parameters
     ----------
     data : array, lsstypes.Mesh2SpectrumPoles, or None
@@ -239,17 +235,10 @@ class Spectrum2PolesObservable(Calculator):
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
-        # See Spectrum3PolesObservable: a theory advertising ``can_include_window`` absorbs the
-        # window itself, and reports back through ``is_windowed``.
-        if getattr(self.theory, 'can_include_window', False):
-            self.theory.update(window_matrix=self._window_matrix)
         self.templates = _parse_templates(templates, n_data=self.flatdata.size)
 
     def __call__(self):
-        if getattr(self.theory, 'is_windowed', False):
-            self.flattheory = jnp.ravel(self.theory.poles)
-        else:
-            self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
+        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
         self.flattheory = _apply_templates(self.flattheory, self.templates)
         return self.flattheory
 
@@ -623,10 +612,6 @@ class Spectrum3PolesObservable(Calculator):
     Computes ``flattheory = window_matrix @ theory.poles.ravel()`` and
     stores ``flatdata`` for comparison by a likelihood.
 
-    A theory that sets ``can_include_window = True`` is handed the window matrix instead, and
-    if it reports ``is_windowed`` afterwards its ``poles`` are already the data vector and no
-    convolution is applied here.
-
     Parameters
     ----------
     data : array, lsstypes.Mesh3SpectrumPoles, or None
@@ -680,20 +665,10 @@ class Spectrum3PolesObservable(Calculator):
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
-        # A theory advertising ``can_include_window`` can absorb the window itself -- for the
-        # bias-monomial bispectrum, by contracting it into its emulator's Taylor coefficients,
-        # which is exact and removes both the convolution and the theory grid from every call.
-        # It reports back through ``is_windowed``, since whether it succeeded depends on
-        # whether its pt is emulated at all.
-        if getattr(self.theory, 'can_include_window', False):
-            self.theory.update(window_matrix=self._window_matrix)
         self.templates = _parse_templates(templates, n_data=self.flatdata.size)
 
     def __call__(self):
-        if getattr(self.theory, 'is_windowed', False):
-            self.flattheory = jnp.ravel(self.theory.poles)
-        else:
-            self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
+        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
         self.flattheory = _apply_templates(self.flattheory, self.templates)
         return self.flattheory
 

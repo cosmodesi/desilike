@@ -42,7 +42,7 @@ from functools import partial
 import numpy as np
 
 
-def _apply_batched(function, tasks, batch_size):
+def _apply_batched(function, tasks, batch_size, pad=False):
     """Apply *function* to *tasks* with the given batching strategy.
 
     Parameters
@@ -53,6 +53,13 @@ def _apply_batched(function, tasks, batch_size):
         ``0``  — call ``function(task)`` once per element (no batching).
         ``None`` — call ``function(np.stack(tasks))`` once for all tasks.
         ``N > 0`` — call ``function(np.stack(chunk))`` for chunks of N.
+    pad : bool
+        Pad the final short chunk up to *batch_size* (repeating its last task) and drop the
+        extra results, so EVERY call sees exactly *batch_size* rows. Chunking alone is not
+        enough for a jitted callable: the remainder still varies with the task count, and a jax
+        posterior recompiles per distinct shape. Costs at most ``batch_size - 1`` wasted
+        evaluations per call. Ignored unless *batch_size* is a positive integer, which is the
+        only case where there is a fixed width to pad to.
     """
     if batch_size == 0:
         return list(builtins.map(function, tasks))
@@ -60,7 +67,13 @@ def _apply_batched(function, tasks, batch_size):
         return list(function(np.stack(tasks)))
     results = []
     for start in range(0, len(tasks), batch_size):
-        results.extend(function(np.stack(tasks[start:start + batch_size])))
+        chunk = tasks[start:start + batch_size]
+        nchunk = len(chunk)
+        if pad and nchunk < batch_size:
+            chunk = list(chunk) + [chunk[-1]] * (batch_size - nchunk)
+            results.extend(list(function(np.stack(chunk)))[:nchunk])
+        else:
+            results.extend(function(np.stack(chunk)))
     return results
 
 
@@ -111,11 +124,12 @@ class _SerialPool:
         rank = 0
         size = 1
 
-    def __init__(self, batch_size=0):
+    def __init__(self, batch_size=0, enforce_batch_size=False):
         self.comm = self._SerialComm()
         self.rank = 0
         self.size = 1
         self.batch_size = batch_size
+        self.enforce_batch_size = enforce_batch_size
         self._registry = {}
 
     @property
@@ -140,7 +154,7 @@ class _SerialPool:
         tasks = list(tasks)
         if not tasks:
             return []
-        return _apply_batched(function, tasks, self.batch_size)
+        return _apply_batched(function, tasks, self.batch_size, pad=self.enforce_batch_size)
 
 
 class MPIPool:
@@ -155,7 +169,7 @@ class MPIPool:
 
     _next_tag = 1
 
-    def __init__(self, comm=None, batch_size=0):
+    def __init__(self, comm=None, batch_size=0, enforce_batch_size=False):
         try:
             from mpi4py import MPI
             self.MPI = MPI
@@ -167,6 +181,7 @@ class MPIPool:
         self.rank = self.comm.Get_rank()
         self.size = self.comm.Get_size()
         self.batch_size = batch_size
+        self.enforce_batch_size = enforce_batch_size
         self.tag = MPIPool._next_tag
         MPIPool._next_tag += 1
         self.function = _error_function
@@ -212,7 +227,8 @@ class MPIPool:
                 self.function = task
             else:
                 self.load_function(task)
-                results = _apply_batched(self.function, task, self.batch_size)
+                results = _apply_batched(self.function, task, self.batch_size,
+                                         pad=self.enforce_batch_size)
                 self.comm.send(results, dest=0, tag=self.tag)
 
     def stop_wait(self):
@@ -245,7 +261,8 @@ class MPIPool:
         # Process the main rank's share.
         main_slice = tasks[::self.size]
         results = [None] * len(tasks)
-        results[::self.size] = _apply_batched(self.function, main_slice, self.batch_size)
+        results[::self.size] = _apply_batched(
+            self.function, main_slice, self.batch_size, pad=self.enforce_batch_size)
 
         # Collect worker results in arrival order.
         status = self.MPI.Status()
@@ -288,11 +305,12 @@ def wait_many(pools):
             pool.function = task
         else:
             pool.load_function(task)
-            results = _apply_batched(pool.function, task, pool.batch_size)
+            results = _apply_batched(pool.function, task, pool.batch_size,
+                                     pad=pool.enforce_batch_size)
             comm.send(results, dest=0, tag=status.tag)
 
 
-def make_pool(mpicomm, batch_size=0):
+def make_pool(mpicomm, batch_size=0, enforce_batch_size=False):
     """Return the appropriate pool for *mpicomm*.
 
     Parameters
@@ -301,13 +319,17 @@ def make_pool(mpicomm, batch_size=0):
         ``0`` (default) — evaluate one task at a time (no batching).
         ``None`` — pass all tasks as a single stacked array per rank.
         ``N > 0`` — group tasks into chunks of N per rank.
+    enforce_batch_size : bool
+        Pad the last chunk so every call sees exactly *batch_size* tasks. Only meaningful with
+        ``batch_size > 0``.
 
     Returns a :class:`_SerialPool` when *mpicomm* has only one rank or when
     ``mpi4py`` is unavailable; otherwise returns an :class:`MPIPool`.
     """
     if mpicomm.size == 1:
-        return _SerialPool(batch_size=batch_size)
+        return _SerialPool(batch_size=batch_size, enforce_batch_size=enforce_batch_size)
     try:
-        return MPIPool(comm=mpicomm, batch_size=batch_size)
+        return MPIPool(comm=mpicomm, batch_size=batch_size,
+                       enforce_batch_size=enforce_batch_size)
     except RuntimeError:
-        return _SerialPool(batch_size=batch_size)
+        return _SerialPool(batch_size=batch_size, enforce_batch_size=enforce_batch_size)

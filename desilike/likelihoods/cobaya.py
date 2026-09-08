@@ -139,9 +139,14 @@ def _params_from_cobaya(cobaya_params):
             # if logp genuinely needs it as an input, the missing kwarg will raise clearly.
             continue
         if 'prior' in spec:
+            # cobaya allows a bare number as `ref`, meaning "start exactly here" (SP4A declares
+            # `Ecal: {prior: {min: 0.8, max: 1.2}, ref: 1.0}`). desilike has no zero-width
+            # reference distribution, so that becomes the parameter's value instead.
+            ref = spec.get('ref')
+            value = float(ref) if isinstance(ref, (int, float)) else None
             variables.append(Parameter(name, prior=_convert_prior(spec['prior']),
-                                        ref=_convert_prior(spec.get('ref')),
-                                        latex=spec.get('latex')))
+                                        ref=None if value is not None else _convert_prior(ref),
+                                        value=value, latex=spec.get('latex')))
         elif value is not None:
             variables.append(Parameter(name, value=float(value), fixed=True, latex=spec.get('latex')))
         # else: derived-only output (e.g. {'derived': True}), or a bare renamed alias --

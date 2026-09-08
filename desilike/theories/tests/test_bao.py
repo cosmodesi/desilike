@@ -346,7 +346,9 @@ class TestDampedBAOWigglesPoles:
         pipe({**param_vals, **bb_zero})
         bare = DampedBAOWigglesPTCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
         bare_pipe = compile(bare)
-        bare_pipe(param_vals)
+        # the bare correlation has no broadband parameters, and a name a pipeline does not have
+        # is an error rather than a silent drop
+        bare_pipe({name: value for name, value in param_vals.items() if name in bare_pipe.params})
         assert np.allclose(tracer.poles, bare.poles, rtol=1e-10)
 
     def test_tracer_correlation_broadband(self):

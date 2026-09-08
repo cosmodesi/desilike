@@ -35,6 +35,25 @@ Population Kernels
   desilike.samplers.Dynesty
   desilike.samplers.Nautilus
   desilike.samplers.PocoMC
+  desilike.samplers.SMC
+
+Proposals
+---------
+
+Population kernels can start from a *proposal* instead of the prior -- the beta = 0
+distribution of their tempered path. The posterior is unchanged whatever the proposal;
+what shrinks is the distance the sampler has to anneal over. Pass one as
+``Sampler(..., proposal=...)``; a :class:`~desilike.samples.Covariance` is accepted too,
+and is wrapped into a :class:`~desilike.samplers.GaussianProposal`.
+
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
+
+  desilike.samplers.PriorProposal
+  desilike.samplers.SamplesProposal
+  desilike.samplers.GaussianProposal
+  desilike.samplers.ProductProposal
 
 MCMC Kernels
 ------------
@@ -76,3 +95,4 @@ Base Classes
   desilike.samplers.base.Kernel
   desilike.samplers.base.PopulationKernel
   desilike.samplers.base.StaticKernel
+  desilike.samplers.proposals.BaseProposal

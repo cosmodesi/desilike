@@ -434,3 +434,10 @@ class TestIO:
         loaded = Profiles.read(fn)
         assert loaded.best is not None and 'x' in loaded.best
         np.testing.assert_allclose(loaded.logpdf, p.profiles.logpdf)
+
+
+def test_profiler_does_not_recompile_a_compiled_graph(likelihood):
+    """A CompiledGraph is stored as-is.  Recompiling would re-run the whole pipeline just to
+    construct the profiler, and `compile` is not free -- it executes every node."""
+    profiler = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
+    assert profiler.likelihood is likelihood

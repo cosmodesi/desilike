@@ -4,6 +4,8 @@ import re
 import copy
 import json
 import threading
+from types import MappingProxyType
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -133,6 +135,8 @@ class ParameterEncoder(NumpyEncoder):
     """
 
     def default(self, obj):
+        if isinstance(obj, ParameterFiniteDifference):
+            return {'__class__': 'ParameterFiniteDifference', **obj.__getstate__()}
         if isinstance(obj, ParameterPrior):
             lo, hi = obj.limits
             d = {'__class__': 'ParameterPrior',
@@ -147,7 +151,12 @@ class ParameterEncoder(NumpyEncoder):
 
 
 def _parameter_object_hook(d):
-    """``object_hook`` for :func:`json.loads` that reconstructs :class:`ParameterPrior`."""
+    """``object_hook`` for :func:`json.loads` that reconstructs :class:`ParameterPrior` and
+    :class:`ParameterFiniteDifference`."""
+    if d.get('__class__') == 'ParameterFiniteDifference':
+        d = dict(d)
+        d.pop('__class__')
+        return ParameterFiniteDifference(**d)
     if d.get('__class__') == 'ParameterPrior':
         d = dict(d)
         d.pop('__class__')
@@ -402,12 +411,8 @@ class Variable(Node):
 
     # Minimal FD defaults so external (_is_external=True) calculators work when Variable is a dep.
     @property
-    def fd_eps(self):
-        return None
-
-    @property
-    def fd_acc(self):
-        return 2
+    def fd(self):
+        return ParameterFiniteDifference()
 
     @property
     def dtype(self):
@@ -416,6 +421,15 @@ class Variable(Node):
         if hasattr(self._value, 'dtype'):
             return self._value.dtype
         return np.asarray(self._value).dtype
+
+    @property
+    def size(self):
+        """Number of scalar entries, i.e. this variable's width in a flat parameter vector.
+
+        Follows :attr:`shape`, not the stored value, and is 1 for a scalar variable.
+        Distinct from :attr:`ndim`, which is the value's number of axes.
+        """
+        return int(np.prod(self.shape)) if self.shape else 1
 
     @property
     def ndim(self):
@@ -520,8 +534,19 @@ class ParameterPrior:
             raise ValueError(f'Prior limits ({lo}, {hi}): lower >= upper')
         self.limits = (lo, hi)
         self.shape = tuple(shape) if shape is not None else None
-        self.attrs = dict(attrs)
+        # Read-only: `__setattr__` already refuses to rebind attributes, and this closes
+        # the remaining hole -- a mutable dict reachable through a frozen object. With it
+        # the instance is immutable in full, which is what lets `copy` return self.
+        self.attrs = MappingProxyType(dict(attrs))
         self._setup()
+        # The offset that makes logpdf(center) = 0 is part of the prior's definition, so it is
+        # computed here, once. It was lazy while `Parameter.clone` rebuilt the prior on every
+        # parameter copy -- 37 constructions per emcee step, 83% of the step; parameters are
+        # immutable now (`Parameter.copy` returns self) and a run rebuilds ~0.2 priors per step.
+        # `ensure_compile_time_eval` so a prior built inside a jit trace still evaluates the
+        # constant eagerly instead of staging it out, where `float()` would raise.
+        with jax.ensure_compile_time_eval():
+            self._logpdf_center = float(self._logpdf_fn(jnp.asarray(self._center)))
         object.__setattr__(self, '_frozen', True)
 
     def __setattr__(self, name, value):
@@ -560,7 +585,6 @@ class ParameterPrior:
                 self._ppf_fn = _ppf
                 self._center = (lo + hi) / 2.
                 self._std = (hi - lo) / float(np.sqrt(12.))
-            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── norm (with optional truncation via truncnorm) ─────────────────────
@@ -596,7 +620,6 @@ class ParameterPrior:
             self._logpdf_fn = _logpdf
             self._sample_fn = _sample
             self._ppf_fn = _ppf
-            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── other dists via jax.scipy.stats ──────────────────────────────────
@@ -653,7 +676,6 @@ class ParameterPrior:
             self._std = s
         except Exception:
             self._center, self._std = 0., None
-        self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
 
     def logpdf(self, x):
         """Return log PDF relative to center: logpdf(x) - logpdf(center) ≤ 0.
@@ -664,7 +686,7 @@ class ParameterPrior:
         This matches the behaviour of the backup desilike ``remove_zerolag=True``
         convention.
         """
-        return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center_val
+        return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center
 
     def sample(self, key=None, shape=None):
         """Draw samples using JAX PRNG key; raises if prior is improper.
@@ -769,7 +791,94 @@ class ParameterPrior:
         return ParameterPrior(**state)
 
     def copy(self):
-        return self.clone()
+        # Immutable in full (frozen attributes, read-only `attrs`), so a copy needs no state
+        # of its own: a distinct object sharing this one's instance dict. `_setup` and the
+        # centering constant -- the whole cost of a construction -- are shared rather than
+        # recomputed. Samplers copy parameters freely.
+        new = object.__new__(self.__class__)
+        object.__setattr__(new, '__dict__', self.__dict__)
+        return new
+
+
+class ParameterFiniteDifference:
+    """Finite-difference specification for a parameter (``param.fd``).
+
+    Parameters
+    ----------
+    eps : float or (float, float), optional
+        Step size; a pair means asymmetric (below, above) steps.  ``None`` falls back to
+        ``param.ref.std()`` at the consumer.
+    acc : int, default=2
+        Derivative accuracy (number of extra stencil points).
+    transform : str, optional
+        Named expansion-variable transform (see ``base._FD_TRANSFORMS``, e.g. ``'sqrt'``);
+        with a transform, ``eps`` and ``center`` are in transformed units and
+        transform-aware consumers (``differentiate(fd_transform=True)``)
+        take derivatives w.r.t. the transformed variable.
+    center : float, optional
+        Preferred expansion anchor (transformed units when ``transform`` is set); used by
+        the default fit center (desilike_bak's ``param.delta`` semantics).
+    limits : (float, float), optional
+        Range, in parameter units (mapped through ``transform``
+        internally): the order-n stencil then uses n + 1 Chebyshev-Lobatto nodes spanning
+        this range, with every derivative taken from the full node set -- the resulting
+        order-n Taylor is identically the degree-n Chebyshev interpolant over the range
+        (near-minimax over the range instead of anchor-local).  Mutually exclusive with
+        ``eps``; ``acc`` is ignored in this mode.  ``center`` (or the range midpoint)
+        still sets the default expansion anchor.
+    """
+
+    def __init__(self, eps=None, acc=2, transform=None, center=None, limits=None):
+        if eps is not None and limits is not None:
+            raise ValueError('eps and limits are mutually exclusive: eps sets a step-based '
+                             '(Taylor) stencil, limits a Chebyshev collocation range')
+        if eps is not None:
+            if hasattr(eps, '__len__'):
+                eps_below, eps_above = (float(value) for value in eps)
+                eps = eps_below if eps_below == eps_above else (eps_below, eps_above)
+            else:
+                eps = float(eps)
+        self.eps = eps
+        self.acc = int(acc)
+        self.transform = str(transform) if transform is not None else None
+        self.center = float(center) if center is not None else None
+        self.limits = tuple(float(value) for value in limits) if limits is not None else None
+        object.__setattr__(self, '_frozen', True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, '_frozen', False):
+            raise AttributeError(f'{self.__class__.__name__} is immutable; use clone() to get a modified copy')
+        object.__setattr__(self, name, value)
+
+    def __getstate__(self):
+        return {'eps': list(self.eps) if isinstance(self.eps, tuple) else self.eps,
+                'acc': self.acc, 'transform': self.transform, 'center': self.center,
+                'limits': list(self.limits) if self.limits is not None else None}
+
+    def __setstate__(self, state):
+        self.__init__(**state)
+
+    def __eq__(self, other):
+        return (type(other) is type(self) and self.eps == other.eps and self.acc == other.acc
+                and self.transform == other.transform and self.center == other.center
+                and self.limits == other.limits)
+
+    def __repr__(self):
+        parts = [f'{name}={getattr(self, name)!r}' for name in ('eps', 'acc', 'transform', 'center', 'limits')
+                 if getattr(self, name) is not None and not (name == 'acc' and self.acc == 2)]
+        return f'ParameterFiniteDifference({", ".join(parts)})'
+
+    def clone(self, **kwargs):
+        """Return a new ParameterFiniteDifference with selected attributes overridden."""
+        state = self.__getstate__()
+        state.update(kwargs)
+        return ParameterFiniteDifference(**state)
+
+    def copy(self):
+        # Immutable, like ParameterPrior: a distinct object over the same instance dict.
+        new = object.__new__(self.__class__)
+        object.__setattr__(new, '__dict__', self.__dict__)
+        return new
 
 
 class Parameter(Variable):
@@ -782,7 +891,7 @@ class Parameter(Variable):
     _solved_values = frozenset(['best', 'marg'])
 
     def __init__(self, name, value=None, prior=None, ref=None, latex=None, fixed=None,
-                 derived=False, shape=None, fd_eps=None, fd_acc=2,
+                 derived=False, shape=None, fd=None,
                  namespace=None, depends=None):
         """
         Parameters
@@ -806,10 +915,10 @@ class Parameter(Variable):
         shape : tuple or None
             Array shape; () for scalars. None (default) infers shape from value when provided,
             falling back to () when value is absent.
-        fd_eps : float, optional
-            Finite-difference step. Defaults to ref.std().
-        fd_acc : int, optional
-            Finite-difference accuracy order (must be a positive even integer). Defaults to 2.
+        fd : ParameterFiniteDifference, dict or None
+            Finite-difference specification (step ``eps``, accuracy ``acc``, expansion-variable
+            ``transform``, anchor ``center``); a dict of those fields also works.
+            None means defaults (``eps`` falls back to ``ref.std()`` at the consumer).
         namespace : str, optional
             Namespace prefix prepended to the parsed name.
         depends : dict or list, optional
@@ -891,16 +1000,17 @@ class Parameter(Variable):
                 setattr(self, attr, p.clone(shape=self.shape))
             elif p.shape != self.shape:
                 raise ValueError(f'{attr} shape {p.shape} inconsistent with parameter shape {self.shape}')
-        if fd_eps is not None:
-            if hasattr(fd_eps, '__len__'):
-                # 3-tuple (center, eps_below, eps_above) — same convention as desilike_bak delta.
-                center_val, eps_below, eps_above = fd_eps
-                self._fd_eps = (float(center_val), float(eps_below), float(eps_above))
-            else:
-                self._fd_eps = float(fd_eps)
+        # Finite-difference spec: None (defaults), a dict of ParameterFiniteDifference
+        # fields, or a ParameterFiniteDifference instance.
+        if fd is None:
+            fd = ParameterFiniteDifference()
+        elif isinstance(fd, dict):
+            fd = ParameterFiniteDifference(**fd)
+        elif isinstance(fd, ParameterFiniteDifference):
+            fd = fd.copy()
         else:
-            self._fd_eps = None
-        self._fd_acc = int(fd_acc)
+            raise TypeError(f'fd must be None, a dict or a ParameterFiniteDifference; got {type(fd)}')
+        self._fd = fd
 
     # ── derived property (overrides Variable.derived; read-only after init) ──────
 
@@ -953,16 +1063,9 @@ class Parameter(Variable):
     # basename / namespace / latex() are inherited from Variable.
 
     @property
-    def fd_eps(self):
-        """Finite-difference step; falls back to ref.std()."""
-        if self._fd_eps is not None:
-            return self._fd_eps
-        return self.ref.std()
-
-    @property
-    def fd_acc(self):
-        """Finite-difference accuracy order."""
-        return self._fd_acc
+    def fd(self):
+        """Finite-difference specification (:class:`ParameterFiniteDifference`)."""
+        return self._fd
 
     def sample(self, key, shape=None):
         """Draw a sample from the prior; shape defaults to self.shape via prior.shape."""
@@ -1009,8 +1112,8 @@ class Parameter(Variable):
         new = object.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         new.depends = dict(self.depends)
-        new.prior = self.prior.copy()
-        new.ref = self.ref.copy()
+        # `prior`, `ref` and `_fd` are immutable, so the references `__dict__.update` already
+        # installed ARE the copies: re-assigning `x.copy()` over them was a no-op with a cost.
         return new
 
     def __getstate__(self, to_file=False):
@@ -1022,8 +1125,7 @@ class Parameter(Variable):
             'fixed': self.fixed,
             'derived': self._derived,
             'shape': list(self.shape) if to_file else self.shape,
-            'fd_eps': self._fd_eps,
-            'fd_acc': self._fd_acc,
+            'fd': self._fd if to_file else self._fd.__getstate__(),
             'depends': {k: dep.name for k, dep in self.depends.items()} if to_file else dict(self.depends),
         }
         if to_file:
@@ -1041,14 +1143,22 @@ class Parameter(Variable):
             if isinstance(raw, bytes):
                 raw = raw.decode()
             meta = json.loads(raw, object_hook=_parameter_object_hook)
+            fd = meta.get('fd')
+            if fd is None:
+                # legacy file keys; a 3-tuple fd_eps is (center, eps_below, eps_above)
+                eps, center = meta.get('fd_eps'), None
+                if eps is not None and hasattr(eps, '__len__'):
+                    center, eps_below, eps_above = eps
+                    eps = (eps_below, eps_above)
+                fd = ParameterFiniteDifference(eps=eps, acc=meta.get('fd_acc', 2),
+                                               transform=meta.get('fd_transform'), center=center)
             self.__init__(
                 name=meta['name'], value=state.get('value'),
                 prior=meta.get('prior'), ref=meta.get('ref'),
                 latex=meta.get('latex'), fixed=meta.get('fixed', True),
                 derived=meta.get('derived', False),
                 shape=tuple(meta.get('shape', [])),
-                fd_eps=meta.get('fd_eps'),
-                fd_acc=meta.get('fd_acc', 2), depends={})
+                fd=fd, depends={})
             # depends resolved later by VariableCollection.__setstate__
         else:
             # in-memory format: feed directly to __init__
@@ -1067,6 +1177,17 @@ class Parameter(Variable):
 
     def __repr__(self):
         return f'Parameter({self._name!r}, {"fixed" if self.fixed else "varied"})'
+
+
+def _cumsize_params(params):
+    """Return the cumulative flat-vector offsets of *params*, as an ``(len(params) + 1,)`` array.
+
+    Entry *i* is where parameter *i* starts in a flat parameter vector, so a parameter's
+    slice is ``[cumsize[i]:cumsize[i + 1]]`` and ``cumsize[-1]`` is the total width.
+    Written as an array rather than a running offset so that it can be used inside a
+    comprehension.
+    """
+    return np.cumsum([0] + [param.size for param in params])
 
 
 @register_type

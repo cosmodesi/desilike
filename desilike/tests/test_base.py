@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap, differentiate, jacfwd, hessian
+from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, build, compile, pmap, differentiate, jacfwd, hessian
 from desilike.parameter import Parameter
 
 
@@ -142,6 +142,46 @@ def test_correctness(pipeline):
     got = float(pipeline(omega_m=0.3, z=0.5, A=1.0, ns=0.96))
     expected = analytic_logL(0.3, 0.5, 1.0, 0.96)
     assert abs(got - expected) < 1e-8, f"got {got}, expected {expected}"
+
+
+def test_unknown_param_name_raises(pipeline):
+    """A name the graph does not have is an error, not a silent drop: the pipeline would
+    otherwise run with the parameter left at its default and return a plausible number."""
+    with pytest.raises(ValueError, match='H0'):
+        pipeline({'H0': 70., 'A': 1.2})
+    with pytest.raises(ValueError, match='H0'):
+        pipeline(H0=70., A=1.2)
+
+
+def test_unknown_param_name_suggests_a_close_one(pipeline):
+    with pytest.raises(ValueError, match=r'did you mean.*omega_m'):
+        pipeline({'omega_n': 0.3})
+
+
+def test_unknown_param_name_raises_with_an_input_callable():
+    """Both the dict and the kwargs form of the ``input=`` convention are checked."""
+    likelihood = _make_nodes()[-1]
+    received = []
+    pipe = compile(likelihood, input=received.append)
+    with pytest.raises(ValueError, match='typo'):
+        pipe(None, {'typo': 1.})
+    with pytest.raises(ValueError, match='typo'):
+        pipe(None, typo=1.)
+
+
+def test_derived_param_name_is_accepted(pipeline):
+    """A derived parameter is a Variable of the graph; passing its name is legal (the
+    marginalization machinery writes solved values back into the dict it passes on)."""
+    lik = _make_nodes()[-1]
+    lik.derived_A = Parameter('derived_A', value=0., derived=True)
+    pipe = compile(lik)
+    pipe({'A': 1.1, 'derived_A': 0.})
+
+
+def test_differentiate_rejects_unknown_param_name(pipeline):
+    jac = jacfwd(pipeline, params=['A'])
+    with pytest.raises(ValueError, match='H0'):
+        jac({'H0': 70.})
 
 
 def test_eager_attrs_updated(pipeline):
@@ -603,13 +643,13 @@ def test_fd_acc():
     large_eps = 1e-2
 
     for acc, tol in [(2, 2e-4), (4, 1e-8)]:
-        om = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=acc)
+        om = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=acc))
         pipe = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
         g = float(jax.grad(pipe)({'omega_m': jnp.array(x0)})['omega_m'])
         assert abs(g - analytic_grad) < tol, f'fd_acc={acc}: grad error {abs(g - analytic_grad):.2e} >= tol {tol:.2e}'
 
-    om2 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=2)
-    om4 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=4)
+    om2 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=2))
+    om4 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=4))
     pipe2 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
     pipe4 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
     err2 = abs(float(jax.grad(pipe2)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
@@ -1988,7 +2028,7 @@ def test_differentiate_hessian_tree(pipeline):
     """hessian(graph, params=...) returns the nested dict {n1: {n2: d²/dn1 dn2}} like jax.hessian on a dict input."""
     p0 = {name: jnp.asarray(value) for name, value in DIFF_PARAMS0.items()}
     ref = jax.hessian(_analytic_logL_dict)(p0)
-    hess = hessian(pipeline, params=DIFF_NAMES, fd_eps=1e-3)(DIFF_PARAMS0)
+    hess = hessian(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
     for name_1 in DIFF_NAMES:
         for name_2 in DIFF_NAMES:
             got, want = float(hess[name_1][name_2]), float(ref[name_1][name_2])
@@ -1998,7 +2038,7 @@ def test_differentiate_hessian_tree(pipeline):
         for name_2 in DIFF_NAMES:
             assert abs(float(hess[name_1][name_2]) - float(hess[name_2][name_1])) < 1e-8
     # scalar FD diagonal uses the same direct order-2 stencil as the legacy dict form
-    single = differentiate(pipeline, {'omega_m': 2}, fd_eps=1e-3)(DIFF_PARAMS0)
+    single = differentiate(pipeline, {'omega_m': 2}, fd=dict(eps=1e-3))(DIFF_PARAMS0)
     assert abs(float(hess['omega_m']['omega_m']) - float(single)) < 1e-8
 
 
@@ -2065,11 +2105,11 @@ def test_differentiate_hessian_array_param():
     pipe = compile(JaxScale(ExtCubic(x), a))
     x0, x1, a0 = 1.5, 2.5, 2.0  # f(a, x) = a x0² x1
 
-    jac = jacfwd(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    jac = jacfwd(pipe, params=['a', 'x'], fd=dict(eps=1e-4))()
     assert abs(float(jac['a']) - x0 ** 2 * x1) < 1e-6
     assert np.allclose(np.asarray(jac['x']), a0 * np.array([2 * x0 * x1, x0 ** 2]), atol=1e-6)
 
-    hess = hessian(pipe, params=['a', 'x'], fd_eps=1e-4)()
+    hess = hessian(pipe, params=['a', 'x'], fd=dict(eps=1e-4))()
     assert np.asarray(hess['x']['x']).shape == (2, 2)
     expected_xx = a0 * np.array([[2 * x1, 2 * x0], [2 * x0, 0.0]])
     assert np.allclose(np.asarray(hess['x']['x']), expected_xx, atol=1e-4), f"H[x,x] = {np.asarray(hess['x']['x'])}"
@@ -2140,3 +2180,106 @@ if __name__ == '__main__':
     print('grad =', jax.grad(pipe)(params))
     batch = {'omega_m': jnp.linspace(0.25, 0.35, 4), 'z': jnp.full(4, 0.5), 'A': jnp.ones(4), 'ns': jnp.full(4, 0.96)}
     print('vmap logL =', jax.vmap(pipe)(batch))
+
+
+# ── build: the main entry point, `compile` its legacy name ───────────────────
+
+def test_compile_is_the_legacy_name_for_build():
+    assert compile is build
+
+
+def test_build_returns_a_compiled_graph():
+    graph = build(_make_nodes()[-1])
+    assert isinstance(graph, CompiledGraph)
+    assert 'omega_m' in [param.name for param in graph.params]
+
+
+def test_the_derivative_helpers_accept_an_uncompiled_calculator():
+    """`jacfwd`/`hessian` route through `differentiate`, so one coercion serves all three."""
+    from_calculator = jacfwd(_make_nodes()[-1], params=['A'])()['A']
+    from_graph = jacfwd(compile(_make_nodes()[-1]), params=['A'])()['A']
+    assert np.allclose(np.asarray(from_calculator), np.asarray(from_graph), rtol=1e-12)
+
+
+def test_fd_spec_is_accepted_as_a_dict(pipeline):
+    """`fd=dict(eps=...)` is the same spelling as `Parameter(fd=...)`; the flat `fd_eps=` is the
+    older one and wins where both are given."""
+    spelled_as_dict = hessian(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
+    spelled_flat = hessian(pipeline, params=DIFF_NAMES, fd_eps=1e-3)(DIFF_PARAMS0)
+    for name in DIFF_NAMES:
+        assert abs(float(spelled_as_dict[name][name]) - float(spelled_flat[name][name])) < 1e-8
+
+
+def test_an_unknown_fd_field_raises_rather_than_being_dropped(pipeline):
+    with pytest.raises(ValueError, match='unknown fd field'):
+        jacfwd(pipeline, params=['A'], fd=dict(epsilon=1e-3))
+
+
+def test_per_parameter_steps_go_through_the_flat_kwarg(pipeline):
+    """`fd=` is a single spec; per-parameter values are what `fd_eps=` already took."""
+    per_param = jacfwd(pipeline, params=DIFF_NAMES,
+                       fd_eps={'omega_m': 1e-3, 'z': 1e-3})(DIFF_PARAMS0)
+    broadcast = jacfwd(pipeline, params=DIFF_NAMES, fd=dict(eps=1e-3))(DIFF_PARAMS0)
+    assert abs(float(per_param['omega_m']) - float(broadcast['omega_m'])) < 1e-8
+
+
+@pytest.mark.parametrize('kind', ['plain', 'custom', 'reparametrized'])
+def test_jit_then_eager_does_not_leak_tracers(kind):
+    """A jitted call must not leave a Tracer where the next EAGER call can read it.
+
+    This is the shape of a bug that recurred three times and was never covered: a profiler
+    maximises the posterior under `jax.jit`, then calls it EAGERLY with `return_derived=True` to
+    fill in the derived parameters (`profilers/base.py:_add_derived`). If anything the traced
+    call touched retains a Tracer -- a shared `Parameter._value`, a nested graph's memo, a node
+    attribute -- the eager call picks it up and raises `UnexpectedTracerError`, from wherever the
+    stale value is first USED rather than from where it came.
+
+    A Calculator prior is included because it makes `Posterior.__call__` re-enter a NESTED
+    CompiledGraph inside the trace, and the reparametrized variant because its `reparam_vals`
+    then flow onward into the likelihood's parameters.
+    """
+    A = Parameter('A', value=1.0, prior=dict(dist='norm', loc=1.0, scale=0.5))
+    ns = Parameter('ns', value=0.96, prior=dict(dist='norm', loc=0.96, scale=0.05))
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    likelihood = GaussianChi2(spectrum=PowerSpectrum(cosmo=Cosmology(omega_m=omega_m, z=z),
+                                                     A=A, ns=ns), data=DATA)
+
+    if kind == 'plain':
+        posterior = Posterior(likelihood)
+    elif kind == 'custom':
+
+        class CustomPrior(Prior):
+
+            def __call__(self):
+                logpdf = super().__call__()
+                self.logpdf = jnp.where(self.params['A'].value + self.params['ns'].value < 2.,
+                                        logpdf, -jnp.inf)
+                return self.logpdf
+
+        posterior = Posterior(likelihood, CustomPrior(A=A, ns=ns))
+    else:
+
+        class CustomPrior(Prior):
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.params['omega_m'].update(derived=True)
+
+            def __call__(self):
+                self.logpdf = super().__call__()
+                self.params['omega_m'].value = self.params['A'].value
+                return self.logpdf
+
+        posterior = Posterior(likelihood, CustomPrior(A=A, ns=ns, omega_m=omega_m))
+
+    pipe = compile(posterior)
+    point = {name: value for name, value in [('omega_m', 0.3), ('z', 0.5), ('A', 1.0), ('ns', 0.96)]
+             if name in pipe.params}
+    jitted = float(jax.jit(lambda params: pipe(params))(point))
+    # the eager call is the one that used to raise
+    eager, derived = pipe(point, return_derived=True)
+    assert np.isfinite(jitted) and np.isfinite(float(eager))
+    assert abs(float(eager) - jitted) < 1e-8
+    # and again, to catch state that only goes wrong on a second pass
+    assert abs(float(pipe(point)) - jitted) < 1e-8

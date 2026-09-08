@@ -35,6 +35,7 @@ Pipeline:
   __call__(params) compatible with jax.jit / jax.vmap / jax.grad.
 """
 
+import difflib
 import functools
 import logging
 from collections.abc import Callable
@@ -43,12 +44,17 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.custom_derivatives import SymbolicZero
+
+from cosmoprimo.emulators.tools.utils import (fd_stencil as _fd_stencil, interpolation_weights,
+                                              chebyshev_values, chebyshev_lobatto_nodes,
+                                              chebyshev_vandermonde_inverse, nested_level_nodes,
+                                              smolyak_combination, TRANSFORMS as _FD_TRANSFORMS)
 from collections import defaultdict
 
 jax.config.update('jax_enable_x64', True)
 
-from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context, _CompileContext,
-                        _iter_nodes, _substitute_node)
+from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context,
+                        _CompileContext, _iter_nodes, _substitute_node)
 from .distributed import default_mpicomm, get_mpicomm, gather as _mpi_gather
 
 
@@ -138,6 +144,32 @@ class Calculator(Node):
 
     def __post_init__(self, *args, **kwargs):
         pass
+
+    @classmethod
+    def get_emulator_cls(cls):
+        """Return the :class:`~cosmoprimo.emulators.tools.Emulator` subclass to emulate this
+        calculator with, or ``None`` for the generic one.
+
+        A classmethod here, but :func:`desilike.emulators.Emulator` asks the INSTANCE, so a
+        calculator whose answer depends on how it was configured may override this as a plain
+        method -- the FOLPS pts do, to dispatch on ``output``.
+
+        :func:`desilike.emulators.Emulator` consults this automatically, so a calculator that
+        knows something exact about itself -- FOLPSD's background-scalar routing, say -- declares
+        it once here and every caller gets it, without having to know which subclass to import.
+
+        ``None`` (the default) lets the emulator use its generic
+        :class:`~desilike.emulators.CalculatorEmulator`, which expands every varied parameter and
+        reconstructs state via ``tree_unflatten``.
+
+        A subclass may return a dedicated class instead — declaring, through the emulated-
+        calculator protocol (``get_emulator_params``, ``flatten_root``,
+        ``__init__(emulator, **kwargs)``, ``_reconstruct``), which quantities are emulated
+        coefficients, which parameters are routed exactly at run time instead of expanded, and
+        which extra node dependencies (passed through ``to_calculator(**kwargs)``) that routing
+        needs.  See ``FOLPSPTSpectrum2Poles.get_emulator_cls`` for the motivating case.
+        """
+        return None
 
     def __call__(self):
         raise NotImplementedError
@@ -302,6 +334,17 @@ class Prior(Calculator):
         obj = object.__new__(cls)
         obj.logpdf = children[0]
         return obj
+
+
+def _restrict(params, graph):
+    """The subset of *params* that *graph* actually has.
+
+    Internal plumbing routinely holds a superset: the whole likelihood's parameters handed to the
+    prior sub-graph, to a marginalization group, to one component of a sum.  The graph rejects
+    names it does not have (:meth:`CompiledGraph._check_names`), so these sites filter first --
+    a superset is legitimate here, a typo is not, and only the caller can tell them apart.
+    """
+    return {name: value for name, value in params.items() if name in graph.params}
 
 
 def _transitive_param_names(node: Calculator, pipe: 'CompiledGraph') -> set:
@@ -753,7 +796,7 @@ class Posterior(Calculator):
         for sp in self._solved_params:
             sp._value = jnp.zeros(sp.shape) if sp.shape else jnp.zeros(())
         params = {p.name: p.value for p in self._likelihood.params}
-        logprior, reparam_vals = self._prior(params)
+        logprior, reparam_vals = self._prior(_restrict(params, self._prior))
         params = {**params, **dict(zip(self._prior_param_names, reparam_vals))}
         is_tracing = isinstance(logprior, jax.core.Tracer)
         if is_tracing or not bool(jnp.isneginf(logprior)):
@@ -767,9 +810,9 @@ class Posterior(Calculator):
                 # _run_graph restores p._value after each call; requesting
                 # return_derived=True gives back the traced values so the outer
                 # _run_graph reads them correctly.
-                _, inner_derived = self._likelihood(params, return_derived=True)
+                _, inner_derived = self._likelihood(_restrict(params, self._likelihood), return_derived=True)
             else:
-                loglik, inner_derived = self._likelihood(params, return_derived=True)
+                loglik, inner_derived = self._likelihood(_restrict(params, self._likelihood), return_derived=True)
             for p in self._likelihood._derived_params:
                 p._value = inner_derived[p.name]
             logpdf = logprior + loglik
@@ -793,26 +836,7 @@ class Posterior(Calculator):
         return obj
 
 
-def _fd_stencil(order, acc):
-    """
-    Uniform centered finite-difference stencil for the order-th derivative at accuracy acc.
-
-    Returns (offsets, coeffs): integer offsets and weights such that
-      f^(order)(x) ≈ sum(coeffs[i] * f(x + offsets[i] * h)) / h^order.
-    Zero-weight points (e.g. center for odd-order derivatives) are omitted.
-
-    Adapted from the coefficient construction in the original desilike/differentiation.py.
-    """
-    import math
-    nside = (order + acc - 1) // 2
-    offsets = np.arange(-nside, nside + 1)
-    # Vandermonde system: sum_j c_j * j^k = order! * delta(k, order)
-    A = np.array([[float(o) ** k for o in offsets] for k in range(len(offsets))])
-    b = np.zeros(len(offsets))
-    b[order] = float(math.factorial(order))
-    coeffs = np.linalg.solve(A, b)
-    mask = np.abs(coeffs) > 1e-12
-    return offsets[mask], coeffs[mask]
+# _fd_stencil now lives in cosmoprimo.emulators.tools.utils (imported above).
 
 
 def _jacfwd_wrap(fn, name):
@@ -845,21 +869,23 @@ def _fd_parse_eps(fd_eps_val):
 
     Accepts:
     - scalar float ``eps``:              both sides use ``eps``, average is ``eps``.
-    - 3-tuple ``(center, eb, ea)``:      below uses ``eb``, above uses ``ea``,
-                                          average is ``(eb + ea) / 2``.
-                                          The ``center`` element is informational only.
+    - 2-tuple ``(eb, ea)``:              asymmetric steps (``ParameterFiniteDifference.eps``).
+    - legacy 3-tuple ``(center, eb, ea)``: the ``center`` element (the expansion anchor,
+                                          now ``param.fd.center``) is ignored here.
     """
     if fd_eps_val is None or (np.ndim(fd_eps_val) == 0 and not np.isfinite(fd_eps_val)):
         fd_eps_val = 1e-5
     if isinstance(fd_eps_val, (tuple, list)):
-        _, eps_below, eps_above = fd_eps_val
-        eps_below, eps_above = float(eps_below), float(eps_above)
+        eps_below, eps_above = (float(v) for v in fd_eps_val[-2:])
     else:
         eps_below = eps_above = float(fd_eps_val)
     return eps_below, eps_above, (eps_below + eps_above) * 0.5
 
 
-def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
+# _FD_TRANSFORMS now lives in cosmoprimo.emulators.tools.utils (imported above).
+
+
+def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transform=None, nodes=None):
     """Lift *fn(p_dict) -> y* to the k-th order FD stencil derivative w.r.t. *name*.
 
     Uses the *direct* order-k stencil (k + acc - 1 evaluations, linear in k)
@@ -874,39 +900,105 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
     these are the diagonal elements (cross-element terms are not computed).
 
     For array parameters the stencil is vectorised via ``jax.vmap`` over the
-    basis directions, so the Python loop runs only over the ``k + acc - 1``
-    stencil points.
+    basis directions, so the Python loop runs only over the stencil points.
 
     prior_limits : (lo, hi) or None
-        Hard prior limits.  When set, the stencil base is shifted inward so all
-        stencil points stay within ``[lo, hi]`` (mirrors desilike_bak boundary logic).
+        Hard prior limits.  When set, the stencil *nodes* are shifted inward so
+        all of them stay within ``[lo, hi]`` — but the derivative is still taken
+        at the requested point: the uniform centered weights no longer apply on
+        a shifted (or asymmetric-step) grid, so the weights are recomputed at
+        trace time as the polynomial-interpolation (Fornberg) weights for the
+        k-th derivative at ``p0``.  This restores desilike_bak's boundary
+        behavior, where the earlier port silently returned the derivative at
+        the shifted point instead.
+
+    transform : str or None
+        Name of an expansion-variable transform from ``_FD_TRANSFORMS``.  When
+        set, the stencil is uniform in the transformed variable u (fd_eps in u
+        units, prior limits mapped through the monotone forward map), function
+        evaluations happen at the back-transformed parameter values, and the
+        returned derivative is d^k/du^k.
     """
+    import math
+    fwd = inv = None
+    if transform is not None:
+        fwd, inv = _FD_TRANSFORMS[transform]
+
+    def _tree_scale_local(tree, s):
+        return jax.tree_util.tree_map(lambda x: s * x, tree)
+
+    def _tree_add_local(tree_a, tree_b):
+        return jax.tree_util.tree_map(lambda a, b: a + b, tree_a, tree_b)
+
+    if nodes is not None:
+        # Chebyshev collocation: FIXED nodes (transformed units) spanning the parameter's
+        # fd.limits; the k-th derivative at the CURRENT point u(p0) is taken from the full
+        # node set via polynomial-interpolation weights, so the order-n Taylor built from
+        # these calls is identically the degree-n interpolant through the nodes.
+        node_positions = np.asarray(nodes, dtype='f8')
+        n_nodes = len(node_positions)
+        if k >= n_nodes:
+            raise ValueError(f'collocation for {name}: derivative order {k} needs more than {n_nodes} nodes')
+        node_values = node_positions if inv is None else inv(node_positions)
+
+        def _weights_at(u0):
+            return interpolation_weights(node_positions, u0, k)
+
+        def wrapped(p_dict):
+            p0 = jnp.asarray(p_dict[name])
+            u0 = p0 if fwd is None else fwd(p0)
+
+            if p0.ndim == 0:
+                weights = _weights_at(u0)  # (n_nodes,)
+                acc_tree = None
+                for node_idx in range(n_nodes):
+                    fi = fn({**p_dict, name: node_values[node_idx]})
+                    contrib = _tree_scale_local(fi, weights[node_idx])
+                    acc_tree = contrib if acc_tree is None else _tree_add_local(acc_tree, contrib)
+                return acc_tree
+
+            # Array param: same fixed nodes for every element; per-element weights.
+            flat_size = p0.size
+            p0_flat = p0.reshape(-1)
+            u0_flat = u0.reshape(-1)
+            weights = _weights_at(u0_flat)  # (flat_size, n_nodes)
+            basis = jnp.eye(flat_size)
+            acc_vmap = None
+            for node_idx in range(n_nodes):
+                node_value = node_values[node_idx]
+                def eval_along(e_flat, _node=node_value):
+                    values = p0_flat * (1. - e_flat) + _node * e_flat
+                    return fn({**p_dict, name: values.reshape(p0.shape)})
+                vals = jax.vmap(eval_along)(basis)
+                w_col = weights[:, node_idx]
+                scaled_vals = jax.tree_util.tree_map(
+                    lambda x: x * w_col.reshape((flat_size,) + (1,) * (x.ndim - 1)), vals)
+                acc_vmap = scaled_vals if acc_vmap is None else _tree_add_local(acc_vmap, scaled_vals)
+
+            def _move(tree, p_shape):
+                def _per_leaf(x):
+                    n_out = x.ndim - 1
+                    if n_out == 0:
+                        return x.reshape(p_shape)
+                    perm = tuple(range(1, n_out + 1)) + (0,)
+                    moved = jnp.transpose(x, perm)
+                    return moved.reshape(moved.shape[:-1] + p_shape)
+                return jax.tree_util.tree_map(_per_leaf, tree)
+            return _move(acc_vmap, p0.shape)
+
+        return wrapped
+
     # Parse eps: scalar or (center, eps_below, eps_above).
     eps_below, eps_above, eps_avg = _fd_parse_eps(eps)
     h_k = eps_avg ** k
-    hsize = len(offsets) // 2  # half-width of stencil (= 1 for acc=2, order=1)
-    # For boundary shifting use the larger of the two steps.
-    eps_max = max(eps_below, eps_above)
 
-    # Resolve finite prior bounds as Python floats (None means unbounded on that side).
+    # Resolve finite prior bounds as Python floats (None means unbounded on that side);
+    # with a transform, in transformed units (forward map is monotone increasing).
     _prior_lo = _prior_hi = None
     if prior_limits is not None:
         _lo, _hi = prior_limits
-        if np.isfinite(_lo): _prior_lo = float(_lo)
-        if np.isfinite(_hi): _prior_hi = float(_hi)
-
-    def _shift_base(p0):
-        """Shift the stencil center inward to keep all points within prior limits."""
-        x = p0
-        if _prior_lo is not None:
-            x = jnp.maximum(x, _prior_lo + hsize * eps_max)
-        if _prior_hi is not None:
-            x = jnp.minimum(x, _prior_hi - hsize * eps_max)
-        return x
-
-    def _off_step(off):
-        """Step size for a given signed stencil offset."""
-        return eps_below if off < 0 else eps_above
+        if np.isfinite(_lo): _prior_lo = float(_lo) if fwd is None else float(fwd(_lo))
+        if np.isfinite(_hi): _prior_hi = float(_hi) if fwd is None else float(fwd(_hi))
 
     def _tree_scale(tree, s):
         return jax.tree_util.tree_map(lambda x: s * x, tree)
@@ -929,35 +1021,110 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
             return moved.reshape(moved.shape[:-1] + p_shape)
         return jax.tree_util.tree_map(_per_leaf, tree)
 
+    if _prior_lo is None and _prior_hi is None and eps_below == eps_above and transform is None:
+        # Static path: symmetric steps, no boundary, no transform — the uniform centered
+        # weights apply as-is and zero-weight nodes stay skipped.
+        def wrapped(p_dict):
+            p0 = jnp.asarray(p_dict[name])
+
+            if p0.ndim == 0:
+                acc = None
+                for off, coeff in zip(offsets, coeffs):
+                    fi = fn({**p_dict, name: p0 + off * eps_avg})
+                    acc = _tree_scale(fi, coeff) if acc is None else _tree_add(acc, _tree_scale(fi, coeff))
+                return _tree_div(acc, h_k)
+
+            flat_size = p0.size
+            basis = jnp.eye(flat_size)  # (flat_size, flat_size)
+            acc_vmap = None
+            for off, coeff in zip(offsets, coeffs):
+                def eval_along(e_flat, _off=off):
+                    return fn({**p_dict, name: p0 + _off * eps_avg * e_flat.reshape(p0.shape)})
+                # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
+                vals = jax.vmap(eval_along)(basis)
+                acc_vmap = _tree_scale(vals, coeff) if acc_vmap is None else _tree_add(acc_vmap, _tree_scale(vals, coeff))
+            result = _tree_div(acc_vmap, h_k)
+            return _move_batch_to_param_axes(result, p0.shape)
+
+        return wrapped
+
+    # Dynamic path: the node grid is shifted inside the prior limits and/or the steps
+    # are asymmetric, so every node of the full contiguous stencil is needed (including
+    # those whose uniform centered weight would vanish) and the weights are solved at
+    # trace time from the Vandermonde system in the scaled node positions.
+    nside = int(np.max(offsets))
+    full_offsets = np.arange(-nside, nside + 1)
+    n_nodes = len(full_offsets)
+    # Signed distance of each node from the (possibly shifted) stencil base.
+    signed_steps = np.array([off * (eps_below if off < 0 else eps_above) for off in full_offsets])
+    rhs = np.zeros(n_nodes)
+    rhs[k] = float(math.factorial(k))
+
+    base_lo = -np.inf if _prior_lo is None else _prior_lo + nside * eps_below
+    base_hi = np.inf if _prior_hi is None else _prior_hi - nside * eps_above
+    if base_lo > base_hi:
+        raise ValueError('cannot fit the order-{:d} stencil for {} (steps {}, {}) within prior limits {}; '
+                         'decrease fd_eps or widen the prior'.format(k, name, eps_below, eps_above, prior_limits))
+
+    def _shift_base(p0):
+        """Shift the stencil base inward so every node stays within the prior limits."""
+        return jnp.clip(p0, base_lo, base_hi)
+
+    def _node_weights(p0, p_base):
+        """Interpolation weights w such that f^(k)(p0) = sum_j w_j f(node_j) / h_k.
+
+        Vandermonde system in the eps_avg-scaled node positions relative to p0:
+        sum_j w_j u_j^r = r! delta_{r k}, u_j = (node_j - p0) / eps_avg.
+        ``p0`` may carry batch shape B; returns shape (*B, n_nodes).
+        """
+        u = (p_base - p0)[..., None] / eps_avg + jnp.asarray(signed_steps) / eps_avg  # (*B, n)
+        rows = [jnp.ones_like(u)]
+        for _ in range(n_nodes - 1):
+            rows.append(rows[-1] * u)
+        matrix = jnp.stack(rows, axis=-2)  # (*B, n_rows, n_nodes)
+        rhs_b = jnp.broadcast_to(jnp.asarray(rhs), matrix.shape[:-1])
+        return jnp.linalg.solve(matrix, rhs_b[..., None])[..., 0]
+
     def wrapped(p_dict):
         p0 = jnp.asarray(p_dict[name])
-        p_base = _shift_base(p0)  # boundary-safe stencil center
+        # All stencil geometry (base shift, node positions, weights) lives in the
+        # expansion variable u; only the function evaluations map back to p.
+        u0 = p0 if fwd is None else fwd(p0)
+        u_base = _shift_base(u0)
 
         if p0.ndim == 0:
-            # Scalar param: plain stencil sum — pytree-safe via tree_map.
+            weights = _node_weights(u0, u_base)  # (n_nodes,)
             acc = None
-            for off, coeff in zip(offsets, coeffs):
-                fi = fn({**p_dict, name: p_base + off * _off_step(off)})
-                acc = _tree_scale(fi, coeff) if acc is None else _tree_add(acc, _tree_scale(fi, coeff))
+            for node_idx in range(n_nodes):
+                u_node = u_base + signed_steps[node_idx]
+                fi = fn({**p_dict, name: u_node if inv is None else inv(u_node)})
+                contrib = _tree_scale(fi, weights[node_idx])
+                acc = contrib if acc is None else _tree_add(acc, contrib)
             return _tree_div(acc, h_k)
 
-        # Array param: vmap over one-hot basis vectors, stencil loop in Python.
-        # Each basis direction selects one element; the stencil gives its
-        # element-wise k-th derivative.  The Python loop over stencil points
-        # (k + acc - 1 iterations) keeps the inner vmap small.
+        # Array param: each one-hot basis direction perturbs one element, whose own
+        # value sets its shift and weights.
         flat_size = p0.size
+        p0_flat = p0.reshape(-1)
+        u0_flat = u0.reshape(-1)
+        base_flat = u_base.reshape(-1)
+        weights = _node_weights(u0_flat, base_flat)  # (flat_size, n_nodes)
         basis = jnp.eye(flat_size)  # (flat_size, flat_size)
-
+        # Along basis direction e, the perturbed element must sit at its shifted node
+        # while every other element keeps its p0 value.
         acc_vmap = None
-        for off, coeff in zip(offsets, coeffs):
-            _step = _off_step(off)
-            def eval_along(e_flat, _off=off, _s=_step):
-                return fn({**p_dict, name: p_base + _off * _s * e_flat.reshape(p0.shape)})
+        for node_idx in range(n_nodes):
+            u_nodes_flat = base_flat + signed_steps[node_idx]  # (flat_size,)
+            nodes_flat = u_nodes_flat if inv is None else inv(u_nodes_flat)
+            def eval_along(e_flat, _nodes=nodes_flat):
+                values = p0_flat * (1. - e_flat) + _nodes * e_flat
+                return fn({**p_dict, name: values.reshape(p0.shape)})
             # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
             vals = jax.vmap(eval_along)(basis)
-            acc_vmap = _tree_scale(vals, coeff) if acc_vmap is None else _tree_add(acc_vmap, _tree_scale(vals, coeff))
+            w_col = weights[:, node_idx]
+            scaled = jax.tree_util.tree_map(lambda x: x * w_col.reshape((flat_size,) + (1,) * (x.ndim - 1)), vals)
+            acc_vmap = scaled if acc_vmap is None else _tree_add(acc_vmap, scaled)
 
-        # Divide by h_k, then move the batch axis to match p0.shape at the end.
         result = _tree_div(acc_vmap, h_k)
         return _move_batch_to_param_axes(result, p0.shape)
 
@@ -1143,6 +1310,12 @@ def _build_graph_call_fn(pipeline):
         for i, node in enumerate(nodes):
             if id(node) in skip_ids:
                 continue
+            # Every node, not just the External ones: a node that calls a non-jax library
+            # DIRECTLY (rather than through a pure_callback of its own) needs the same
+            # eager-raise / traced-NaN contract, and the only place able to observe the outer
+            # trace status is here. External nodes additionally stash it in `node_state` below,
+            # because their callback runs after this loop has finished.
+            node._is_tracing = is_tracing
             nvd = node_var_deps[id(node)]
             ncd = node_calc_deps[id(node)]
 
@@ -1309,9 +1482,13 @@ def _build_graph_call_fn(pipeline):
         for i, param in enumerate(fd_params):
             if isinstance(vfd[i], SymbolicZero):
                 continue
-            eps_below, eps_above, eps_avg = _fd_parse_eps(param.fd_eps)
+            param_fd = param.fd
+            fd_eps_param = param_fd.eps
+            if fd_eps_param is None and getattr(param, 'ref', None) is not None:
+                fd_eps_param = param.ref.std()
+            eps_below, eps_above, eps_avg = _fd_parse_eps(fd_eps_param)
             eps_max = max(eps_below, eps_above)
-            offsets, coeffs = _fd_stencil(1, param.fd_acc)
+            offsets, coeffs = _fd_stencil(1, param_fd.acc)
             param_arr = jnp.asarray(fd_p[i])
             hsize = len(offsets) // 2  # half-width of stencil (= 1 for acc=2)
             # Prior hard limits for boundary-safe stencil shifting.
@@ -1504,6 +1681,31 @@ class CompiledGraph:
         """JIT-compiled version of ``_call_fn``; created once and cached on the graph."""
         return jax.jit(self._call_fn)
 
+    def _check_names(self, names):
+        """Raise on any parameter name this graph does not have.
+
+        A name that is not a parameter of the graph used to be dropped in silence, leaving the
+        parameter at its default: the pipeline still runs and still returns a plausible number,
+        just not the function the caller asked for.  Derived and solved names are accepted --
+        they are Variables of the graph, and the marginalization machinery writes solved values
+        back into the dict it passes on.
+
+        Callers holding a superset of the graph's parameters (the prior sub-graph, a
+        marginalization group, a component of a sum) must filter before calling, not rely on
+        the graph to drop the extras.
+        """
+        unknown = [name for name in names if name not in self.params]
+        if not unknown:
+            return
+        available = self.params.names()
+        detail = []
+        for name in unknown:
+            close = difflib.get_close_matches(name, available, n=3, cutoff=0.5)
+            detail.append(repr(name) + (' (did you mean {}?)'.format(close) if close else ''))
+        raise ValueError('{} pipeline has no parameter {}. It would otherwise be silently '
+                         'ignored and the parameter left at its default. Available: {}'.format(
+                             type(self.root).__name__, '; '.join(detail), sorted(available)))
+
     def __call__(self, *args, return_derived=False, **kwargs):
         """
         Pure function: params → return_val, or ``(return_val, derived_dict)``
@@ -1528,6 +1730,11 @@ class CompiledGraph:
         The *input* callable is invoked for its side-effects only (return value ignored).
         Kwargs form is a convenience for eager calls; missing params are filled from defaults.
 
+        A name the graph does not have raises :exc:`ValueError` in either form, rather than
+        being dropped and the parameter left at its default.  Callers that legitimately hold a
+        superset (the prior sub-graph, a marginalization group, one component of a sum) filter
+        with :func:`_restrict` first.
+
         After each eager call the parameters' ``.value`` attributes are restored
         to whatever they were on entry, so that finite-difference mutations
         inside ``pure_callback`` do not corrupt subsequent default-argument calls.
@@ -1544,6 +1751,12 @@ class CompiledGraph:
         all_saved = {p.name: p._value for p in self.params}
         input_saved = {n: v for n, v in all_saved.items()
                        if not self.params[n].derived}
+        # Reject unknown names before the merge, in both calling conventions: after the merge
+        # an unknown name is indistinguishable from a legitimate one.
+        if params is not None:
+            self._check_names(params)
+        if kwargs:
+            self._check_names(kwargs)
         if params is None:
             params = dict(all_saved)
             params.update(kwargs)
@@ -1879,7 +2092,7 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
 params = get_params
 
 
-def compile(root: Calculator, output: Callable=None, input: Callable=None) -> CompiledGraph:
+def build(root: Calculator, output: Callable=None, input: Callable=None) -> CompiledGraph:
     """Trace root's dependency graph and return a CompiledGraph.
 
     Phase 1 (build_graph): discovers deps by scanning the constructed nodes' public attributes.
@@ -1956,10 +2169,11 @@ def _run_compile_phases(root: Calculator) -> '_CompileContext':
     return ctx
 
 
-build = compile
+#: Legacy name for :func:`build`, kept because it is what most of the codebase still calls.
+compile = build
 
 
-def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=None, jit=False):
+def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, fd_transform=False, jit=False):
     """
     Build a derivative callable for a compiled graph.
 
@@ -1993,21 +2207,26 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
 
     Parameters
     ----------
-    graph : CompiledGraph
+    graph : CompiledGraph or Calculator
+        A calculator is built on the spot.
     order : dict[str | Variable, int], int, or sequence of dict
         See above.
     params : sequence of str or Variable, optional
         Only with an ``int`` *order*: the parameters to differentiate with
         respect to.  Defaults to all varied, non-derived parameters of *graph*.
+    fd : dict, optional
+        ``dict(eps=..., acc=...)``, spelled as for ``Parameter(fd=...)``. The flat ``fd_acc`` /
+        ``fd_eps`` below are the older spelling and win where both are given; per-parameter
+        values go through those, e.g. ``fd_eps={'omega_m': 1e-4}``.
     fd_acc : int or dict[str | Variable, int], optional
-        FD accuracy order; overrides ``param.fd_acc`` for each FD parameter
+        FD accuracy order; overrides ``param.fd.acc`` for each FD parameter
         in *order*.  A scalar value applies to all FD parameters; a dict
-        gives per-parameter control.  Falls back to ``param.fd_acc``
+        gives per-parameter control.  Falls back to ``param.fd.acc``
         (default 2) when absent.
     fd_eps : float or dict[str | Variable, float], optional
-        FD step size; overrides ``param.fd_eps`` for each FD parameter in
+        FD step size; overrides ``param.fd.eps`` for each FD parameter in
         *order*.  A scalar value applies to all FD parameters; a dict gives
-        per-parameter control.  Falls back to ``param.fd_eps``
+        per-parameter control.  Falls back to ``param.fd.eps``
         (→ ``param.ref.std()`` → ``1e-5``) when absent.
 
     Returns
@@ -2073,6 +2292,20 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
         d_all = differentiate(graph, {'omega_m': 1})
         d_rv, d_derived = d_all(return_derived=True)
     """
+    # `jacfwd` and `hessian` both route through here, so this serves all three. Building is not
+    # free -- it runs every node's __post_init__ and __call__ -- so an already-built graph is
+    # taken as is rather than rebuilt.
+    graph = graph if isinstance(graph, CompiledGraph) else build(graph)
+    # `fd=dict(eps=..., acc=...)`, the same spelling as `Parameter(fd=...)`; the flat `fd_acc=` /
+    # `fd_eps=` kwargs still work and win where both are given
+    fd = dict(fd or {})
+    if fd_acc is None:
+        fd_acc = fd.pop('acc', None)
+    if fd_eps is None:
+        fd_eps = fd.pop('eps', None)
+    if fd:
+        raise ValueError(f'unknown fd field(s) {sorted(fd)}; expected eps, acc')
+
     def _resolve_per_param(value, names):
         """Normalise a scalar-or-dict override to a ``{name: value}`` dict.
 
@@ -2117,6 +2350,15 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
     if params is not None and form != 'tree':
         raise ValueError('params is only accepted together with an int order')
 
+    # Maximum requested derivative order per parameter (collocation node counts).
+    if order_dicts is not None:
+        max_fd_order = {}
+        for order_dict in order_dicts:
+            for order_name, order_k in order_dict.items():
+                max_fd_order[order_name] = max(max_fd_order.get(order_name, 0), order_k)
+    else:
+        max_fd_order = {name: total_order for name in names}
+
     # ── validate ──────────────────────────────────────────────────────────────
     known = set(graph._fd_names) | set(graph._jax_names)
     bad = set(names) - known
@@ -2143,15 +2385,34 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
     eps_ov = _resolve_per_param(fd_eps, fd_names_sel)
 
     def _fd_spec(name, k):
-        """Return ``(offsets, coeffs, eps, prior_limits)`` for the order-*k* stencil of FD param *name*."""
+        """Return ``(offsets, coeffs, eps, prior_limits, transform, nodes)`` for the order-*k* stencil of FD param *name*."""
         param_obj = graph.params[name]
-        eps = eps_ov.get(name, param_obj.fd_eps)
+        fd = param_obj.fd
+        # fd_transform=True honors param.fd.transform (derivatives then w.r.t. the
+        # transformed variable, fd.eps / fd.center in transformed units); default False
+        # keeps plain parameter-space derivatives.
+        transform = fd.transform if fd_transform else None
+        if fd.limits is not None:
+            # Chebyshev collocation: order-n stencil = n + 1 Chebyshev-Lobatto nodes
+            # spanning fd.limits (parameter units, mapped through the transform), every
+            # derivative taken from the full node set -- the order-n Taylor is then
+            # identically the degree-n Chebyshev interpolant over the range.
+            lo, hi = fd.limits
+            if transform is not None:
+                fwd_map = _FD_TRANSFORMS[transform][0]
+                lo, hi = float(fwd_map(lo)), float(fwd_map(hi))
+            n_nodes = max(max_fd_order.get(name, k), k) + 1
+            nodes = chebyshev_lobatto_nodes(n_nodes, limits=(lo, hi))
+            return None, None, None, None, transform, nodes
+        eps = eps_ov.get(name, fd.eps)
+        if eps is None and getattr(param_obj, 'ref', None) is not None:
+            eps = param_obj.ref.std()
         if eps is None or (np.ndim(eps) == 0 and not np.isfinite(eps)):
             eps = 1e-5
-        acc = acc_ov.get(name, param_obj.fd_acc)
+        acc = acc_ov.get(name, fd.acc)
         offsets, coeffs = _fd_stencil(k, acc)
         prior_limits = param_obj.prior.limits if param_obj.prior is not None else None
-        return offsets, coeffs, eps, prior_limits
+        return offsets, coeffs, eps, prior_limits, transform, None
 
     # ── shared evaluation core ─────────────────────────────────────────────────
     # _return_derived is a one-element mutable box shared between _eval and
@@ -2184,8 +2445,8 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
                     fn = _jacfwd_wrap(fn, name)
         for name, k in order_dict.items():
             if name in fd_set and k > 0:
-                offsets, coeffs, eps, prior_limits = _fd_spec(name, k)
-                fn = _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=prior_limits)
+                offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, k)
+                fn = _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=prior_limits, transform=transform, nodes=nodes)
         return fn
 
     # ── build the derivative function chain(s) once ────────────────────────────
@@ -2251,19 +2512,19 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
 
         if total_order == 1:
             for name in fd_names_sel:
-                offsets, coeffs, eps, prior_limits = _fd_spec(name, 1)
-                fd_chains[name] = _fd_direct_wrap(_eval, name, offsets, coeffs, eps, 1, prior_limits=prior_limits)
+                offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, 1)
+                fd_chains[name] = _fd_direct_wrap(_eval, name, offsets, coeffs, eps, 1, prior_limits=prior_limits, transform=transform, nodes=nodes)
         else:
             for name in fd_names_sel:
                 if jax_names_sel:
-                    offsets, coeffs, eps, prior_limits = _fd_spec(name, 1)
-                    cross_chains[name] = _fd_direct_wrap(jacfwd_inner, name, offsets, coeffs, eps, 1, prior_limits=prior_limits)
+                    offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, 1)
+                    cross_chains[name] = _fd_direct_wrap(jacfwd_inner, name, offsets, coeffs, eps, 1, prior_limits=prior_limits, transform=transform, nodes=nodes)
             for idx_p, name_p in enumerate(fd_names_sel):
                 for name_q in fd_names_sel[idx_p:]:
                     if name_p == name_q and not graph.params[name_p].shape:
                         # Scalar diagonal: direct order-2 stencil (fewer evaluations).
-                        offsets, coeffs, eps, prior_limits = _fd_spec(name_p, 2)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 2, prior_limits=prior_limits)
+                        offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name_p, 2)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 2, prior_limits=prior_limits, transform=transform, nodes=nodes)
                     elif name_p == name_q:
                         # Array diagonal: nested order-1 stencils give the full
                         # cross-element block.  The inner stencil gets no prior
@@ -2271,8 +2532,8 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
                         # inner reach, so all nested points stay in bounds and the
                         # inner base is never shifted (a shift there would distort
                         # the outer stencil grid).
-                        offsets, coeffs, eps, prior_limits = _fd_spec(name_p, 1)
-                        inner = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 1, prior_limits=None)
+                        offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name_p, 1)
+                        inner = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 1, prior_limits=None, transform=transform, nodes=nodes)
                         eps_below, eps_above, _ = _fd_parse_eps(eps)
                         margin = (len(offsets) // 2) * max(eps_below, eps_above)
                         outer_limits = None
@@ -2280,12 +2541,12 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
                             lo, hi = prior_limits
                             outer_limits = (lo + margin if np.isfinite(lo) else lo,
                                             hi - margin if np.isfinite(hi) else hi)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets, coeffs, eps, 1, prior_limits=outer_limits)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets, coeffs, eps, 1, prior_limits=outer_limits, transform=transform, nodes=nodes)
                     else:
-                        offsets_q, coeffs_q, eps_q, limits_q = _fd_spec(name_q, 1)
-                        offsets_p, coeffs_p, eps_p, limits_p = _fd_spec(name_p, 1)
-                        inner = _fd_direct_wrap(_eval, name_q, offsets_q, coeffs_q, eps_q, 1, prior_limits=limits_q)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets_p, coeffs_p, eps_p, 1, prior_limits=limits_p)
+                        offsets_q, coeffs_q, eps_q, limits_q, transform_q, nodes_q = _fd_spec(name_q, 1)
+                        offsets_p, coeffs_p, eps_p, limits_p, transform_p, nodes_p = _fd_spec(name_p, 1)
+                        inner = _fd_direct_wrap(_eval, name_q, offsets_q, coeffs_q, eps_q, 1, prior_limits=limits_q, transform=transform_q, nodes=nodes_q)
+                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets_p, coeffs_p, eps_p, 1, prior_limits=limits_p, transform=transform_p, nodes=nodes_p)
 
         def _run(p0):
             entries = {}  # ordered name tuple (n1,) or (n1, n2) -> derivative entry, axes in tuple order
@@ -2333,8 +2594,13 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
         input_saved = {n: v for n, v in all_saved.items()
                        if not graph.params[n].derived}
         p0 = dict(all_saved)
+        # Same hole as the graph's own __call__: an unknown name would be added to p0 and never
+        # read again, leaving the parameter at its default.
         if params is not None:
+            graph._check_names(params)
             p0.update(params)
+        if kwargs:
+            graph._check_names(kwargs)
         p0.update(kwargs)
         _return_derived[0] = return_derived
         try:
@@ -2347,7 +2613,7 @@ def differentiate(graph: CompiledGraph, order, params=None, fd_acc=None, fd_eps=
     return _derivative
 
 
-def jacfwd(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=False):
+def jacfwd(graph, params=None, fd=None, fd_acc=None, fd_eps=None, jit=False):
     """First derivatives of *graph* w.r.t. several parameters in one call.
 
     Analogous to ``jax.jacfwd`` on a dict input: returns a function whose value
@@ -2362,10 +2628,10 @@ def jacfwd(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=Fals
         jac = jacfwd(graph, params=['omega_m', 'sigma8'])
         jac()['omega_m']            # d graph / dω_m at default params
     """
-    return differentiate(graph, 1, params=params, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
+    return differentiate(graph, 1, params=params, fd=fd, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
 
 
-def hessian(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=False):
+def hessian(graph, params=None, fd=None, fd_acc=None, fd_eps=None, jit=False):
     """Second derivatives (Hessian) of *graph* w.r.t. several parameters in one call.
 
     Analogous to ``jax.hessian`` on a dict input: returns a function whose value
@@ -2381,7 +2647,7 @@ def hessian(graph: CompiledGraph, params=None, fd_acc=None, fd_eps=None, jit=Fal
         hess = hessian(graph, params=['omega_m', 'sigma8'])
         hess()['omega_m']['sigma8']   # d² graph / (dω_m dσ₈) at default params
     """
-    return differentiate(graph, 2, params=params, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
+    return differentiate(graph, 2, params=params, fd=fd, fd_acc=fd_acc, fd_eps=fd_eps, jit=jit)
 
 
 @default_mpicomm

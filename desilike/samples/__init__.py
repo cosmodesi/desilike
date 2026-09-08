@@ -10,6 +10,9 @@ from .diagnostics import (
     autocorrelation,
     integrated_autocorrelation_time,
     geweke,
+    kish_ess,
+    systematic_resample,
+    pareto_khat,
 )
 from .plotting import (
     plotter,

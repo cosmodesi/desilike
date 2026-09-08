@@ -512,6 +512,18 @@ class BaseSampler(ABC):
               that need a ``ppf`` raise a clear error when only ``rvs`` is available; see
               :meth:`prior_rvs`.
         """
+        self._proposal_custom = self._prepare_proposal(proposal)
+
+    def _prepare_proposal(self, proposal):
+        """Validate *proposal* and bind it to :attr:`varied_params`; return it ready to draw from.
+
+        Split out of :meth:`_set_proposal` because binding and *using as the target* are two
+        different things: a population kernel wants both, while an ensemble kernel wants only the
+        first -- somewhere live to start, with its target left alone. The binding is not optional
+        for either. A proposal arrives knowing nothing of this sampler's parameters, so without
+        the ``init`` call below its ``params`` stay None and the first draw dies in ``ndim`` with
+        ``'NoneType' object is not iterable``, a long way from here.
+        """
         from ..samples import Covariance as _Covariance
         if isinstance(proposal, _Covariance):
             from .proposals import GaussianProposal, ProductProposal
@@ -536,7 +548,7 @@ class BaseSampler(ABC):
             if ndim != self.ndim:
                 raise ValueError(f'proposal {type(proposal).__name__} covers {ndim} of the '
                                  f'{self.ndim} varied dimensions; wrap it in a ProductProposal.')
-        self._proposal_custom = proposal
+        return proposal
 
     def set_rng(self, rng):
         """Set the random number generator."""
@@ -842,7 +854,7 @@ class MCMCSampler(BaseSampler):
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, rng=None,
                  mpicomm=None, output_dir=None, conditioner=None,
-                 batch_size=None):
+                 batch_size=None, proposal=None):
         """
         Parameters
         ----------
@@ -889,6 +901,15 @@ class MCMCSampler(BaseSampler):
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
                          conditioner=conditioner, batch_size=batch_size,
                          enforce_batch_size=kernel.enforce_batch_size)
+        # For the INITIAL DRAW only, and stored apart from `_proposal_custom` on purpose. Setting
+        # that one would also redirect `prior_logpdf` and `prior_ppf` (see :meth:`_set_proposal`),
+        # which is sound only for a population kernel evaluating `log_posterior - log_proposal` --
+        # here it would change the target. What is wanted is narrower: somewhere live to start.
+        # Without it `initialize_samples` draws each parameter from its own `ref`, a product of
+        # one-dimensional marginals, and against an emulator whose support is a band across its
+        # box almost every draw lands in an empty corner: measured, 6.4% answered, and the run
+        # dies with 'Could not find finite posterior after 100 attempts'.
+        self._init_proposal = None if proposal is None else self._prepare_proposal(proposal)
 
         self.checks = []
         self._thinning = 1
@@ -969,7 +990,25 @@ class MCMCSampler(BaseSampler):
                     batch_samples = np.zeros(batch_shape + (self.ndim,))
                     key = jax.random.PRNGKey(int(rng_local.integers(2**32)))
                     cumsize = _cumsize_params(self.varied_params)
-                    for i, param in enumerate(self.varied_params):
+                    rvs = getattr(self._init_proposal, 'rvs', None)
+                    if callable(rvs):
+                        # One correlated draw for every parameter at once, rather than a product
+                        # of marginals: the proposal knows the directions the parameters move
+                        # together in, which is exactly what a per-parameter `ref` cannot express.
+                        # Left in natural space, like the `param.ref` draws below, because the
+                        # single `conditioner.inverse` further down carries both to working space.
+                        # Transforming here as well applies it twice, which puts every draw
+                        # somewhere unrelated and reads as 'Could not find finite posterior'.
+                        ndraws = int(np.prod(batch_shape))
+                        drawn = np.asarray(rvs(ndraws, rng_local))
+                        if drawn.shape != (ndraws, self.ndim):
+                            raise ValueError(f'proposal.rvs returned shape {drawn.shape}, '
+                                             f'expected {(ndraws, self.ndim)}.')
+                        batch_samples = drawn.reshape(batch_shape + (self.ndim,))
+                        params_to_draw = []
+                    else:
+                        params_to_draw = list(enumerate(self.varied_params))
+                    for i, param in params_to_draw:
                         sl = slice(cumsize[i], cumsize[i + 1])
                         if param.ref is not None and param.ref.is_proper():
                             key, subkey = jax.random.split(key)
@@ -1530,7 +1569,14 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
         are unchanged for any proposal (kernels receive the likelihood as
         ``log_posterior - log_proposal``); the proposal only shortens the annealing
         path, and must over-cover the posterior (inflate a fitted covariance by
-        1.5-2x).  Ignored for all other kernel types.
+        1.5-2x).
+
+        Other kernel types receive it too, but only as a starting distribution: their
+        target is untouched, and it is `initialize_samples` alone that draws from it
+        (see :meth:`MCMCSampler.__init__`).  That matters against an emulator, whose
+        support is a band across its box while a per-parameter ``ref`` is a product of
+        marginals -- measured, 6.4% of a draw from the rectangle is answered, so an
+        ensemble kernel given no proposal dies at startup.
 
     Returns
     -------
@@ -1544,9 +1590,11 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    conditioner=conditioner, batch_size=batch_size)
+    # MCMCSampler and EnsembleSampler take the proposal too, but only to start from -- see
+    # `MCMCSampler.__init__`. It does not reach their target, which is what kept it out before.
     return cls(posterior, kernel=kernel, nparallel=nparallel,
                rng=rng, output_dir=output_dir, conditioner=conditioner,
-               batch_size=batch_size)
+               batch_size=batch_size, proposal=proposal)
 
 
 # Register here so kernel modules can look up these classes without a circular import.

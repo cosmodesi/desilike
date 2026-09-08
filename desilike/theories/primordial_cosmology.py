@@ -129,6 +129,11 @@ class PrimordialCosmology(Calculator):
         # _results:   spec_key → jnp.array   (populated in __call__)
         self._requirements = {}
         self._results = {}
+        # Out-of-range guard state, here rather than in `__post_init__` so that it exists on
+        # every instance -- a caller may ask an uncompiled cosmology what it enforces -- and so
+        # that the warn-once latch is per object: `__post_init__` runs at every compile, and
+        # resetting it there would re-emit the same warning on each one.
+        self._param_clip_ranges = {}
         self._param_values = {}
         # Default engine identifier; overridden by concrete subclasses in __post_init__.
         self._engine = None
@@ -951,6 +956,58 @@ def _find_capse_ellmax(spectrum_dir, nout):
     return int(round(float(np.max(ell))))
 
 
+def _intersect_ranges(ranges_per_emulator):
+    """Intersect ``{name: (low, high)}`` mappings: the tightest range each name is valid over.
+
+    One implementation, because there are two consumers that must not drift apart --
+    :meth:`ACECosmology.training_ranges` over the declared engine spec, and
+    :meth:`ACECosmology._load_emulators_for_new_requirements` over the emulators actually loaded.
+    """
+    intersected = {}
+    for ranges in ranges_per_emulator:
+        for name, (low, high) in ranges.items():
+            previous_low, previous_high = intersected.get(name, (-np.inf, np.inf))
+            intersected[name] = (max(low, previous_low), min(high, previous_high))
+    return intersected
+
+
+def _warn_priors_beyond_ranges(params, ranges):
+    """Warn for each varied parameter whose prior reaches outside the emulators' training ranges.
+
+    Outside them every emulated result is NaN-masked, which a posterior turns into ``-inf``: the
+    prior is effectively truncated whether or not anybody said so.  :meth:`ACECosmology.truncate_priors`
+    makes it explicit; this is the warning for those who have not called it.
+
+    No de-duplication state is kept: the message names the parameter, so it differs per parameter,
+    and :mod:`warnings` already suppresses repeats of an identical message from one location.
+    """
+    for param in params:
+        name = param.basename
+        if param.fixed or name not in ranges:
+            continue
+        limits = param.prior.limits
+        low, high = ranges[name]
+        if limits[0] < low or limits[1] > high:
+            warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
+                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+
+
+def _add_h_from_H0(ranges, replace):
+    """Report an ``H0`` range as ``h`` as well, scaled by 1/100.
+
+    ``replace`` says whether ``H0`` itself survives, and the two consumers genuinely differ:
+    prior truncation works in desilike names, so ``H0`` is popped; the run-time guard clips by
+    whatever name it is asked for -- the networks' native ``H0`` and desilike's ``h`` both reach
+    it -- so there it must keep both.
+    """
+    if 'H0' not in ranges:
+        return ranges
+    low, high = ranges.pop('H0') if replace else ranges['H0']
+    previous_low, previous_high = ranges.get('h', (-np.inf, np.inf))
+    ranges['h'] = (max(low / 100., previous_low), min(high / 100., previous_high))
+    return ranges
+
+
 def _find_capse_metadata(emulator_dir):
     """Introspect a Capse-style Cl emulator directory: per-spectrum network subdirectories
     ('TT', 'TE', 'EE', and optionally 'BB', 'PP'), each holding nn_setup.json / weights.npy /
@@ -1232,6 +1289,28 @@ class ACECosmology(PrimordialCosmology):
         """
         if basis not in ('cosmo', 'emulator'):
             raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
+        if isinstance(engine, PrimordialCosmology):
+            # A cosmology may be handed over instead of a spec, so that a caller need not test how
+            # far it has got. Resolved first, because what it yields is an engine spec like any
+            # other and has to go through the normalisation below.
+            #
+            # Only an ACECosmology has packaged emulators; anything else declares no ranges.
+            if not isinstance(engine, ACECosmology):
+                return {}
+            cosmology = engine
+            # `_param_clip_ranges` is filled by `_load_emulators_for_new_requirements`, at compile.
+            # Once it is, it is what the out-of-range guard actually enforces; before that, the
+            # engine spec the instance was constructed with is all there is.
+            if cosmology._param_clip_ranges:
+                ranges = dict(cosmology._param_clip_ranges)
+                if basis == 'cosmo':
+                    # The guard keeps both bases, since it is asked for whichever name the caller
+                    # uses; 'cosmo' reports desilike names only.
+                    ranges.pop('H0', None)
+                return ranges
+            engine = cosmology._init[1].get('engine', 'ace')
+            if base_dir is None:
+                base_dir = cosmology._init[1].get('base_dir')
         base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
         if isinstance(engine, str):
             engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section_: engine for section_ in ['harmonic', 'fourier', 'background']}
@@ -1241,23 +1320,19 @@ class ACECosmology(PrimordialCosmology):
             if unknown:
                 raise ValueError(f'unknown section(s) {unknown}; engine has {sorted(engine)}')
             engine = {name: engine[name] for name in sections}
-        training_ranges = {}
+        ranges_per_emulator = []
         for engine_name in set(engine.values()):
             if engine_name is None:
                 continue
             emulator_dir = base_emulator_dir / engine_name
             if (emulator_dir / 'TT' / 'nn_setup.json').is_file():
                 # Capse-style Cl emulator directory: introspect the networks' training ranges.
-                emulator_ranges = _find_capse_metadata(emulator_dir)['ranges']
+                ranges_per_emulator.append(_find_capse_metadata(emulator_dir)['ranges'])
             else:
-                emulator_ranges = _PACKAGED_EMULATORS.get(engine_name, {}).get('ranges', {})
-            for name, (low, high) in emulator_ranges.items():
-                previous_low, previous_high = training_ranges.get(name, (-np.inf, np.inf))
-                training_ranges[name] = (max(low, previous_low), min(high, previous_high))
-        if basis == 'cosmo' and 'H0' in training_ranges:
-            low, high = training_ranges.pop('H0')
-            previous_low, previous_high = training_ranges.get('h', (-np.inf, np.inf))
-            training_ranges['h'] = (max(low / 100., previous_low), min(high / 100., previous_high))
+                ranges_per_emulator.append(_PACKAGED_EMULATORS.get(engine_name, {}).get('ranges', {}))
+        training_ranges = _intersect_ranges(ranges_per_emulator)
+        if basis == 'cosmo':
+            training_ranges = _add_h_from_H0(training_ranges, replace=True)
         return training_ranges
 
     @classmethod
@@ -1472,40 +1547,13 @@ class ACECosmology(PrimordialCosmology):
                                      "(engine['background'], e.g. 'ACE_mnuw0wacdm_ln10As_basis') providing f_z")
                 if self._ace_emulator_key is not None and self._ace_emulator_key not in self._loaded_emulators:
                     self._loaded_emulators[self._ace_emulator_key] = self._load_emulator(self._ace_emulator_key)
-        self._rebuild_param_clip_ranges()
-
-    def _rebuild_param_clip_ranges(self):
-        """Intersect the training ranges of all loaded packaged / Capse-style emulators, keyed by
-        desilike parameter name.  __call__ clips its inputs to these ranges before evaluation and
-        masks every result to NaN when any parameter falls outside (graceful rejection instead of
-        a non-finite crash in downstream spline / linear solves)."""
-        self._param_clip_ranges = {}
-        for emulator_key in self._loaded_emulators:
-            for name, (low, high) in self._emulator_metadata[emulator_key].get('ranges', {}).items():
-                if name in self._param_clip_ranges:
-                    prev_low, prev_high = self._param_clip_ranges[name]
-                    self._param_clip_ranges[name] = (max(low, prev_low), min(high, prev_high))
-                else:
-                    self._param_clip_ranges[name] = (low, high)
-        if 'H0' in self._param_clip_ranges:
-            low, high = self._param_clip_ranges['H0']
-            self._param_clip_ranges.setdefault('h', (low / 100., high / 100.))
-        # One-time warning per parameter whose prior extends beyond the emulator training range:
-        # such samples yield NaN results, i.e. the prior is effectively truncated to the range.
-        warned = getattr(self, '_warned_prior_ranges', set())
-        for param in self.params:
-            name = param.basename
-            if name in warned or name not in self._param_clip_ranges or param.fixed:
-                continue
-            limits = getattr(param.prior, 'limits', None)
-            if limits is None:
-                continue
-            low, high = self._param_clip_ranges[name]
-            if limits[0] < low or limits[1] > high:
-                warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
-                              f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
-                warned.add(name)
-        self._warned_prior_ranges = warned
+        # The ranges the out-of-range guard enforces: intersected over the emulators actually
+        # loaded, keyed by parameter name.  `replace=False` keeps `H0` alongside `h`, since the
+        # guard is asked for whichever name the caller uses.
+        self._param_clip_ranges = _add_h_from_H0(
+            _intersect_ranges(self._emulator_metadata[emulator_key].get('ranges', {})
+                              for emulator_key in self._loaded_emulators), replace=False)
+        _warn_priors_beyond_ranges(self.params, self._param_clip_ranges)
 
     def __call__(self):
         import jaxace
@@ -1540,7 +1588,7 @@ class ACECosmology(PrimordialCosmology):
         # Out-of-range guard for packaged emulators: clip parameter values to the training
         # ranges so every internal evaluation (networks, splines, BAO filter) stays finite,
         # record per-parameter validity, and mask all results to NaN below when invalid.
-        clip_ranges = getattr(self, '_param_clip_ranges', {})
+        clip_ranges = self._param_clip_ranges
         params_in_range = {}
         if clip_ranges:
             unclipped_get_param = get_param

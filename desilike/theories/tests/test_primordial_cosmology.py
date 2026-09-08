@@ -410,6 +410,33 @@ class TestACECosmology:
         assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
         assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
 
+    def test_training_ranges_accepts_a_cosmology(self):
+        """A cosmology can be handed over directly, so no caller has to branch on how far it got.
+
+        Before compile nothing is loaded, so the answer comes from the engine spec the instance
+        was constructed with; after compile it is what the instance actually enforces. The two
+        agree here because the same engine is loaded either way -- what matters is that the
+        caller does not have to know which case it is in.
+        """
+        from desilike.theories.primordial_cosmology import ACECosmology, CosmoprimoCosmology
+
+        declared = ACECosmology.training_ranges(engine='ace')
+        cosmology = ACECosmology(engine='ace')
+        # Uncompiled: falls back to the declared spec, and reads `base_dir`/`engine` off `_init`.
+        assert ACECosmology.training_ranges(engine=cosmology) == declared
+
+        # Compiled: the ranges the out-of-range guard enforces. The 'cosmo' basis drops the
+        # networks' native `H0`, which the guard itself keeps alongside `h`.
+        from desilike.base import compile as build_graph
+        cosmology.add_requirements({'fourier.sigma8_z': [{'of': 'delta_cb', 'z': 0.}]})
+        build_graph(cosmology)()
+        enforced = ACECosmology.training_ranges(engine=cosmology)
+        assert enforced and 'H0' not in enforced
+        assert 'H0' in cosmology._param_clip_ranges and 'h' in cosmology._param_clip_ranges
+
+        # Any cosmology may be passed: one without packaged emulators declares no ranges.
+        assert ACECosmology.training_ranges(engine=CosmoprimoCosmology()) == {}
+
     def test_truncate_priors(self):
         """truncate_priors intersects the priors with the packaged emulators' training ranges
         (H0 ranges applied to h, scaled by 1/100), leaves non-matching priors and distribution

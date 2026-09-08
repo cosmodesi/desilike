@@ -2006,6 +2006,28 @@ def _trace_node(node: Calculator, ctx: _CompileContext) -> None:
     ctx.node_order.append(node)
 
 
+def _variables_agree(one, other):
+    """Whether two same-named :class:`Variable` objects carry the same metadata.
+
+    Merging duplicates that agree loses nothing; merging duplicates that differ silently discards
+    one of two answers, which is the failure this guards.  Compared through ``__getstate__`` so a
+    subclass's own fields (a Parameter's prior, ref and fd) are included without listing them here.
+    """
+    if type(one) is not type(other):
+        return False
+
+    def equal(left, right):
+        if isinstance(left, dict) and isinstance(right, dict):
+            return left.keys() == right.keys() and all(equal(left[key], right[key]) for key in left)
+        if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+            return len(left) == len(right) and all(equal(*pair) for pair in zip(left, right))
+        if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+            return np.array_equal(np.asarray(left), np.asarray(right))
+        return left == right
+
+    return equal(one.__getstate__(), other.__getstate__())
+
+
 def build_graph(root: Calculator) -> _CompileContext:
     """Traverse root and all reachable Calculators; return the compilation context.
 
@@ -2031,10 +2053,19 @@ def build_graph(root: Calculator) -> _CompileContext:
 
     ctx = _trace(root)
 
-    # Auto-share: if the same Variable name appears as distinct objects across nodes,
-    # unify them (first-seen wins) so callers don't need to call share_params manually.
+    # Same-named Variables appearing as distinct objects are unified -- but only when they
+    # agree.  Two calculators built independently and then combined routinely declare the same
+    # parameter (two cosmologies in one likelihood, each with its own `h`), and unifying those is
+    # the convenience that makes one sampled `h` feed both; measured across the suite, every
+    # occurrence is of that kind.
+    #
+    # When they disagree, merging would silently discard one of two answers, and which one
+    # survived was first-seen-by-traversal: a prior narrowed on an emulator's `h` came back as the
+    # template's (0.1, 10.0) instead of the (0.66, 0.69) that had been set.  So that case raises
+    # and says what differs, and `share_params` is there to make the choice explicit.
     canonical = {}
     needs_sharing = False
+    disagreeing = {}
     for node in ctx.node_order:
         for dep in ctx.node_deps.get(id(node), []):
             if not isinstance(dep, Variable):
@@ -2042,7 +2073,18 @@ def build_graph(root: Calculator) -> _CompileContext:
             if dep.name not in canonical:
                 canonical[dep.name] = dep
             elif dep is not canonical[dep.name]:
-                needs_sharing = True
+                if _variables_agree(dep, canonical[dep.name]):
+                    needs_sharing = True
+                else:
+                    disagreeing.setdefault(dep.name, []).append(type(node).__name__)
+    if disagreeing:
+        detail = '; '.join(f'{name!r} (differing copies, one of them owned by {sorted(set(owners))})'
+                           for name, owners in sorted(disagreeing.items()))
+        raise ValueError(
+            f'{type(root).__name__} graph has same-named Variables that are distinct objects and '
+            f'do not agree: {detail}. Merging them would silently drop one prior, value or '
+            f'`fixed` flag in favour of the other. Pass the same instance to both, make them '
+            f'agree, or call `share_params` to choose explicitly.')
 
     if needs_sharing:
         for name, canon_var in canonical.items():

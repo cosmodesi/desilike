@@ -2283,3 +2283,63 @@ def test_jit_then_eager_does_not_leak_tracers(kind):
     assert abs(float(eager) - jitted) < 1e-8
     # and again, to catch state that only goes wrong on a second pass
     assert abs(float(pipe(point)) - jitted) < 1e-8
+
+
+def test_disagreeing_duplicate_params_raise():
+    """Same-named Variables are unified when they agree, and refused when they do not.
+
+    Two calculators built independently and combined routinely declare the same parameter -- two
+    cosmologies in one likelihood, each with its own `h` -- and unifying those is what makes one
+    sampled value feed both.  Merging duplicates that *differ* would instead drop one prior in
+    favour of the other, chosen by traversal order.
+    """
+    from desilike.base import Calculator, build
+    from desilike.parameter import Parameter
+
+    class Leaf(Calculator):
+
+        def __init__(self, omega_m=None):
+            self.omega_m = omega_m
+
+        def __call__(self):
+            self.value = self.omega_m * 1.
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    class Pair(Calculator):
+
+        def __init__(self, first=None, second=None):
+            self.first, self.second = first, second
+
+        def __call__(self):
+            self.total = self.first.value + self.second.value
+            return self.total
+
+        def tree_flatten(self):
+            return {'total': self.total}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.total = children['total']
+            return obj
+
+    # Agreeing duplicates: unified, as before.
+    agreeing = Pair(first=Leaf(omega_m=Parameter('omega_m', value=0.3, prior={'limits': [0.1, 0.5]})),
+                    second=Leaf(omega_m=Parameter('omega_m', value=0.3, prior={'limits': [0.1, 0.5]})))
+    graph = build(agreeing)
+    assert graph.params.names() == ['omega_m']
+
+    # Disagreeing duplicates: refused, naming the parameter.
+    disagreeing = Pair(first=Leaf(omega_m=Parameter('omega_m', value=0.3, prior={'limits': [0.1, 0.5]})),
+                       second=Leaf(omega_m=Parameter('omega_m', value=0.3, prior={'limits': [0.2, 0.4]})))
+    with pytest.raises(ValueError, match='omega_m'):
+        build(disagreeing)

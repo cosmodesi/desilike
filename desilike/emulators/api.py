@@ -20,7 +20,7 @@ import numpy as np
 from cosmoprimo.emulators.tools import Emulator as _Emulator, Space as BaseSpace
 
 from desilike.base import get_params
-from desilike.parameter import VariableCollection
+from desilike.parameter import Variable, VariableCollection
 
 
 def _import(path):
@@ -43,16 +43,41 @@ class Space(BaseSpace):
     available: shrinking a prior-width box to a posterior-sized one was worth 23x at fixed node
     count. A chain or a covariance beats both -- ``Space(samples=chain)``.
     """
-    def __init__(self, calculator=None, params=None, nsigma=3., **kwargs):
-        """The box comes from each parameter's ``ref``, never from ``prior``.
+    def __init__(self, calculator=None, params=None, nsigma=3., clip=None, bounds=None, **kwargs):
+        """The box comes from the parameters themselves, never from ``prior`` alone.
 
-        A prior says what is ALLOWED, not where the chain lives, and desilike's defaults are
+        A prior says what is allowed, not where the chain lives, and desilike's defaults are
         deliberately generous -- h in [0.1, 10], m_ncdm up to 5 eV.  Emulating over that box does
         not merely waste nodes: it asks the Boltzmann code for cosmologies it refuses, and the
         training dies at a node rather than at the call that set it up.
+
+        The range must be **declared**, never synthesised: ``fd.limits`` when set -- a collocation
+        range declared for exactly this purpose -- else finite ``ref`` limits.  It is then
+        intersected with finite ``prior`` limits, so the emulator is never asked for a point the
+        prior forbids.
+
+        A step size is not a range.  ``desi-clustering``'s ``propose_emulator_space_limits``
+        synthesised a box from ``fd.eps`` where neither was declared, and that box was measured
+        2-5x wider than the posterior it had to cover.  A parameter with nothing declared raises
+        here, naming itself, rather than being given a box nobody chose.
+
+        Parameters
+        ----------
+        clip : dict, default=None
+            ``{name: (low, high)}`` valid ranges of whatever computes downstream -- an emulated
+            cosmology NaN-masks outside its training ranges, and one non-finite node poisons every
+            Chebyshev coefficient.  The box is inset from these by 1e-3 of their width rather than
+            merely clipped to them: nodes include the endpoints, and a node landing a ULP outside
+            (a box clipped exactly to omega_b >= 0.02 produced 0.019999999999999997) is masked.
+            Matched by name, then by basename.
+        bounds : dict, default=None
+            ``{name: (low, high)}`` overriding the derived box for those parameters.  Needed
+            wherever the physical region is not a box in these coordinates: a w0waCDM grid is a
+            rectangle in (w0, wa), so it pokes into w0 + wa >= 0, where the prior is -inf and CLASS
+            returns non-finite values.
         """
         if calculator is None:
-            super().__init__(params=params, nsigma=nsigma, **kwargs)
+            super().__init__(params=params, nsigma=nsigma, bounds=bounds, **kwargs)
             return
         from desilike.base import get_params
 
@@ -69,20 +94,43 @@ class Space(BaseSpace):
         selected = get_params(calculator).select(varied=True, derived=False)
         if params is not None:
             selected = [param for param in selected if param.name in params]
+        bounds, clip = dict(bounds or {}), dict(clip or {})
         limits, missing = {}, []
         for param in selected:
-            if np.isfinite(param.ref.limits).all():
-                limits[param.name] = tuple(float(value) for value in param.ref.limits)
+            if param.name in bounds:
+                low, high = (float(value) for value in bounds[param.name])
             else:
-                missing.append(param.name)
+                # A declared range, never a synthesised one: `fd.limits` first (a collocation
+                # range declared for exactly this purpose), else `ref` limits.
+                declared = param.fd.limits if param.fd.limits is not None else param.ref.limits
+                low, high = (float(limit) for limit in declared)
+                if not np.isfinite([low, high]).all():
+                    missing.append(param.name)
+                    continue
+                # Never ask for a point the prior forbids.
+                prior_low, prior_high = (float(limit) for limit in param.prior.limits)
+                if np.isfinite(prior_low):
+                    low = max(low, prior_low)
+                if np.isfinite(prior_high):
+                    high = min(high, prior_high)
+                valid = clip.get(param.name, clip.get(param.basename))
+                if valid is not None:
+                    # Inset, not merely clipped: see the `clip` docstring.
+                    valid_low, valid_high = (float(limit) for limit in valid)
+                    inset = 1e-3 * (valid_high - valid_low)
+                    low, high = max(low, valid_low + inset), min(high, valid_high - inset)
+            if not high > low:
+                raise ValueError(f'empty emulation range for {param.name!r}: [{low}, {high}]')
+            limits[param.name] = (low, high)
         if missing:
             raise ValueError(
-                f'{type(calculator).__name__} parameters {missing} are varied but have no finite '
-                f'`ref` limits. Give the Space explicit bounds, a covariance or '
-                f'samples, or fix the parameters you do not want emulated.')
+                f'{type(calculator).__name__} parameter(s) {missing} have no finite range to '
+                f'emulate over. Declare one -- `Parameter(..., fd={{"limits": [low, high]}})` or '
+                f'finite `ref` limits -- or pass explicit `bounds`, a covariance or samples, or '
+                f'fix the parameters you do not want emulated.')
         if not limits:
-            raise ValueError(f'no varied parameter of {type(calculator).__name__} has a `ref`; '
-                             f'nothing to emulate')
+            raise ValueError(f'no varied parameter of {type(calculator).__name__} declares a '
+                             f'range; nothing to emulate')
         super().__init__(bounds=limits, nsigma=nsigma, **kwargs)
 
 
@@ -401,6 +449,24 @@ class CalculatorEmulator(_Emulator):
         if not (args or kwargs) and getattr(self, 'calculator', None) is not None:
             args, kwargs = self.calculator._init
         deployed = EmulatedCalculator(*args, **kwargs)
+        # Bind the deployed calculator to the emulator's OWN parameter objects.
+        #
+        # `__init__` is the root class's, so the deployed object constructs a fresh template (or
+        # cosmology), which declares its own `h`, `logA`, ... alongside the ones this emulator
+        # holds.  `build_graph` would then unify the duplicates first-seen-wins, and the template
+        # is seen first: measured, a prior narrowed in place on `emulator.graph_params['h']` came
+        # back as (0.1, 10.0) instead of (0.66, 0.69), silently discarding what the caller set --
+        # which is exactly what `desi-clustering` does before deploying.
+        #
+        # Binding here makes the winner a decision rather than a traversal order, and it is the
+        # only reason auto-share fires at all: measured across 355 tests, all six triggers were
+        # this case.
+        from desilike.base import replace
+
+        for param in self.graph_params:
+            replace(deployed, lambda node, _param=param: (isinstance(node, Variable)
+                                                          and node.name == _param.name
+                                                          and node is not _param), param)
         if center is not None and center is not False:
             # On the deployed object, not on the emulator's own nodes: `build` resolves a
             # parameter from the calculator it evaluates, so moving anything else is a no-op that

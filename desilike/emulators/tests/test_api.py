@@ -435,3 +435,71 @@ def test_a_tuple_child_survives_the_round_trip(tmp_path):
     # and through a file, where the structure travels as the pickled aux
     reloaded = Emulator.read(emu.write(str(tmp_path / 'tuple.h5')))
     assert reloaded.children_treedef == emu.children_treedef
+
+
+# ── Space derived from the parameters: a declared range, never a synthesised one ───────────────
+
+def _toy_with(param):
+    from desilike.parameter import Parameter
+    return Toy(h=param, amplitude=Parameter('amplitude', value=1., ref={'limits': [0.8, 1.2]}))
+
+
+def test_space_prefers_an_explicit_fd_range():
+    """`fd.limits` is a collocation range declared for exactly this purpose: it wins over `ref`."""
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, ref={'limits': [0.65, 0.75]}, fd={'limits': [0.6, 0.8]})
+    assert Space(_toy_with(param)).limits['h'] == (0.6, 0.8)
+
+
+def test_space_uses_ref_limits_when_no_fd_range_is_declared():
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, ref={'limits': [0.65, 0.75]})
+    assert Space(_toy_with(param)).limits['h'] == (0.65, 0.75)
+
+
+def test_space_refuses_to_synthesise_a_range_from_a_step_size():
+    """A step size is not a range.
+
+    `desi-clustering` synthesised `value +- nsigma * fd.eps` where nothing was declared, and that
+    box was measured 2-5x wider than the posterior it had to cover. Raise instead, naming the
+    parameter, rather than hand back a box nobody chose.
+    """
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, prior={'dist': 'norm', 'loc': 0.7, 'scale': np.inf},
+                      fd={'eps': 0.01})
+    with pytest.raises(ValueError, match="'h'"):
+        Space(_toy_with(param))
+
+
+def test_space_never_leaves_the_prior():
+    """The emulator must not be asked for a point the prior forbids."""
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, prior={'limits': [0.68, 0.72]}, fd={'limits': [0.55, 0.85]})
+    assert Space(_toy_with(param)).limits['h'] == (0.68, 0.72)
+
+
+def test_space_insets_from_a_downstream_valid_range():
+    """`clip` is inset, not merely clipped.
+
+    Nodes include the endpoints, and one landing a ULP outside a downstream emulator's training
+    range is NaN-masked -- which poisons every coefficient, not just that node.
+    """
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, prior={'limits': [0., 2.]}, fd={'limits': [0.55, 0.85]})
+    low, high = Space(_toy_with(param), clip={'h': (0.6, 0.8)}).limits['h']
+    assert low > 0.6 and high < 0.8
+    assert np.allclose([low, high], [0.6 + 1e-3 * 0.2, 0.8 - 1e-3 * 0.2])
+
+
+def test_space_bounds_override_the_declared_range():
+    """For regions that are not boxes in these coordinates (w0 + wa < 0, say)."""
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, ref={'limits': [0.65, 0.75]})
+    assert Space(_toy_with(param), bounds={'h': (0.5, 0.9)}).limits['h'] == (0.5, 0.9)
+
+
+def test_space_says_which_parameter_declares_no_range():
+    from desilike.parameter import Parameter
+    param = Parameter('h', value=0.7, prior={'dist': 'norm', 'loc': 0.7, 'scale': np.inf})
+    with pytest.raises(ValueError, match="'h'"):
+        Space(_toy_with(param))

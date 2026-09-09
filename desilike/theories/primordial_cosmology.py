@@ -2673,13 +2673,27 @@ class CosmologyEmulator(_SectionEmulator):
         return out
 
     def to_calculator(self, calculator=None, center=True):
-        deployed = super().to_calculator(calculator=calculator, center=center)
-        # a sector read back from a file has no calculator, and the harmonic one reads the
-        # fiducial's neutrino content off it whenever that is not varied
+        # The sectors get their calculator BEFORE the deploy, not after. The base runs no
+        # constructor, so it gives the deployed object its state by predicting at the space
+        # centre -- and that prediction goes through each sector's `to_training`, which reads the
+        # fiducial's neutrino content (`m_ncdm`, `N_ur`, `T_cmb`) off the sector's own calculator.
+        # A sector read back from a file has none, and handing them one afterwards is too late:
+        # `TypeError: 'NoneType' object is not subscriptable` out of `_theta_args`.
+        if calculator is not None:
+            self.calculator = calculator
+        source = getattr(self, 'calculator', None)
+        # `_fiducial` is latched in `__post_init__`, i.e. at a build, so a calculator that has
+        # only been constructed carries none -- and the harmonic sector is the one sector with no
+        # fiducial of its own (the routed ones rebuild theirs from their anchors), so it reads
+        # the neutrino content off this calculator and gets None. Run that setup here rather than
+        # requiring the caller to have built what they hand over.
+        if source is not None and getattr(source, '_fiducial', None) is None:
+            args, kwargs = source._init
+            source.__post_init__(*args, **kwargs)
         for sub in self._sectors.values():
             if getattr(sub, 'calculator', None) is None:
-                sub.calculator = self.calculator
-        return deployed
+                sub.calculator = source
+        return super().to_calculator(calculator=calculator, center=center)
 
     def __getstate__(self):
         state = super().__getstate__()

@@ -792,6 +792,42 @@ class TestCosmologyEmulator:
         np.testing.assert_allclose(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:], exact[cl][2:], rtol=5e-3)
 
 
+    def test_a_reloaded_emulator_deploys_in_the_theta_basis(self, tmp_path):
+        """`h` in the space routes through `theta_MC_100`, and that is the case a deploy broke.
+
+        The base runs no constructor, so it gives the deployed object its state by predicting at
+        the space centre. That prediction goes through each sector's `to_training`, which for a
+        space containing `h` calls `_theta_args` -- and that reads the fiducial's neutrino
+        content off the sector's OWN calculator. A sector read back from a file carries none, and
+        handing them one after the deploy is too late: `TypeError: 'NoneType' object is not
+        subscriptable`. Measured in `run_desilike`'s emulated CMB path, which is exactly this.
+
+        The sibling test above deploys a reloaded emulator too, but its space is
+        (omega_cdm, logA, tau_reio): no `h`, so `to_training` never reaches `_theta_args`.
+        """
+        from desilike.base import build
+        from desilike.emulators import Emulator, Space
+        from desilike.theories.primordial_cosmology import CosmologyEmulator
+
+        cosmo = _fourier_cosmology(engine='class', free=('h',), harmonic=True, background=True)
+        # omega_b as well as h: `to_training` forms theta_MC_100 from (h, omega_b, omega_cdm)
+        space = Space(bounds={'h': BOUNDS['h'], 'omega_b': BOUNDS['omega_b'],
+                              'omega_cdm': BOUNDS['omega_cdm']})
+        emulator = Emulator(cosmo, space)
+        assert isinstance(emulator, CosmologyEmulator)
+        emulator.train(budget=1)
+
+        reloaded = Emulator.read(emulator.write(str(tmp_path / 'theta.h5')))
+        assert all(getattr(sub, 'calculator', None) is None for sub in reloaded._sectors.values()), \
+            'a saved emulator carries no Calculator, in any sector -- that is what makes this the case'
+        deployed = reloaded.to_calculator(calculator=cosmo)
+
+        point = {'h': 0.68, 'omega_b': 0.0224, 'omega_cdm': 0.118}
+        build(deployed)(point)
+        pk = np.asarray(deployed.get('fourier.pk', of='delta_cb', z=Z, k=K))
+        assert np.all(np.isfinite(pk)) and pk.shape == (len(K),)
+
+
 def test_a_derived_leaf_keeps_its_own_redshift():
     """A derived sigma8 is one number at one redshift, and the requirement it reads may serve
     several: a template asks `fourier.sigma8_z` at z = 0.8 and the derived parameter at z = 0, so

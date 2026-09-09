@@ -296,6 +296,83 @@ def test_kernel_multiple_chains(likelihood, key):
         assert len(chains_10) == nchains
 
 
+# ── Proposal as a starting distribution ───────────────────────────────────────
+
+@pytest.mark.mpi_skip
+def test_ensemble_proposal_start():
+    """An ensemble sampler starts from its proposal, and lands where the proposal actually is.
+
+    A proposal reaches an ensemble kernel as a starting distribution only -- its target is
+    untouched, unlike the population kernels above -- so what there is to check is where the
+    walkers begin.
+
+    ``rescale=True`` is the whole point of the test. The draw is carried from natural to working
+    space by exactly one ``conditioner.inverse``, and under an identity conditioner one call and
+    two calls agree, so a doubled transform passes unnoticed. Whitened, it puts every walker
+    somewhere unrelated to the proposal, and a sampler whose target is confined -- an emulated
+    posterior, say -- then fails at startup with 'Could not find finite posterior'.
+    """
+    _skip_if_mpi()
+    likelihood = make_likelihood()
+    nwalkers = 64
+    sampler = samplers.Sampler(likelihood, kernel=samplers.Emcee(nwalkers=nwalkers), rng=42,
+                               conditioner=samplers.AffineConditioner(rescale=True),
+                               proposal=_shifted_proposal(likelihood, shift=1., scale=1.5))
+    sampler.initialize_samples()
+    start = sampler._round_samples[0]
+
+    # Where `_shifted_proposal` puts its centre: one sigma off the posterior in either direction,
+    # so this also separates a proposal-driven start from the per-parameter `ref` fallback, which
+    # is centred on the posterior itself.
+    center = _ANALYTIC_MEAN + _ANALYTIC_STD * np.array([1., -1.])
+    for i, name in enumerate(('a', 'b')):
+        values = np.ravel(start[name].value)
+        assert len(values) == nwalkers
+        # The standard error on the mean of the draw is 1.5 sigma / sqrt(64) ~ 0.19 sigma, so
+        # this is loose on a correct draw and hopeless on a doubled transform.
+        assert abs(np.mean(values) - center[i]) < 0.6 * _ANALYTIC_STD[i], \
+            f'{name}: walkers start at {np.mean(values)}, proposal centred on {center[i]}'
+
+
+# ── Nautilus batching ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize('batch_size', [16, 64, None, 0])
+def test_nautilus_n_batch(batch_size):
+    """`n_batch` is sized so each rank evaluates exactly one full batch per iteration.
+
+    nautilus hands the pool `n_batch` points and `MPIPool.map` gives rank r the slice
+    tasks[r::size], so `n_batch = batch_size * size` is what makes a rank's share one jitted
+    call of a fixed width. Left to itself nautilus uses ceil(100 / size) * size, whose per-rank
+    share shrinks as ranks are added -- wide enough to exhaust memory on a few ranks, too narrow
+    to amortise the jit on many.
+
+    Without a `batch_size` there is no width to derive one from, so nautilus' own formula stands
+    (100 at one rank); same for ``batch_size=0``, which evaluates one point per call.
+    """
+    pytest.importorskip('nautilus')
+    _skip_if_mpi()
+    likelihood = make_likelihood()
+    kernel = samplers.Nautilus(n_networks=1, n_live=300)
+    kwargs = {} if batch_size is None else dict(batch_size=batch_size)
+    sampler = samplers.Sampler(likelihood, kernel=kernel, rng=42, **kwargs)
+    assert sampler.pool.batch_size == batch_size
+    sampler.run(n_eff=0, n_like_max=10)
+    if batch_size:
+        assert kernel._sampler.n_batch == batch_size * sampler.pool.size
+    else:
+        assert kernel._sampler.n_batch == 100
+
+
+def test_nautilus_n_batch_explicit():
+    """An explicitly requested `n_batch` is not overridden by the derived one."""
+    pytest.importorskip('nautilus')
+    _skip_if_mpi()
+    kernel = samplers.Nautilus(n_networks=1, n_live=300, n_batch=37)
+    sampler = samplers.Sampler(make_likelihood(), kernel=kernel, rng=42, batch_size=16)
+    sampler.run(n_eff=0, n_like_max=10)
+    assert kernel._sampler.n_batch == 37
+
+
 # ── PocoMC Gaussian proposal ──────────────────────────────────────────────────
 
 @pytest.mark.mpi_skip

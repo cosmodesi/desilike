@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, build, compile, pmap, differentiate, jacfwd, hessian
+from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, build, copy, pmap, differentiate, jacfwd, hessian
 from desilike.parameter import Parameter
 
 
@@ -129,7 +129,7 @@ def _make_nodes():
 
 @pytest.fixture
 def pipeline():
-    return compile(_make_nodes()[-1])
+    return build(_make_nodes()[-1])
 
 
 # ── basic correctness ─────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ def test_unknown_param_name_raises_with_an_input_callable():
     """Both the dict and the kwargs form of the ``input=`` convention are checked."""
     likelihood = _make_nodes()[-1]
     received = []
-    pipe = compile(likelihood, input=received.append)
+    pipe = build(likelihood, input=received.append)
     with pytest.raises(ValueError, match='typo'):
         pipe(None, {'typo': 1.})
     with pytest.raises(ValueError, match='typo'):
@@ -174,7 +174,7 @@ def test_derived_param_name_is_accepted(pipeline):
     marginalization machinery writes solved values back into the dict it passes on)."""
     lik = _make_nodes()[-1]
     lik.derived_A = Parameter('derived_A', value=0., derived=True)
-    pipe = compile(lik)
+    pipe = build(lik)
     pipe({'A': 1.1, 'derived_A': 0.})
 
 
@@ -233,7 +233,7 @@ def test_jit_grad(pipeline):
 def test_jacrev_external():
     """jax.jacobian (jacrev) gives correct Jacobian for external (_is_external=True) pipelines."""
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
-    pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
+    pipe_pk = build(likelihood, output=lambda: spectrum.pk)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     jac_rev = jax.jacobian(pipe_pk)(params)
 
@@ -249,7 +249,7 @@ def test_jacrev_external():
 
 def test_jacfwd_grad_external():
     """jax.jacfwd(jax.grad(pipe)) works for external (_is_external=True) pipelines via custom_jvp FD rule."""
-    pipe = compile(_make_nodes()[-1])
+    pipe = build(_make_nodes()[-1])
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     grad_fn = jax.grad(pipe)
     hess_jacfwd = jax.jacfwd(grad_fn)(params)
@@ -299,7 +299,7 @@ def test_external_cache():
     ns = Parameter('ns', value=0.96)
     cosmo = CountedCosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
-    pipe = compile(GaussianChi2(spectrum=spectrum, data=DATA))
+    pipe = build(GaussianChi2(spectrum=spectrum, data=DATA))
     _call_count[0] = 0
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
@@ -340,7 +340,7 @@ def test_jax_cache():
     ns = Parameter('ns', value=0.96)
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = CountedSpectrum(cosmo=cosmo, A=A, ns=ns)
-    pipe = compile(GaussianChi2(spectrum=spectrum, data=DATA))
+    pipe = build(GaussianChi2(spectrum=spectrum, data=DATA))
     _call_count[0] = 0
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
@@ -358,14 +358,14 @@ def test_jax_cache():
 def test_custom_output():
     """output= lambda reads any pytree of calculator attrs; grad flows through it."""
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
-    pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
+    pipe_pk = build(likelihood, output=lambda: spectrum.pk)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     D = 0.3 ** 0.55 / 1.5
     expected_pk = 1.0 * np.array(K) ** 0.96 * D ** 2
     assert jnp.allclose(pipe_pk(params), jnp.array(expected_pk), atol=1e-8)
 
     _, _, _, _, _, spectrum2, likelihood2 = _make_nodes()
-    pipe_tuple = compile(likelihood2, output=lambda: (likelihood2.loglikelihood, spectrum2.pk))
+    pipe_tuple = build(likelihood2, output=lambda: (likelihood2.loglikelihood, spectrum2.pk))
     logL, pk = pipe_tuple(params)
     assert abs(float(logL) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
     assert jnp.allclose(pk, jnp.array(expected_pk), atol=1e-8)
@@ -376,7 +376,7 @@ def test_custom_output():
 def test_pytree_registration():
     """Calculators are registered JAX pytrees: tree_leaves, tree_map, and jit work natively."""
     _, _, _, _, _, spectrum, _ = _make_nodes()
-    pipe = compile(spectrum)
+    pipe = build(spectrum)
     pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96)
 
     leaves = jax.tree_util.tree_leaves(spectrum)
@@ -421,7 +421,7 @@ def test_array_param_jax():
     w_param = Parameter('w', value=np.ones(len(K)))
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
-    pipe = compile(WeightedLikelihood(spectrum=spectrum, data=DATA, w=w_param))
+    pipe = build(WeightedLikelihood(spectrum=spectrum, data=DATA, w=w_param))
 
     w = np.ones(len(K))
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96, 'w': jnp.array(w)}
@@ -478,7 +478,7 @@ def test_array_param_external():
     omega_m = Parameter('omega_m', value=0.3)
     k_weights_param = Parameter('k_weights', value=np.ones(len(K)))
     wcos = WeightedCosmology(omega_m=omega_m, k_weights=k_weights_param)
-    pipe = compile(WeightedChi2(wcos=wcos))
+    pipe = build(WeightedChi2(wcos=wcos))
 
     k_weights = np.ones(len(K))
     params = {'omega_m': 0.3, 'k_weights': jnp.array(k_weights)}
@@ -539,16 +539,16 @@ def test_internal_init():
             obj.pk = children[0]
             return obj
 
-    pipe = compile(InternalSpectrum())
+    pipe = build(InternalSpectrum())
     assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
     D = 0.3 ** 0.55 / 1.5
     assert jnp.allclose(pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96), jnp.array(1.0 * np.array(K) ** 0.96 * D ** 2), atol=1e-8)
 
 
 def test_duplicate_param_name_auto_shared():
-    """Two distinct Parameter objects with the same name are auto-unified by build_graph.
+    """Two distinct Parameter objects with the same name are auto-unified by _trace_graph.
 
-    build_graph (and compile) no longer raise — same-named Parameters are merged
+    _trace_graph (and build) no longer raise — same-named Parameters are merged
     automatically (first-seen wins), equivalent to an implicit share_params() call.
     """
 
@@ -590,7 +590,7 @@ def test_duplicate_param_name_auto_shared():
             return obj
 
     # Should NOT raise — auto-shared instead
-    pipe = compile(DupSpectrum(cosmo=DupCosmology()))
+    pipe = build(DupSpectrum(cosmo=DupCosmology()))
     # Only one 'omega_m' in the compiled graph
     assert pipe.params.names() == ['omega_m']
     result = float(pipe({'omega_m': 0.3}))
@@ -644,14 +644,14 @@ def test_fd_acc():
 
     for acc, tol in [(2, 2e-4), (4, 1e-8)]:
         om = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=acc))
-        pipe = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
+        pipe = build(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
         g = float(jax.grad(pipe)({'omega_m': jnp.array(x0)})['omega_m'])
         assert abs(g - analytic_grad) < tol, f'fd_acc={acc}: grad error {abs(g - analytic_grad):.2e} >= tol {tol:.2e}'
 
     om2 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=2))
     om4 = Parameter('omega_m', value=x0, fd=dict(eps=large_eps, acc=4))
-    pipe2 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
-    pipe4 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
+    pipe2 = build(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
+    pipe4 = build(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
     err2 = abs(float(jax.grad(pipe2)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
     err4 = abs(float(jax.grad(pipe4)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
     assert err4 < err2, f'fd_acc=4 error {err4:.2e} should be smaller than fd_acc=2 error {err2:.2e}'
@@ -675,9 +675,9 @@ def test_no_tracer_leakage_after_jit(pipeline):
 
 
 def test_inplace_mutation_after_compile():
-    """param.value changed in place after compile: pipeline uses the new value as default."""
+    """param.value changed in place after build: pipeline uses the new value as default."""
     _, _, A, _, _, _, likelihood = _make_nodes()
-    pipe = compile(likelihood)
+    pipe = build(likelihood)
 
     assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
     A.value = 1.5
@@ -693,7 +693,7 @@ def test_prior_standalone():
     omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='norm', loc=0.3, scale=0.01))
     A = Parameter('A', value=1.0, prior=dict(dist='uniform', limits=(0.5, 2.0)))
     ns = Parameter('ns', value=0.96, fixed=True)
-    pipe = compile(Prior(omega_m=omega_m, A=A, ns=ns))
+    pipe = build(Prior(omega_m=omega_m, A=A, ns=ns))
 
     # ParameterPrior.logpdf is zero-lag: it subtracts the logpdf at the
     # distribution centre, so each term is 0 at the centre and < 0 elsewhere.
@@ -742,7 +742,7 @@ def test_prior_in_posterior():
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
     likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
-    pipe = compile(LogPosterior(likelihood=likelihood, prior=prior))
+    pipe = build(LogPosterior(likelihood=likelihood, prior=prior))
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     got = float(pipe(params))
@@ -779,7 +779,7 @@ def test_custom_prior_extra_condition():
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
     likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
     custom_prior = CustomPrior(A=A, ns=ns)
-    pipe2 = compile(Posterior(likelihood, custom_prior))
+    pipe2 = build(Posterior(likelihood, custom_prior))
     params2 = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     got2 = float(pipe2(params2))
     assert abs(got2 - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
@@ -810,7 +810,7 @@ def test_custom_prior_reparametrized():
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
     likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
 
-    pipe = compile(Posterior(likelihood, CustomPrior(omega_m=omega_m, A=A)))
+    pipe = build(Posterior(likelihood, CustomPrior(omega_m=omega_m, A=A)))
 
     # omega_m provided as 0.99 but prior reparametrizes it to A=0.3 → likelihood sees omega_m=0.3.
     params = {'z': 0.5, 'A': 0.3, 'ns': 0.96}
@@ -832,7 +832,7 @@ def test_posterior_value_and_grad():
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
     likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
-    pipe = compile(Posterior(likelihood, prior))
+    pipe = build(Posterior(likelihood, prior))
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     got = float(pipe(params))
@@ -876,7 +876,7 @@ def test_posterior_early_exit():
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
     likelihood = CountedLikelihood(spectrum=spectrum, data=DATA)
-    pipe = compile(Posterior(likelihood, prior))
+    pipe = build(Posterior(likelihood, prior))
     _call_count[0] = 0
 
     pipe({'omega_m': 0.35, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
@@ -905,7 +905,7 @@ def test_gaussian_likelihood_base():
     sigma = 0.1
     _, _, _, _, _, spectrum, _ = _make_nodes()
     lik = SpectrumLikelihood(spectrum=spectrum, data=DATA, covariance=np.eye(len(K)) * sigma ** 2)
-    pipe = compile(lik)
+    pipe = build(lik)
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     assert abs(float(pipe(params)) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
@@ -926,7 +926,7 @@ def test_analytic_marginalization():
 
     A = Parameter('A', value=A_val)
     alpha = Parameter('alpha', value=alpha_0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
-    pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
+    pipe = build(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
 
     params = {'A': A_val, 'alpha': alpha_0}
     got = float(pipe(params))
@@ -955,7 +955,7 @@ def test_best_fit_solved():
 
     A = Parameter('A', value=A_val)
     alpha = Parameter('alpha', value=alpha_0, derived='best')
-    pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
+    pipe = build(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
 
     params = {'A': A_val, 'alpha': alpha_0}
     got = float(pipe(params))
@@ -997,7 +997,7 @@ def test_mixed_marg_best():
     alpha_m = Parameter('alpha_m', value=0.0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_m))
     alpha_b = Parameter('alpha_b', value=0.0, derived='best')
     lik = TwoParamTheory(A=A, alpha_m=alpha_m, alpha_b=alpha_b, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
-    pipe = compile(Posterior(lik, Prior()))
+    pipe = build(Posterior(lik, Prior()))
 
     params = {'A': A_val, 'alpha_m': 0.0, 'alpha_b': 0.0}
     got = float(pipe(params))
@@ -1051,7 +1051,7 @@ def test_custom_jvp_linear_theory():
     ns = Parameter('ns', value=ns_val)
     alpha = Parameter('alpha', value=alpha_0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
     lik = MixedTheory(A=A, ns=ns, alpha=alpha, data=DATA, cov=np.eye(len(K)) * sigma_d ** 2)
-    pipe = compile(Posterior(lik, Prior()))
+    pipe = build(Posterior(lik, Prior()))
 
     params = {'A': A_val, 'ns': ns_val, 'alpha': alpha_0}
     got = float(pipe(params))
@@ -1137,7 +1137,7 @@ def test_two_stage_marginalization():
     lik   = PTTracer(pt=pt, alpha_0=alpha_0, alpha_1=alpha_1,
                      data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
 
-    pipe_marg = compile(Posterior(lik))
+    pipe_marg = build(Posterior(lik))
     # Full pipeline with alpha_0, alpha_1 as free params for reference logpdf_full.
     omega_m2 = Parameter('omega_m', value=omega_m_val)
     z2       = Parameter('z',       value=z_val)
@@ -1149,7 +1149,7 @@ def test_two_stage_marginalization():
     pt2      = PTTable(cosmo=cosmo2, A=A2, ns=ns2)
     lik2     = PTTracer(pt=pt2, alpha_0=alpha_02, alpha_1=alpha_12,
                         data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
-    pipe_full = compile(Posterior(lik2))
+    pipe_full = build(Posterior(lik2))
 
     # Perturb cosmo/bias params to get a non-trivial optimal alpha.
     params_marg = {'omega_m': omega_m_val + 0.05, 'z': z_val, 'A': A_val + 0.1, 'ns': ns_val}
@@ -1199,10 +1199,10 @@ def test_two_stage_marginalization():
 def test_two_stage_marginalization_multi_tracer():
     """Two-stage analytic marginalization with two independent Gaussian likelihoods sharing one cosmo.
 
-    Regression test for the bug where compile(stage_i_root, ...) only ran the sub-graph reachable
+    Regression test for the bug where build(stage_i_root, ...) only ran the sub-graph reachable
     from the last Stage-i node in topo order.  In a 2-tracer setup the PT for the first tracer
     (pt1) came earlier in topo order than the second tracer's full chain, so pt1 had stale
-    compile-time values in stage_i_flat — giving wrong Jacobians and wrong optimal alphas for
+    build-time values in stage_i_flat — giving wrong Jacobians and wrong optimal alphas for
     tracer 1.
 
     Validates (for each tracer independently):
@@ -1274,7 +1274,7 @@ def test_two_stage_marginalization_multi_tracer():
                      data=data1, covariance=np.eye(len(K)) * sigma_d ** 2)
     lik2  = PTTracer(pt=pt2, alpha_0=alpha_02, alpha_1=alpha_12,
                      data=data2, covariance=np.eye(len(K)) * sigma_d ** 2)
-    pipe_marg = compile(Posterior(SumLikelihood([lik1, lik2])))
+    pipe_marg = build(Posterior(SumLikelihood([lik1, lik2])))
 
     # ── full pipeline (alphas free) for reference ───────────────────────────────
     om2 = Parameter('omega_m',  value=omega_m_val)
@@ -1294,7 +1294,7 @@ def test_two_stage_marginalization_multi_tracer():
                       data=data1, covariance=np.eye(len(K)) * sigma_d ** 2)
     lik2f  = PTTracer(pt=pt2f, alpha_0=a02, alpha_1=a12,
                       data=data2, covariance=np.eye(len(K)) * sigma_d ** 2)
-    pipe_full = compile(Posterior(SumLikelihood([lik1f, lik2f])))
+    pipe_full = build(Posterior(SumLikelihood([lik1f, lik2f])))
 
     # Perturb cosmo/shape params so optimal alpha != 0 for both tracers.
     params_marg = {'omega_m': omega_m_val + 0.05, 'z': z_val,
@@ -1379,13 +1379,13 @@ def test_marginalization_nonzero_prior_center():
     # Reference: free param with the same prior — pipe_full evaluates (loglik + logprior) at alpha_opt.
     alpha_ref = Parameter('alpha', value=0., prior=dict(dist='norm', loc=mu_prior, scale=sigma_prior))
     lik_ref = PTTracer(B_col=B, alpha=alpha_ref, data=data, covariance=cov)
-    pipe_full = compile(Posterior(lik_ref))
+    pipe_full = build(Posterior(lik_ref))
 
     for derived_mode in ('best', 'marg'):
         alpha_val = Parameter('alpha', value=0., derived=derived_mode,
                               prior=dict(dist='norm', loc=mu_prior, scale=sigma_prior))
         lik = PTTracer(B_col=B, alpha=alpha_val, data=data, covariance=cov)
-        pipe_marg = compile(Posterior(lik))
+        pipe_marg = build(Posterior(lik))
 
         logpdf_marg = float(pipe_marg({}))
         alpha_opt = float(pipe_marg.params.select(derived=derived_mode)[0].value)
@@ -1456,14 +1456,14 @@ def test_marginalization_shaped_param():
 
     lik_ref = PTTracerScalar(B_mat=B_mat, alpha0=alpha_ref0, alpha1=alpha_ref1,
                              data=data, covariance=cov)
-    pipe_full = compile(Posterior(lik_ref))
+    pipe_full = build(Posterior(lik_ref))
 
     for derived_mode in ('best', 'marg'):
         # shape is inferred from value (np.zeros(2) → shape=(2,)) when not explicit.
         alpha = Parameter('alpha', value=np.zeros(2), derived=derived_mode)
 
         lik = PTTracer(B_mat=B_mat, alpha=alpha, data=data, covariance=cov)
-        pipe_marg = compile(Posterior(lik))
+        pipe_marg = build(Posterior(lik))
 
         logpdf_marg = float(pipe_marg({}))
         alpha_opt = np.array(pipe_marg.params.select(derived=derived_mode)[0].value)
@@ -1521,7 +1521,7 @@ def test_sum_likelihood():
 
     lik1 = Theory1(A=A, alpha=alpha, data=data1, cov=np.eye(len(K1)) * sigma1 ** 2)
     lik2 = Theory2(B=B, data=data2, cov=np.eye(len(K2)) * sigma2 ** 2)
-    pipe = compile(Posterior(SumLikelihood(lik1, lik2), Prior()))
+    pipe = build(Posterior(SumLikelihood(lik1, lik2), Prior()))
 
     A_val, B_val, alpha_val = 1.0, 0.5, 0.0
     params = {'A': A_val, 'B': B_val, 'alpha': alpha_val}
@@ -1572,7 +1572,7 @@ def test_derived_param_export():
     A = Parameter('A', value=1.0)
     ns = Parameter('ns', value=0.96)
     lik = TheoryWithDerived(A=A, ns=ns, data=data, sigma=sigma)
-    pipe = compile(lik)
+    pipe = build(lik)
 
     def expected_chi2(A_val, ns_val):
         r = np.array(data) - A_val * np.array(K_loc) ** ns_val
@@ -1604,7 +1604,7 @@ def test_derived_param_export():
 
 
 def test_init_params_immediate():
-    """Parameters declared in __init__ are available before compile(), and the pipeline still works."""
+    """Parameters declared in __init__ are available before build(), and the pipeline still works."""
     K_loc = jnp.linspace(0.01, 0.3, 20)
     data = jnp.array(np.random.default_rng(7).normal(0., 0.1, len(K_loc)))
 
@@ -1626,7 +1626,7 @@ def test_init_params_immediate():
     assert lik.A is A
     assert lik.ns is ns
 
-    pipe = compile(lik)
+    pipe = build(lik)
     got = float(pipe({'A': 1.2, 'ns': 0.95}))
     r = np.array(data) - 1.2 * np.array(K_loc) ** 0.95
     assert abs(got - float(-0.5 * r @ r / 0.1 ** 2)) < 1e-6
@@ -1635,11 +1635,16 @@ def test_init_params_immediate():
 # ── Calculator.clone() ────────────────────────────────────────────────────────
 
 def test_clone_same_result():
-    """clone() produces a graph that returns the same value as the original."""
+    """copy() produces a second graph that returns the same value as the original.
+
+    `copy`, not `clone`: a clone shares its dependencies, so building it reconfigures the
+    original's nodes and the original's graph refuses to run as stale. Two live graphs over one
+    tree is what `copy` is for.
+    """
     _, _, _, _, _, spectrum, _ = _make_nodes()
-    spec2 = spectrum.clone()
-    pipe1 = compile(spectrum)
-    pipe2 = compile(spec2)
+    spec2 = copy(spectrum)
+    pipe1 = build(spectrum)
+    pipe2 = build(spec2)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
 
@@ -1652,19 +1657,19 @@ def test_clone_shares_init_params():
     """
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
     spec2 = spectrum.clone()
-    pipe1 = compile(likelihood)
-    pipe2 = compile(spec2)
+    pipe1 = build(likelihood)
+    pipe2 = build(spec2)
     for name in pipe2.params.names():
         assert pipe1.params[name] is pipe2.params[name], \
             f"param {name!r} should be shared between original and shallow clone"
 
 
 def test_clone_mutation_independence():
-    """Mutating a param value in the clone does not affect the original pipeline."""
+    """Mutating a param value in the copy does not affect the original pipeline."""
     _, _, A, _, _, spectrum, likelihood = _make_nodes()
-    spec2 = spectrum.clone()
-    pipe1 = compile(likelihood)
-    pipe2 = compile(spec2)
+    spec2 = copy(spectrum)
+    pipe1 = build(likelihood)
+    pipe2 = build(spec2)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     val1_before = float(pipe1(params))
 
@@ -1680,7 +1685,7 @@ def test_clone_override_kwarg():
     _, _, _, _, _, spectrum, _ = _make_nodes()
     new_A = Parameter('A', value=2.0)
     spec2 = spectrum.clone(A=new_A)
-    pipe2 = compile(spec2)
+    pipe2 = build(spec2)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 2.0, 'ns': 0.96}
     D = 0.3 ** 0.55 / 1.5
     expected_pk = 2.0 * np.array(K) ** 0.96 * D ** 2
@@ -1688,29 +1693,42 @@ def test_clone_override_kwarg():
 
 
 def test_clone_with_external_dep():
-    """clone() shares dependency objects (shallow); pipelines called with explicit
-    params are unaffected by mutations to the shared defaults' stored values."""
+    """clone() shares dependency objects (shallow), so two graphs cannot both be built on a
+    clone and its original: the second build reconfigures the shared dependency and the first
+    graph refuses to run. copy() is the way to keep two; a Parameter passed in through the
+    constructor stays shared by it, and pipelines called with explicit params are unaffected
+    by mutations to the shared defaults' stored values."""
     omega_m = Parameter('omega_m', value=0.3)
     z = Parameter('z', value=0.5)
     A = Parameter('A', value=1.0)
     ns = Parameter('ns', value=0.96)
     cosmo = Cosmology(omega_m=omega_m, z=z)
     spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
-    spec2 = spectrum.clone()
-    pipe1 = compile(spectrum)
-    pipe2 = compile(spec2)
+
+    shallow = spectrum.clone()
+    assert shallow.cosmo is spectrum.cosmo
+    stale = build(spectrum)
+    build(shallow)
+    with pytest.raises(RuntimeError, match='no longer valid'):
+        stale({'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97})
+
+    spec2 = copy(spectrum)
+    assert spec2.cosmo is not spectrum.cosmo
+    pipe1 = build(spectrum)
+    pipe2 = build(spec2)
 
     params = {'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97}
     assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
 
-    # Mutate the shared omega_m's stored value; pipe1 called with explicit params
-    # overrides the stored value and so stays consistent.
-    pipe2.params['omega_m'].value = 0.5
     ref = jnp.array(pipe1(params))
-    assert jnp.allclose(ref, pipe1(params), atol=1e-8)  # explicit-param call unaffected
-    # pipe2() (no explicit params) uses the mutated default; z, A, ns stay at construction defaults (0.5, 1.0, 0.96)
-    D2 = 0.5 ** 0.55 / (1.0 + 0.5)
-    expected_pk2 = 1.0 * np.array(K) ** 0.96 * D2 ** 2
+    assert jnp.allclose(ref, pipe1(params), atol=1e-8)  # explicit-param call is reproducible
+
+    # An eager call leaves the tree at the values it used, so those two calls left z, A and ns
+    # at `params`'. Mutating the shared omega_m *after* them is therefore what a default-argument
+    # call reads -- had it been mutated before, the explicit calls would have overwritten it.
+    pipe2.params['omega_m'].value = 0.5
+    D2 = 0.5 ** 0.55 / (1.0 + params['z'])
+    expected_pk2 = params['A'] * np.array(K) ** params['ns'] * D2 ** 2
     assert jnp.allclose(pipe2(), jnp.array(expected_pk2), atol=1e-8)
 
 
@@ -1781,7 +1799,7 @@ def test_graph_derived_expression_param():
     b1 = Parameter('b1', value=1.5, prior={'dist': 'uniform', 'limits': [0., 3.]})
     b2 = Parameter('b2', value=1.5 * SCALE, derived=f'b1 * {SCALE!r}', depends=[b1],
                    prior={'dist': 'norm', 'loc': 1.5 * SCALE, 'scale': sigma_b2})
-    pipe = compile(Posterior(BiasTheory(b1, b2, data_b, sigma_lik), Prior(b1=b1, b2=b2)))
+    pipe = build(Posterior(BiasTheory(b1, b2, data_b, sigma_lik), Prior(b1=b1, b2=b2)))
 
     # at default params: logL = 0, b2 prior at centre (zero-lag) = 0 → total = 0
     assert abs(float(pipe())) < 1e-8
@@ -1793,7 +1811,7 @@ def test_graph_derived_expression_param():
     lrg_b2 = Parameter('LRG_ell0.b2', value=1.5 * SCALE,
                         derived=f'LRG_ell0.b1 * {SCALE!r}', depends=[lrg_b1],
                         prior={'dist': 'norm', 'loc': 1.5 * SCALE, 'scale': sigma_b2})
-    pipe_dot = compile(Posterior(BiasTheory(lrg_b1, lrg_b2, data_b, sigma_lik),
+    pipe_dot = build(Posterior(BiasTheory(lrg_b1, lrg_b2, data_b, sigma_lik),
                                  Prior(lrg_b1=lrg_b1, lrg_b2=lrg_b2)))
 
     assert abs(float(pipe_dot())) < 1e-8
@@ -1866,7 +1884,7 @@ def test_eager_after_trace_no_stale_state():
     cosmo = CachingCosmology(omega_m=omega_m)
     theory = TheoryWithCache(cosmo=cosmo, scale=scale)
 
-    pipe = compile(theory)
+    pipe = build(theory)
 
     params_P1 = {'omega_m': 0.3, 'scale': 2.0}
     params_P2 = {'omega_m': 0.3, 'scale': 3.0}
@@ -1944,12 +1962,12 @@ def test_pmap_compiled_graph(pipeline):
 
 
 def test_build_graph_auto_share_params():
-    """build_graph unifies same-named Parameters that are distinct objects across nodes.
+    """_trace_graph unifies same-named Parameters that are distinct objects across nodes.
 
     Two calculators constructed independently with a Parameter('omega_m', ...) should be
     compiled together without requiring an explicit share_params() call.
     """
-    from desilike.base import build_graph, compile
+    from desilike.base import _trace_graph, build
 
     omega_m_1 = Parameter('omega_m', value=0.3)
     z_1 = Parameter('z', value=0.5)
@@ -1980,11 +1998,11 @@ def test_build_graph_auto_share_params():
 
     root = SumSpectrum(spec1, spec2)
 
-    # build_graph should auto-share omega_m_1/omega_m_2 and z_1/z_2, not raise
-    ctx = build_graph(root)
+    # _trace_graph should auto-share omega_m_1/omega_m_2 and z_1/z_2, not raise
+    ctx = _trace_graph(root)
 
-    # compile should succeed and produce a graph with only 4 unique params
-    pipe = compile(root)
+    # build should succeed and produce a graph with only 4 unique params
+    pipe = build(root)
     assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
     assert len(pipe.params) == 4
 
@@ -2102,7 +2120,7 @@ def test_differentiate_hessian_array_param():
 
     x = Parameter('x', value=np.array([1.5, 2.5]))
     a = Parameter('a', value=2.0)
-    pipe = compile(JaxScale(ExtCubic(x), a))
+    pipe = build(JaxScale(ExtCubic(x), a))
     x0, x1, a0 = 1.5, 2.5, 2.0  # f(a, x) = a x0² x1
 
     jac = jacfwd(pipe, params=['a', 'x'], fd=dict(eps=1e-4))()
@@ -2141,7 +2159,7 @@ def test_differentiate_tree_return_derived():
             self.chi2.value = jnp.sum(residual ** 2) / self._sigma ** 2
             return result
 
-    pipe = compile(TheoryWithDerived(A=Parameter('A', value=1.0), ns=Parameter('ns', value=0.96), data=data, sigma=sigma))
+    pipe = build(TheoryWithDerived(A=Parameter('A', value=1.0), ns=Parameter('ns', value=0.96), data=data, sigma=sigma))
 
     def chi2_fn(params):
         residual = data - params['A'] * K_loc ** params['ns']
@@ -2174,7 +2192,7 @@ def test_differentiate_bad_arguments(pipeline):
 
 if __name__ == '__main__':
     _, _, _, _, _, _, likelihood = _make_nodes()
-    pipe = compile(likelihood)
+    pipe = build(likelihood)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     print('logL =', float(pipe(params)))
     print('grad =', jax.grad(pipe)(params))
@@ -2182,11 +2200,7 @@ if __name__ == '__main__':
     print('vmap logL =', jax.vmap(pipe)(batch))
 
 
-# ── build: the main entry point, `compile` its legacy name ───────────────────
-
-def test_compile_is_the_legacy_name_for_build():
-    assert compile is build
-
+# ── build: the main entry point ──────────────────────────────────────────────
 
 def test_build_returns_a_compiled_graph():
     graph = build(_make_nodes()[-1])
@@ -2197,7 +2211,7 @@ def test_build_returns_a_compiled_graph():
 def test_the_derivative_helpers_accept_an_uncompiled_calculator():
     """`jacfwd`/`hessian` route through `differentiate`, so one coercion serves all three."""
     from_calculator = jacfwd(_make_nodes()[-1], params=['A'])()['A']
-    from_graph = jacfwd(compile(_make_nodes()[-1]), params=['A'])()['A']
+    from_graph = jacfwd(build(_make_nodes()[-1]), params=['A'])()['A']
     assert np.allclose(np.asarray(from_calculator), np.asarray(from_graph), rtol=1e-12)
 
 
@@ -2273,7 +2287,7 @@ def test_jit_then_eager_does_not_leak_tracers(kind):
 
         posterior = Posterior(likelihood, CustomPrior(A=A, ns=ns, omega_m=omega_m))
 
-    pipe = compile(posterior)
+    pipe = build(posterior)
     point = {name: value for name, value in [('omega_m', 0.3), ('z', 0.5), ('A', 1.0), ('ns', 0.96)]
              if name in pipe.params}
     jitted = float(jax.jit(lambda params: pipe(params))(point))
@@ -2343,3 +2357,250 @@ def test_disagreeing_duplicate_params_raise():
                        second=Leaf(omega_m=Parameter('omega_m', value=0.3, prior={'limits': [0.2, 0.4]})))
     with pytest.raises(ValueError, match='omega_m'):
         build(disagreeing)
+
+    # The value is not part of the agreement: it is what a sample sets, not what the Variable
+    # declares, and two trees that met at different points still declare the same parameter.
+    limits = {'limits': [0.1, 0.5]}
+    moved = Pair(first=Leaf(omega_m=Parameter('omega_m', value=0.3, prior=limits)),
+                 second=Leaf(omega_m=Parameter('omega_m', value=0.31, prior=limits)))
+    assert build(moved).params.names() == ['omega_m']
+
+
+def test_copy_copies_arguments_before_the_calculator_that_receives_them():
+    """A constructor may reconfigure the calculators it is handed -- `self.template.update(k=...)`
+    is how every theory sizes its template -- so a copy must hand it copies, not originals.
+
+    Copying in reversed traversal order handed it the originals whenever a node was reachable by
+    two paths (a template through the theory's own arguments and through its `pt`). The original
+    template's `__init__` then re-ran under the graph built on it: it created a fresh cosmology,
+    the graph kept evaluating the old one, and the template read the new, empty one -- a
+    `KeyError` two steps later, at the first point the cache did not cover.
+    """
+    from desilike.base import Calculator, copy
+    from desilike.parameter import Parameter
+
+    class Template(Calculator):
+
+        def __init__(self, k=1., amplitude=None):
+            # created afresh at every __init__, the way a template creates its cosmology
+            self.amplitude = amplitude or Parameter('amplitude', value=1.)
+            self.k = k
+
+    class PT(Calculator):
+
+        def __init__(self, template=None):
+            self.template = template
+            self.template.update(k=2.)     # a theory sizes the template it is handed
+
+    class Theory(Calculator):
+
+        def __init__(self, template=None):
+            self.pt = PT(template=template)
+
+    template = Template()
+    theory = Theory(template=template)
+    amplitude = template.amplitude
+    twin = copy(theory)
+    assert template.amplitude is amplitude, 'copy() reconfigured the original template'
+    assert twin.pt.template is not template and twin.pt.template.k == 2.
+
+
+def test_a_build_restarts_the_tree_from_its_declaration_and_keeps_its_parameters():
+    """A build re-runs every `__init__`, so what another calculator wrote onto a node at an
+    earlier build is cleared and this graph's `__post_init__` pass registers exactly what this
+    graph needs -- two builds configure the tree identically instead of accumulating.
+
+    What a re-init keeps is the Parameters: the ones `__init__` creates are bound back by name to
+    the ones the tree held on entry, so a prior set through `get_params()` is the object the graph
+    reads.  That rebinding is only sound because no `__init__` builds a graph of its own (see
+    `Posterior.__post_init__`): one that did would be left holding the Parameters the re-init
+    created, which the rebinding cannot reach, and a traced call then stranded a tracer on them.
+    """
+    from desilike.base import Calculator, build, copy, get_params
+    from desilike.parameter import Parameter
+
+    class Cosmo(Calculator):
+
+        def __init__(self, requirements=()):
+            self.h = Parameter('h', value=0.7)
+            self.requirements = list(requirements)
+
+        def __call__(self):
+            self.value = self.h * 1.
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    class Template(Calculator):
+
+        def __init__(self, cosmo=None):
+            self.cosmo = cosmo or Cosmo()
+
+        def __post_init__(self, cosmo=None):
+            self.cosmo.requirements.append('pk')      # registered at every build
+
+        def __call__(self):
+            self.value = self.cosmo.value
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    cosmo = Cosmo(requirements=['age'])
+    cosmo.requirements.append('by hand')     # not an input, so a build does not keep it
+    template = Template(cosmo=cosmo)
+    h = get_params(template)['h']
+    h.update(prior={'limits': [0.6, 0.8]})
+
+    for _ in range(2):
+        graph = build(template)
+        # the constructor's own requirement, plus exactly one registration from this build
+        assert cosmo.requirements == ['age', 'pk']
+        assert graph.params['h'] is h and graph.params['h'].prior.limits == (0.6, 0.8)
+    # copy() binds the same way: the copy's fresh `h` is bound back to the original's
+    assert get_params(copy(template))['h'] is h
+
+
+def test_update_invalidates_the_graphs_built_over_the_node():
+    """`update()` re-runs `__init__` in place, so a graph built over the node would go on holding
+    dependencies that have just been replaced.  Reconfiguring is allowed -- it is how a theory
+    sizes the template it was handed, and how an emulator is swapped in -- and what it costs is
+    those graphs: each is invalidated, and says what invalidated it when next called."""
+    from desilike.base import Calculator, build, copy
+    from desilike.parameter import Parameter
+
+    class Scaled(Calculator):
+
+        def __init__(self, scale=2.):
+            self.amplitude = Parameter('amplitude', value=1.)
+            self.scale = scale
+
+        def __call__(self):
+            self.value = self.scale * self.amplitude
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    theory = Scaled()
+    theory.update(scale=3.)                      # nothing holds it yet
+    graph = build(theory)
+    assert float(graph(amplitude=1.)) == 3.
+
+    theory.update(scale=4.)                      # allowed, and it costs `graph`
+    with pytest.raises(RuntimeError, match='reconfigured') as excinfo:
+        graph(amplitude=1.)
+    # the message names what was reconfigured and where, not merely that something was
+    assert 'Scaled' in str(excinfo.value) and 'test_base.py' in str(excinfo.value)
+    assert float(build(theory)(amplitude=1.)) == 4.
+
+    # a copy is nobody's: reconfiguring it invalidates nothing
+    twin = copy(theory)
+    twin_graph = build(twin)
+    theory.update(scale=5.)
+    assert float(twin_graph(amplitude=1.)) == 4.
+
+
+def test_a_later_build_makes_the_earlier_graph_stale_and_copy_keeps_both():
+    """A build claims its nodes; a graph whose nodes a later build reconfigured refuses to run.
+
+    `__post_init__` writes setup onto the shared node objects, so a second build over the same
+    tree reconfigures them under the first graph. Measured before this check: deploying an
+    emulator beside the theory it came from left the theory's own graph answering every
+    cosmological parameter with a zero response, silently. Rebuilding supersedes; `copy()` is
+    how to keep two graphs alive, and it shares the Parameters so one sampled value feeds both.
+    """
+    from desilike.base import Calculator, build, copy, get_params
+    from desilike.parameter import Parameter
+
+    class Scaled(Calculator):
+
+        def __init__(self, amplitude=None, scale=2.):
+            self.amplitude = amplitude or Parameter('amplitude', value=1.)
+            self.scale = scale
+
+        def __post_init__(self, amplitude=None, scale=2.):
+            self._scale = float(scale)     # setup written onto the shared object
+
+        def __call__(self):
+            self.value = self._scale * self.amplitude
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    theory = Scaled()
+    first = build(theory)
+    assert float(first(amplitude=1.)) == 2.
+
+    # Rebuilding the same tree supersedes: the newer graph runs, the older refuses.
+    second = build(theory)
+    assert float(second(amplitude=1.)) == 2.
+    with pytest.raises(RuntimeError, match='no longer valid'):
+        first(amplitude=1.)
+
+    # A copy is an independent tree: both graphs stay alive, and the Parameter is shared.
+    twin = copy(theory)
+    third = build(twin)
+    assert float(second(amplitude=1.)) == 2. and float(third(amplitude=1.)) == 2.
+    # `amplitude` was created inside __init__, and the copy's __init__ created another; the copy
+    # binds it back to the original's by name, so both graphs read one object.
+    assert third.params.names() == ['amplitude'] and twin.amplitude is theory.amplitude
+    shared = Parameter('amplitude', value=1.)
+    assert copy(Scaled(amplitude=shared)).amplitude is shared
+
+    # The case that matters most: the node becomes a dependency of a DIFFERENT root. Building
+    # that root reconfigures it (its __init__ and __post_init__ run again), so the graph built
+    # on it alone is stale -- even though nothing about it visibly changed, since a build cannot
+    # know that cheaply.
+    class Doubled(Calculator):
+
+        def __init__(self, inner=None):
+            self.inner = inner
+
+        def __call__(self):
+            self.value = 2. * self.inner.value
+            return self.value
+
+        def tree_flatten(self):
+            return {'value': self.value}, None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.value = children['value']
+            return obj
+
+    wrapped = build(Doubled(inner=twin))
+    assert float(wrapped(amplitude=1.)) == 4.
+    with pytest.raises(RuntimeError, match='no longer valid'):
+        third(amplitude=1.)
+    # ... and the remedy: wrap a copy, and the graph on the original keeps working.
+    fourth = build(twin)
+    build(Doubled(inner=copy(twin)))
+    assert float(fourth(amplitude=1.)) == 2.

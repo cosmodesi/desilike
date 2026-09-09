@@ -74,7 +74,7 @@ predicted = poles(emulated_theory, CENTRE)
 print(f'\nemulated theory: max |dP/P| = '
       f'{np.max(np.abs(predicted / np.where(reference == 0., 1., reference) - 1.)):.2e}')
 
-# Validation is a comparison of pipelines -- compile both and evaluate. Report the scatter of
+# Validation is a comparison of pipelines -- build both and evaluate. Report the scatter of
 # the difference, not its mean: under importance reweighting a constant offset cancels exactly,
 # and only the scatter costs effective sample size.
 errors = []

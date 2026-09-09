@@ -39,7 +39,7 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         2007 factor ``(nobs - nbins - 2) / (nobs - 1)`` to the precision.
         Pass ``dict(correction='percival2014', nobs=<int>)`` to apply the
         Percival 2014 factor ``(1 + B(nbins - nparams)) / (1 + A + B(nparams + 1))``
-        where ``nparams`` is determined at compile time from ``get_params(self).select(input=True)``.
+        where ``nparams`` is determined at build time from ``get_params(self).select(input=True)``.
         Corrections can be combined, e.g. ``correction='hartlap2007+percival2014'``.
     precision : array, default=None
         Precision matrix to use directly (mutually exclusive with
@@ -69,16 +69,22 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         # Build joint lsstypes data tree so covariance matching works.
         data = [observable.data for observable in self.observables]
         self.data = types.ObservableTree(data, observables=[observable.name for observable in self.observables])
-        self.flatdata = self.data.value()
+        # The observables own their data Variables; this is the raw loaded vector, kept for the
+        # shape checks below and for `ndata`.  `__call__` reads the Variables, so overriding one
+        # by name reaches the logpdf while `self.data` stays the data as loaded.
+        self._flatdata = self.data.value()
+        # Also under the usual name, so `likelihood.flatdata` reads the data before any call, as
+        # it always has; `__call__` replaces it with what the observables' Variables hold.
+        self.flatdata = self._flatdata
 
         def check_matrix(matrix, name):
             matrix = np.atleast_2d(matrix).copy()
             if matrix.shape != (matrix.shape[0],) * 2:
                 raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
             mshape = '({0}, {0})'.format(matrix.shape[0])
-            shape = '({0}, {0})'.format(self.flatdata.size)
+            shape = '({0}, {0})'.format(self._flatdata.size)
             shape_obs = '({0}, {0})'.format(' + '.join([str(obs.flatdata.size) for obs in self.observables]))
-            if matrix.shape[0] != self.flatdata.size:
+            if matrix.shape[0] != self._flatdata.size:
                 raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
             return matrix
 
@@ -131,6 +137,11 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
             self.logger.info(f'...resulting in a Percival 2014 factor of {self.percival2014_factor:.4f}.')
             self.precision = self.precision / self.percival2014_factor
 
+    @property
+    def ndata(self):
+        return self._flatdata.size
+
     def __call__(self):
         self.flattheory = jnp.concatenate([obs.flattheory for obs in self.observables])
+        self.flatdata = jnp.concatenate([jnp.ravel(jnp.asarray(obs.flatdata)) for obs in self.observables])
         return super().__call__()

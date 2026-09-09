@@ -5,7 +5,7 @@ Classes
 -------
 BAOSpectrum2Template
     Fiducial-cosmology BAO template: power spectra and AP distances computed once from
-    cosmoprimo at compile time; scaled at evaluation time by free AP and growth-rate params.
+    cosmoprimo at build time; scaled at evaluation time by free AP and growth-rate params.
 FixedSpectrum2Template
     Fixed template: power spectrum and growth rate pinned to a fiducial cosmology, with
     no free parameters at all (no AP distortion, no growth-rate rescaling).
@@ -35,7 +35,7 @@ every concrete ``Spectrum2Template`` subclass must set the following attributes 
 time ``__call__`` returns (and include them in ``tree_flatten``/``tree_unflatten``):
 
     k, z            : output k-grid [h/Mpc] and effective redshift (set in __post_init__,
-                      not __call__ -- they are fixed at compile time). By existing
+                      not __call__ -- they are fixed at build time). By existing
                       convention ``k`` (but not ``z``) is included in ``tree_flatten``'s
                       aux dict, so it survives a tree_flatten/tree_unflatten round trip.
     pk_dd, pknow_dd : full and no-wiggle linear power spectra on `k`.
@@ -62,7 +62,7 @@ from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 # the analytic w0waCDM scalars ScalingScalars divides out; imported here as well because
 # callers have always read them off this module
-from cosmoprimo.emulators.analytic import fourier_analytic_scales  # noqa: F401
+from cosmoprimo.emulators.analytic import fourier_analytic_scales# noqa: F401
 from ._multitracer import propose_params_multitracer, assign_params
 
 
@@ -177,7 +177,7 @@ class BAOSpectrum2Template(Spectrum2Template):
     BAO power spectrum template based on a fixed fiducial cosmology.
 
     The fiducial power spectra, growth rates, and BAO distances are computed once from
-    cosmoprimo at compile time (``__post_init__``). At evaluation time (``__call__``),
+    cosmoprimo at build time (``__post_init__``). At evaluation time (``__call__``),
     power spectra are copied from fiducial arrays and the growth rate and distances are
     scaled by the free parameters.
 
@@ -769,7 +769,7 @@ class DirectSpectrum2Template(Spectrum2Template):
         self.cosmo = cosmo
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', engine='class', with_now=False, only_now=False, cosmo=None):
-        # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).
+        # Non-node setup: fiducial distances and fiducial PK (fixed at build time).
         from cosmoprimo import PowerSpectrumBAOFilter, constants
         if k is None:
             k = np.logspace(-3., 1., 400)
@@ -798,6 +798,9 @@ class DirectSpectrum2Template(Spectrum2Template):
         self.cosmo.add_requirements(reqs)
 
         self._fiducial = _get_fiducial(fiducial)
+        # As the BAO and ShapeFit templates do: `ResummedBAOWigglesPTSpectrum2Poles` reads it off
+        # whichever template it is handed, to set the scale of the resummation's j0 kernel.
+        self._rs_drag_fid = float(self._fiducial.rs_drag)
         self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
         self._DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
 
@@ -1711,7 +1714,7 @@ class ScalingScalars(Calculator):
         fourier = self._fiducial.get_fourier()
         self._sigma8_fid = float(fourier.sigma8_z(self.z, of='delta_cb'))
         self._f_fid = float(fourier.sigma8_z(self.z, of='theta_cb')) / self._sigma8_fid
-        self._fiducial_h = float(self._fiducial.h)
+        self._h_fid = float(self._fiducial.h)
         self._logA_fid = float(np.log(1e10 * self._fiducial.A_s))
         self._ref_fid = {name: float(value) for name, value
                               in fourier_analytic_scales(self.z, self._fiducial.clone(engine='eisenstein_hu')).items()}
@@ -1757,7 +1760,7 @@ class ScalingScalars(Calculator):
         from cosmoprimo.emulators.tools.utils import lagrange_weights
         sigma_r_values = jnp.ravel(self.cosmo.get_fourier().sigma_rz(of='delta_cb', z=self.z,
                                                                      r=np.array(self._sigma_r_nodes)))
-        r_target = 8. * self.cosmo['h'] / self._fiducial_h
+        r_target = 8. * self.cosmo['h'] / self._h_fid
         log_nodes = jnp.log(jnp.asarray(self._sigma_r_nodes))
         weights_target = lagrange_weights(log_nodes, jnp.log(r_target))
         weights_eight = lagrange_weights(log_nodes, jnp.log(8.))
@@ -1840,26 +1843,39 @@ class ScalingScalarsEmulator(CalculatorEmulator):
         """
         return [name for name in names if name not in ('w0_fld', 'wa_fld')]
 
-    def to_calculator(self, *args, **kwargs):
+    def to_calculator(self, calculator=None, center=True):
         """As the base, but a saved provider can say what it was built with.
 
-        `to_calculator` takes the calculator's constructor arguments from its caller, because in
-        general they are the caller's -- but this class builds its own calculator
-        (`calculator_from_template`), and the two arguments that takes are already in the anchors.
-        Without this a saved provider would rebuild at the ScalingScalars defaults, z = 1 and the
-        DESI fiducial, and be quietly wrong rather than fail.
+        The analytic core is evaluated on this emulator's own calculator, and a saved provider
+        carries none -- while its anchors say exactly what it was built with. Building it here
+        rather than letting the deployed object's constructor do it: the base never runs that
+        constructor. Without this the core would fall back to the ScalingScalars defaults, z = 1
+        and the DESI fiducial, and be quietly wrong rather than fail.
         """
-        if not (args or kwargs) and getattr(self, 'calculator', None) is None:
+        if calculator is None:
+            calculator = getattr(self, 'calculator', None)
+        if calculator is None:
             from cosmoprimo import Cosmology
 
-            kwargs = {'z': self._anchors['z'],
-                      'fiducial': Cosmology.from_state(self._anchors['fiducial'])}
-        return super().to_calculator(*args, **kwargs)
+            calculator = self._calculator_cls(z=self._anchors['z'],
+                                              fiducial=Cosmology.from_state(self._anchors['fiducial']))
+        deployed = super().to_calculator(calculator=calculator, center=center)
+        # The analytic core reads the fiducial constants `__post_init__` latches -- `_fiducial`,
+        # `_h_fid`, `_sigma8_fid`, `_DM_fid`, the sigma_R nodes -- and the base runs no
+        # constructor, so the deployed object has none of them. Run that setup on the source
+        # calculator and hand over whatever it produced that the deployed object is missing:
+        # one place, and no list of attribute names here to drift out of step with it.
+        args, kwargs = calculator._init
+        calculator.__post_init__(*args, **kwargs)
+        for name, value in calculator.__dict__.items():
+            if name.startswith('_') and not hasattr(deployed, name):
+                setattr(deployed, name, value)
+        return deployed
 
     def __init__(self, calculator, space, **options):
         """As the base, plus the anchors the analytic core is written against.
 
-        They are set in ``__post_init__``, i.e. at compile, so they exist once the base has
+        They are set in ``__post_init__``, i.e. at build, so they exist once the base has
         built the graph -- and reading them here rather than on the first ``compute`` means a
         training restored entirely from a checkpoint has them too.
         """

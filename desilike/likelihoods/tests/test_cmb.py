@@ -25,7 +25,7 @@ import numpy as np
 import jax
 import pytest
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.cmb import (TTTEEEHighlPlanckNPIPECamspecLikelihood,
                                        TTHighlPlanckNPIPECamspecLikelihood,
@@ -69,7 +69,7 @@ def test_likelihood(tmp_path, Likelihood):
     assert like.has_foregrounds
 
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
 
     logpdf = pipe(defaults)
@@ -112,7 +112,7 @@ def test_camspec_npipe_lite_install(tmp_path, monkeypatch):
     CamspecNPIPELiteLikelihood.install(Installer())
 
     like = CamspecNPIPELiteLikelihood()
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
@@ -133,7 +133,7 @@ def test_act_dr6_spt_lensing_install(tmp_path, monkeypatch):
     ACTDR6SPTLensingLikelihood.install(Installer())
 
     like = ACTDR6SPTLensingLikelihood(variant='actplanck_baseline')
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'

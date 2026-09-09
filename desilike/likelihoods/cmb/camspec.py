@@ -6,7 +6,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import GaussianLikelihood
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 
 
 class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
@@ -131,7 +131,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
             covariance = np.fromfile(file, dtype=np.float32)
         if nx ** 2 != covariance.shape[0]:
             raise ValueError('Covariance size {} does not match expected {}**2'.format(covariance.shape[0], nx))
-        self.flatdata = jnp.asarray(np.concatenate(flatdata)[mask])
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.concatenate(flatdata)[mask]))
         covariance = covariance.reshape(nx, nx)[np.ix_(mask, mask)].astype('f8')
         # Inverting the full (~11000x11000) matrix takes ~1 min; cache per (select_cls, ell_ranges).
         cache_key = '_'.join(self.select_cls)
@@ -364,7 +364,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
         covmat = sacc_data.covariance.covmat
         sub_cov = covmat[np.ix_(all_idx, all_idx)]
 
-        self.flatdata = jnp.asarray(np.concatenate([m['mu'] for m in spec_meta]))
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.concatenate([m['mu'] for m in spec_meta])))
         self.precision = jnp.asarray(np.linalg.inv(sub_cov))
         self._spec_meta = spec_meta
         self._ellmax = int(max(m['ell'].max() for m in spec_meta))

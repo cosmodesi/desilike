@@ -866,7 +866,7 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
 
         if 'power' in broadband or broadband == 'even-power':
             # Power-law: al params live on this class; pt is a bare PT.
-            # Store as ordered list; build_graph discovers them via self.bb_params.
+            # Store as ordered list; _trace_graph discovers them via self.bb_params.
             bb_vc = VariableCollection([p for p in vc if p.basename in bb_basenames])
             self.bb_params = list(bb_vc)
             if pt is None:
@@ -880,7 +880,7 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
             bl_vc = VariableCollection([p for p in vc if p.basename in bb_basenames and p.basename.startswith('bl')])
             self.pt = self._default_tracer_cls(broadband=broadband, tracers=tracers, pt=pt, params=al_vc + pt_vc, **kwargs)
             self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
-            # bl params: real-space correction; stored as list so build_graph discovers them.
+            # bl params: real-space correction; stored as list so _trace_graph discovers them.
             self.bl_params = list(bl_vc)
 
         if s is None:

@@ -25,7 +25,7 @@ import numpy as np
 import jax.numpy as jnp
 import lsstypes as types
 
-from ...base import Calculator
+from ...base import Calculator, Variable
 from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, ShapeFitTheory, TurnOverTheory
 
 
@@ -127,20 +127,21 @@ class BaseCompressionObservable(Calculator):
     def __init__(self, theory, data=None, covariance=None, parameters=None, name='compressed'):
         self.theory = theory
         self.name = str(name)
-        self.data, self.flatdata, self.parameters, self.covariance = _format_compression_data(
+        self.data, flatdata, self.parameters, self.covariance = _format_compression_data(
             data=data, covariance=covariance, parameters=parameters)
+        self.flatdata = Variable(f'{self.name}.flatdata', value=jnp.asarray(flatdata))
 
     def __call__(self):
         self.flattheory = jnp.array([getattr(self.theory, param) for param in self.parameters])
         return self.flattheory
 
     def tree_flatten(self):
-        return [self.flattheory, self.flatdata], None
+        return [self.flattheory], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory, obj.flatdata = children
+        obj.flattheory, = children
         return obj
 
 

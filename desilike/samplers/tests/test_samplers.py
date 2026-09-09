@@ -5,7 +5,7 @@ from jax import numpy as jnp
 
 import desilike.samplers as samplers
 from desilike.samples import MCSamples
-from desilike.base import compile, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
+from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter
 from desilike.distributed import get_mpicomm
 
@@ -115,7 +115,7 @@ def make_likelihood(flatdata=(0.4, 0.6)):
     b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]),
                   ref=dict(dist='norm', loc=0.6, scale=1. / np.sqrt(10.)))
     like = Likelihood(a, b)
-    graph = compile(Posterior(like, Prior(a, b)))
+    graph = build(Posterior(like, Prior(a, b)))
     graph.flatdata = like.flatdata.copy()
     graph.precision = like.precision.copy()
     graph.mpicomm = get_mpicomm()
@@ -218,7 +218,7 @@ def test_kernel_solved(likelihood, key):
 
     a = Parameter('a', prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1))
     b = Parameter('b', derived='best')
-    solved_likelihood = compile(Posterior(Likelihood(a, b), Prior(a)))
+    solved_likelihood = build(Posterior(Likelihood(a, b), Prior(a)))
 
     def best_fit_b_given_a(like, a):
         data = like.flatdata
@@ -412,7 +412,7 @@ def test_pocomc_gaussian_proposal(rescale, use_proposal):
             self.flattheory = jnp.array([self.a, self.b])
             return super().__call__()
 
-    graph = compile(Posterior(Likelihood(a, b), Prior(a, b)))
+    graph = build(Posterior(Likelihood(a, b), Prior(a, b)))
 
     proposal_cov = None
     if use_proposal:
@@ -929,7 +929,7 @@ if __name__ == '__main__':
         b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]),
                     ref=dict(dist='norm', loc=0.6, scale=1. / np.sqrt(10.)))
         like = Likelihood(a, b)
-        graph = compile(Posterior(like, Prior(a, b)))
+        graph = build(Posterior(like, Prior(a, b)))
         graph.flatdata = like.flatdata.copy()
         graph.precision = like.precision.copy()
         graph.mpicomm = get_mpicomm()
@@ -968,7 +968,7 @@ def test_kernel_nparallel_batches(likelihood, key):
 
 def test_sampler_accepts_an_uncompiled_calculator():
     """`Sampler(posterior)` compiles a Calculator rather than failing on `.params` -- but only the
-    no-argument form; `compile(root, output=...)` is a choice a sampler cannot make.  An already
+    no-argument form; `build(root, output=...)` is a choice a sampler cannot make.  An already
     compiled graph is stored as-is: compiling runs the whole pipeline, so a needless recompile is
     a real cost, not a formality.
     """
@@ -994,7 +994,7 @@ def test_sampler_accepts_an_uncompiled_calculator():
     assert [param.name for param in sampler.varied_params] == ['a']
     assert isinstance(sampler.posterior, CompiledGraph)
 
-    already = compile(posterior())
+    already = build(posterior())
     assert samplers.Sampler(already, samplers.Grid()).posterior is already
 
 

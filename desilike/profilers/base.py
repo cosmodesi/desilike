@@ -28,7 +28,7 @@ class Kernel:
 
     logger = logging.getLogger('Kernel')
 
-    #: Set ``True`` for gradient-based kernels; the profiler will then compile
+    #: Set ``True`` for gradient-based kernels; the profiler will then build
     #: ``jax.grad(chi2)`` and pass it to :meth:`run`.
     with_gradient: bool = False
 
@@ -1331,7 +1331,7 @@ def _jit_and_grad(fn, with_gradient=False):
     fn : callable
         A JAX-traceable scalar function ``f(x) -> scalar``.
     with_gradient : bool
-        When ``True``, also compile ``jax.grad(fn)``; otherwise *grad_fn*
+        When ``True``, also build ``jax.grad(fn)``; otherwise *grad_fn*
         is ``None``.
 
     Returns

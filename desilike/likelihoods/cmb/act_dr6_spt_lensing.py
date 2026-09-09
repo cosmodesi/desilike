@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import GaussianLikelihood
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 
 
 def _pp_to_kk(cl_pp, ells):
@@ -107,7 +107,7 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
         else:
             self._ellmax = self._nlen_act - 1   # 2999
 
-        self.flatdata = jnp.asarray(data['data_binned_clkk'])
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(data['data_binned_clkk']))
         self.precision = jnp.asarray(data['cinv'])
 
         self._binmat_act = jnp.asarray(data['binmat_act'])

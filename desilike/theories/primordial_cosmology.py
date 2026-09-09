@@ -112,7 +112,7 @@ class PrimordialCosmology(Calculator):
         """
         return VariableCollection()
 
-    def __init__(self, *args, params=None, fiducial=None, **kwargs):
+    def __init__(self, *args, params=None, fiducial=None, requirements=None, **kwargs):
         # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
         if params is None:
             # Forward fiducial only when given, so that an omitted fiducial falls through
@@ -131,7 +131,7 @@ class PrimordialCosmology(Calculator):
         self._results = {}
         # Out-of-range guard state, here rather than in `__post_init__` so that it exists on
         # every instance -- a caller may ask an uncompiled cosmology what it enforces -- and so
-        # that the warn-once latch is per object: `__post_init__` runs at every compile, and
+        # that the warn-once latch is per object: `__post_init__` runs at every build, and
         # resetting it there would re-emit the same warning on each one.
         self._param_clip_ranges = {}
         self._param_values = {}
@@ -151,6 +151,12 @@ class PrimordialCosmology(Calculator):
                 req = (f'params.{param.basename}', {})
             self._get_derived[param.name] = req
             self.add_requirements({req[0]: req[1]})
+        # Requirements the caller declares are an input, like the parameters. A build re-runs
+        # `__init__` -- that is what clears the ones downstream calculators register at their
+        # `__post_init__` -- so a requirement registered by hand on a bare cosmology would not
+        # survive it; one passed here does.
+        if requirements is not None:
+            self.add_requirements(requirements)
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -159,7 +165,9 @@ class PrimordialCosmology(Calculator):
 
         Called in the downstream calculator's ``__post_init__``.  Multiple callers sharing the
         same cosmology instance are supported: z and k grids are union-merged so only one
-        combined evaluation is needed at runtime.
+        combined evaluation is needed at runtime.  A build re-runs ``__init__`` and so starts
+        from an empty registry, which is what keeps repeated builds from accumulating; a
+        requirement declared by hand therefore goes to the constructor (``requirements=``).
 
         Parameters
         ----------
@@ -228,7 +236,7 @@ Answered for every cosmology that flattens to its
             # The routed sections anchor their analytic cores on a cosmoprimo fiducial (see
             # `_RoutedSectionEmulator.set_ref_fiducial`), which an ACE cosmology only carries
             # when it converts through one. Anything else gets the generic expansion.
-            # Not a test on `_fiducial` itself: that is set at compile, and this is asked of
+            # Not a test on `_fiducial` itself: that is set at build, and this is asked of
             # cosmologies that have only been constructed.
             return None
         sectors = {_sector(spec_key[0]) for spec_key in self._requirements}
@@ -299,14 +307,14 @@ Answered for every cosmology that flattens to its
         """Proxy implementation: populate _results with zero placeholders if not already set.
 
         Concrete subclasses (e.g. CosmoprimoCosmology) override this with a real solver.
-        When used as a pre-loaded proxy (results injected externally via compile's ``input``
+        When used as a pre-loaded proxy (results injected externally via build's ``input``
         callable before the graph runs), this is a no-op because _results is already populated.
         """
         params = {param.basename: param.value for param in self.params}
         self._param_values = params
         for spec_key, spec in self._requirements.items():
             if spec_key not in self._results:
-                shape = tuple(spec[coord].size for coord in _COORDS)
+                shape = tuple(spec[coord].size for coord in _COORDS if coord in spec)  # only the coords this spec was registered with
                 self._results[spec_key] = jnp.zeros(shape)
         # Here set derived_params
         for param, getter in self._get_derived.items():
@@ -320,8 +328,8 @@ Answered for every cosmology that flattens to its
             if spec_key in self._results:
                 leaves.append(self._results[spec_key])
             else:
-                # Placeholder of correct shape for compile-time structure inference.
-                shape = tuple(spec[coord].size for coord in _COORDS)
+                # Placeholder of correct shape for build-time structure inference.
+                shape = tuple(spec[coord].size for coord in _COORDS if coord in spec)  # only the coords this spec was registered with
                 leaves.append(jnp.zeros(shape))
         # Derived param values as leaves so they propagate as JAX Tracers through the
         # external (pure_callback) path and appear correctly in derived_dict.
@@ -1298,7 +1306,7 @@ class ACECosmology(PrimordialCosmology):
             if not isinstance(engine, ACECosmology):
                 return {}
             cosmology = engine
-            # `_param_clip_ranges` is filled by `_load_emulators_for_new_requirements`, at compile.
+            # `_param_clip_ranges` is filled by `_load_emulators_for_new_requirements`, at build.
             # Once it is, it is what the out-of-range guard actually enforces; before that, the
             # engine spec the instance was constructed with is all there is.
             if cosmology._param_clip_ranges:
@@ -2607,20 +2615,20 @@ class CosmologyEmulator(_SectionEmulator):
                      if _sector(spec_key[0]) == name]
             if not specs:
                 continue
-            # A cosmology like the emulated one, registered with this sector's requirements
-            # only. Fresh parameter nodes, not the pipeline's: one node shared by two separately
-            # compiled graphs is its own bug. A derived parameter goes with the sector its
-            # getter is read from.
+            # A cosmology like the emulated one, declared with this sector's requirements only
+            # -- through the constructor, since a build starts a cosmology from its declaration.
+            # Fresh parameter nodes, not the pipeline's: training sets values on them, and the
+            # pipeline's should not move. A derived parameter goes with the sector its getter is
+            # read from.
             params = [param.clone() for param in root.params]
             params += [param.clone() for param in root.derived_params
                        if _sector(root._get_derived[param.name][0]) == name]
-            args, kwargs = root._init
-            sub = type(root)(*args, **{**kwargs, 'params': VariableCollection(params)})
             requirements = {}
             for spec_key, spec in specs:
                 requirements.setdefault(spec_key[0], []).append(
                     {**spec['static'], **{coord: spec[coord] for coord in _COORDS if coord in spec}})
-            sub.add_requirements(requirements)
+            args, kwargs = root._init
+            sub = type(root)(*args, **{**kwargs, 'params': VariableCollection(params), 'requirements': requirements})
             # `exact` belongs to the routed sectors (see `_RoutedSectionEmulator.__init__`)
             self._sectors[name] = cls(sub, space, **(options if name == 'harmonic' else dict(options, exact=exact)))
         if len(self._sectors) < 2:
@@ -2664,8 +2672,8 @@ class CosmologyEmulator(_SectionEmulator):
             raise RuntimeError(f'no sector predicts the leaves {missing}')
         return out
 
-    def to_calculator(self, *args, calculator=None, **kwargs):
-        deployed = super().to_calculator(*args, calculator=calculator, **kwargs)
+    def to_calculator(self, calculator=None, center=True):
+        deployed = super().to_calculator(calculator=calculator, center=center)
         # a sector read back from a file has no calculator, and the harmonic one reads the
         # fiducial's neutrino content off it whenever that is not varied
         for sub in self._sectors.values():

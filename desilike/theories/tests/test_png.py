@@ -23,9 +23,9 @@ def _make_template(z=1., engine='eisenstein_hu'):
 def _eval(theory, output='poles', **overrides):
     """Compile *theory* and evaluate it at its default parameters (with optional
     *overrides*); return the named output attribute as a numpy array."""
-    from desilike.base import compile, params
-    pipe = compile(theory)
-    values = {par.name: par._value for par in params(theory)}
+    from desilike.base import build, get_params
+    pipe = build(theory)
+    values = {par.name: par._value for par in get_params(theory)}
     values.update(overrides)
     pipe(values)
     return np.asarray(getattr(theory, output))
@@ -33,8 +33,8 @@ def _eval(theory, output='poles', **overrides):
 
 def _varied(theory):
     """Return the list of non-fixed parameters of *theory*."""
-    from desilike.base import params
-    return list(params(theory).select(fixed=False))
+    from desilike.base import get_params
+    return list(get_params(theory).select(fixed=False))
 
 
 # ── _alpha_png ────────────────────────────────────────────────────────────────
@@ -156,10 +156,10 @@ class TestPNGTracerSpectrum2Poles:
     def test_cross(self):
         """Cross-spectrum (two tracers) runs and namespaces parameters."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
-        from desilike.base import params
+        from desilike.base import get_params
         k = np.linspace(0.02, 0.3, 60)
         theory = PNGTracerSpectrum2Poles(k=k, tracers=('LRG', 'QSO'), mode='b-p', template=_make_template())
-        names = [p.name for p in params(theory)]
+        names = [p.name for p in get_params(theory)]
         assert 'LRG.b1' in names and 'QSO.b1' in names
         assert 'LRGxQSO.sn0' in names
         assert 'fnl_loc' in names  # shared, unnamespaced
@@ -182,11 +182,11 @@ class TestPNGTracerSpectrum2Poles:
     def test_jax_grad(self):
         """jax.grad runs without error through the full pipeline."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
-        from desilike.base import compile
+        from desilike.base import build
         k = np.linspace(0.02, 0.3, 30)
         theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
-        pipe = compile(theory)
-        from desilike.base import params as get_params
+        pipe = build(theory)
+        from desilike.base import get_params as get_params
         param_vals = {p.name: p._value for p in get_params(theory)}
         grad = jax.grad(lambda pv: jnp.sum(pipe(pv)))(param_vals)
         assert all(np.isfinite(np.asarray(v)) for v in grad.values()), "non-finite gradient"

@@ -88,15 +88,15 @@ def test_to_calculator_gives_back_the_original_class():
     nodes, not from attributes set on the instance. On a real theory the cosmological parameters
     live on a sub-calculator (the template) and are not attributes of the theory at all.
     """
-    from desilike.base import compile
+    from desilike.base import build
 
     emulated = Emulator(toy(), box()).train(budget=3).to_calculator()
     assert isinstance(emulated, Toy)
 
     point = {'h': 0.72, 'amplitude': 1.3}
     reference = toy()
-    compile(emulated)(point)
-    compile(reference)(point)
+    build(emulated)(point)
+    build(reference)(point)
     assert np.allclose(emulated.pk, reference.pk, rtol=1e-6)
 
 
@@ -113,14 +113,14 @@ def test_space_is_derived_from_the_parameters_when_omitted():
     assert set(space.params) == {'h', 'amplitude'}
     assert space.limits['h'] == (0.65, 0.75)
 
-    from desilike.base import compile
+    from desilike.base import build
 
     emulated = Emulator(calculator).train(budget=3).to_calculator()  # space derived
     point = {'h': 0.70, 'amplitude': 1.05}
     reference = Toy(h=Parameter('h', value=0.7, ref={'limits': [0.65, 0.75]}),
                     amplitude=Parameter('amplitude', value=1., ref={'limits': [0.8, 1.2]}))
-    compile(emulated)(point)
-    compile(reference)(point)
+    build(emulated)(point)
+    build(reference)(point)
     assert np.allclose(emulated.pk, reference.pk, rtol=1e-6)
 
 
@@ -150,30 +150,30 @@ def test_emulated_calculator_substitutes_into_a_parent():
     `update()` is only legal during construction (it raises on a constructed node), so the
     supported route is `replace(parent, old, new)` followed by a recompile.
     """
-    from desilike.base import compile
+    from desilike.base import build
 
     child = toy()
     parent = Parent(child=child)
-    reference = compile(parent)({'h': 0.71, 'amplitude': 1.4})
+    reference = build(parent)({'h': 0.71, 'amplitude': 1.4})
 
     emulated_child = Emulator(child, box()).train(budget=3).to_calculator()
     swapped = Parent(child=emulated_child)
-    graph = compile(swapped)
+    graph = build(swapped)
     assert {param.name for param in graph.params} >= {'h', 'amplitude'}
     assert np.allclose(np.asarray(graph({'h': 0.71, 'amplitude': 1.4})),
                        np.asarray(reference), rtol=1e-5)
 
 
 def test_replace_swaps_the_dependency_in_place():
-    from desilike.base import compile, replace
+    from desilike.base import build, replace
 
     child = toy()
     parent = Parent(child=child)
-    reference = compile(parent)({'h': 0.69, 'amplitude': 0.9})
+    reference = build(parent)({'h': 0.69, 'amplitude': 0.9})
 
     emulated_child = Emulator(child, box()).train(budget=3).to_calculator()
     replace(parent, child, emulated_child)
-    assert np.allclose(np.asarray(compile(parent)({'h': 0.69, 'amplitude': 0.9})),
+    assert np.allclose(np.asarray(build(parent)({'h': 0.69, 'amplitude': 0.9})),
                        np.asarray(reference), rtol=1e-5)
 
 
@@ -201,13 +201,13 @@ def test_a_subclass_can_divide_out_what_a_theory_knows():
 
 def test_emulate_builds_and_trains_in_one_call():
     """`Emulator` builds; `emulate` also pays."""
-    from desilike.base import compile
+    from desilike.base import build
 
     emulated = emulate(toy(), box(), budget=3).to_calculator()
     point = {'h': 0.72, 'amplitude': 1.3}
     reference = toy()
-    compile(emulated)(point)
-    compile(reference)(point)
+    build(emulated)(point)
+    build(reference)(point)
     assert np.allclose(emulated.pk, reference.pk, rtol=1e-6)
 
 
@@ -221,13 +221,13 @@ def test_an_emulated_calculator_responds_to_parameters_on_a_SUB_calculator():
     returned the fiducial spectrum whatever it was asked for -- silently, and identically to a
     plain emulator, which is what makes it worth a test.
     """
-    from desilike.base import compile
+    from desilike.base import build
 
     child = toy()
     parent = Parent(child=child)
     emulated = emulate(parent, Space(bounds={'h': (0.6, 0.8), 'amplitude': (0.5, 2.)}),
                        budget=3).to_calculator()
-    graph = compile(emulated)
+    graph = build(emulated)
 
     def at(point):
         # an emulated calculator's __call__ returns `self`: it is meant as a dependency, read
@@ -238,7 +238,7 @@ def test_an_emulated_calculator_responds_to_parameters_on_a_SUB_calculator():
     low, high = at({'h': 0.65, 'amplitude': 0.8}), at({'h': 0.75, 'amplitude': 1.9})
     assert not np.isclose(low, high), 'the emulated calculator ignored its parameters'
 
-    reference = compile(Parent(child=toy()))
+    reference = build(Parent(child=toy()))
     assert np.isclose(low, float(np.asarray(reference({'h': 0.65, 'amplitude': 0.8}))), rtol=1e-5)
     assert np.isclose(high, float(np.asarray(reference({'h': 0.75, 'amplitude': 1.9}))), rtol=1e-5)
 
@@ -300,7 +300,7 @@ class WithDerived(Calculator):
 def test_derived_parameters_are_emulated_and_written_back():
     """A derived quantity is an output of the pipeline. Emulating only the pytree state leaves
     anything downstream reading it stuck on the construction-time default for ever."""
-    from desilike.base import compile
+    from desilike.base import build
 
     calculator = WithDerived(h=Variable('h', value=0.7),
                              amplitude=Variable('amplitude', value=1.))
@@ -313,7 +313,7 @@ def test_derived_parameters_are_emulated_and_written_back():
     assert np.isclose(np.asarray(predicted['derived.scale']), 1.3 * 0.72**2, rtol=1e-6)
 
     emulated = emu.to_calculator()
-    graph = compile(emulated)
+    graph = build(emulated)
     _, derived = graph(point, return_derived=True)
     assert np.isclose(np.asarray(derived['scale']), 1.3 * 0.72**2, rtol=1e-6)
     # and it moves, which is the whole point
@@ -503,3 +503,27 @@ def test_space_says_which_parameter_declares_no_range():
     param = Parameter('h', value=0.7, prior={'dist': 'norm', 'loc': 0.7, 'scale': np.inf})
     with pytest.raises(ValueError, match="'h'"):
         Space(_toy_with(param))
+
+
+def test_a_bare_deploy_carries_the_trained_grid_not_the_default():
+    """`to_calculator()` with no arguments rebuilds a tracer whose k and ells are the trained ones.
+
+    The constructor runs with its defaults -- there is nothing else to run it with for an emulator
+    read back from a file -- but the grid that decides what `poles` means is in `tree_flatten`'s
+    aux, and `tree_unflatten` restores it on every evaluation. Without that the deployed object
+    carried the default grid beside poles computed on the trained one, which `plot()` reads both of.
+    """
+    from desilike.base import build
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, KaiserTracerSpectrum2Poles
+
+    k_trained = np.linspace(0.05, 0.2, 7)
+    theory = KaiserTracerSpectrum2Poles(k=k_trained, ells=(0, 2),
+                                        template=DirectSpectrum2Template(z=0.5, fiducial='DESI'))
+    default_k = KaiserTracerSpectrum2Poles().k
+    assert not (np.shape(default_k) == k_trained.shape and np.allclose(default_k, k_trained))
+
+    emulator = Emulator(theory, Space(bounds={'b1': (1.5, 2.5)}), budget=1).train()
+    deployed = emulator.to_calculator()
+    build(deployed)(b1=2.)
+    assert np.allclose(deployed.k, k_trained) and tuple(deployed.ells) == (0, 2)
+    assert np.shape(deployed.poles) == (2, k_trained.size)

@@ -8,7 +8,7 @@ ones.
 import numpy as np
 import pytest
 
-from desilike.base import compile, replace
+from desilike.base import build, replace
 from desilike.emulators import Emulator, Space, CalculatorEmulator
 from desilike.theories.galaxy_clustering.full_shape import FOLPSDEmulator
 
@@ -38,7 +38,7 @@ def theory():
 
 
 def evaluate(calculator, point):
-    graph = compile(calculator)
+    graph = build(calculator)
     names = [param.name for param in graph.params if not param.derived]
     return np.asarray(graph({name: value for name, value in point.items() if name in names}))
 
@@ -83,7 +83,7 @@ def test_the_background_scalars_are_routed_exactly(emulators):
     moved = {**CENTRE, 'w0_fld': -0.85, 'logA': 3.15}
 
     reference = FOLPSPTSpectrum2Poles(template=template())
-    graph = compile(reference)
+    graph = build(reference)
     names = [param.name for param in graph.params if not param.derived]
     graph({name: value for name, value in moved.items() if name in names})
     truth = reference.tree_flatten()[0]
@@ -108,7 +108,7 @@ def test_to_calculator_agrees_with_predict(emulators):
     the fiducial state, indistinguishably from a plain emulator."""
     emulator, swapped = emulators['folpsd']
     fast = emulator.to_calculator()
-    graph = compile(fast)
+    graph = build(fast)
     names = [param.name for param in graph.params if not param.derived]
     moved = {**CENTRE, 'w0_fld': -0.85, 'logA': 3.15}
     graph({name: value for name, value in moved.items() if name in names})
@@ -217,10 +217,10 @@ def test_every_routing_predicts(label):
                            np.asarray(scalars[name]), rtol=1e-12), name
 
     # ... and it deploys
-    from desilike.base import compile
+    from desilike.base import build
 
     fast = emulator.to_calculator()
-    graph = compile(fast)
+    graph = build(fast)
     names = [param.name for param in graph.params if not param.derived]
     graph({name: value for name, value in point.items() if name in names})
     assert np.all(np.isfinite(np.asarray(fast.sigma8)))
@@ -330,15 +330,15 @@ def test_a_template_that_routes_everything_says_so():
 
 
 def test_a_saved_emulator_can_be_deployed(tmp_path):
-    """`Emulator.read(path).to_calculator(template=...)`.
+    """`Emulator.read(path).to_calculator()`.
 
     A Calculator is not part of any state, so a read-back emulator could predict into a dict and
     nothing more -- `to_calculator` died on `type(self.calculator)`.  What it actually needs is
-    the calculator's CLASS and the parameter nodes the emulated object holds, and both are state;
-    the constructor arguments are the caller's, and are passed in.
+    the calculator's CLASS and the parameter nodes the emulated object holds, and both are state.
+    No constructor runs, so the deployed pt brings no template of its own; it reads the one on the
+    theory it is replaced into, which is the caller's and the only one there should be.
     """
     from cosmoprimo.emulators.tools import Emulator as Template
-    from desilike.theories.galaxy_clustering import ShapeFitSpectrum2Template
 
     space = Space(bounds=SHAPEFIT_LIMITS)
     emulator = Emulator(shapefit_theory().pt, space)
@@ -351,8 +351,9 @@ def test_a_saved_emulator_can_be_deployed(tmp_path):
 
     loaded = Template.read(emulator.write(str(tmp_path / 'pt.h5')))
     assert loaded.calculator is None and loaded.graph is None, 'a saved emulator carries neither'
-    # the template is the CALLER's, not something that came out of the file
-    deployed = loaded.to_calculator(template=ShapeFitSpectrum2Template(z=Z))
+    # the calculator is the CALLER's -- nothing comes out of the file. Its template is what the
+    # closed-form scalar routing runs on; the deployed pt takes its own from `back` below.
+    deployed = loaded.to_calculator(calculator=shapefit_theory().pt)
     back = shapefit_theory()
     replace(back, back.pt, deployed)
     assert np.max(np.abs(evaluate(back, point) / reference - 1.)) == 0.

@@ -19,7 +19,7 @@ import numpy as np
 
 from cosmoprimo.emulators.tools import Emulator as _Emulator, Space as BaseSpace
 
-from desilike.base import get_params
+from desilike.base import copy, get_params, _bind_variables
 from desilike.parameter import Variable, VariableCollection
 
 
@@ -170,6 +170,13 @@ class CalculatorEmulator(_Emulator):
 
         import jax.numpy as jnp
 
+        # A copy of the calculator, not the calculator itself. Tracing it below is a build, and
+        # a build configures every node it traverses in place -- so building the user's own tree
+        # would supersede any graph they had already built on it, which then refuses to run as
+        # stale. Measured: `graph = build(theory); Emulator(theory)` left `graph` stale before a
+        # single node had been trained. The copy shares the Parameters passed in and unifies the
+        # rest by name at build, so what is emulated is the same function over the same names.
+        calculator = copy(calculator)
         self.calculator = calculator
         # built on first use in `compute`, and kept: tracing a FOLPS-sized graph is not free
         self._graph_jitted = None
@@ -207,7 +214,7 @@ class CalculatorEmulator(_Emulator):
         self.derived_names = [param.name for param in self.graph.params if param.derived]
         super().__init__(self.compute, space, **options)
         # Every Parameter the pipeline exposes, kept once.  The emulated calculator has to HOLD
-        # the ones it is emulated over, so that `build_graph` rediscovers them after the template
+        # the ones it is emulated over, so that `_trace_graph` rediscovers them after the template
         # that declared them is pruned out of the emulated pipeline -- and a Parameter is state,
         # unlike the calculator that declared it, so these survive a write.
         self.graph_params = VariableCollection(self.graph.params)
@@ -283,7 +290,7 @@ class CalculatorEmulator(_Emulator):
         state['children_leafnames'] = list(self.children_leafnames)
         # What `to_calculator` needs and cannot get from a Calculator, which is not itself state:
         # the class the emulated one subclasses, and the parameter nodes it holds so that
-        # `build_graph` rediscovers them.  What the calculator was CONSTRUCTED with is not here --
+        # `_trace_graph` rediscovers them.  What the calculator was CONSTRUCTED with is not here --
         # a template, a k grid, are the caller's, and `to_calculator` takes them as arguments.
         state['calculator_cls'] = (f'{self._calculator_cls.__module__}.'
                                    f'{self._calculator_cls.__name__}')
@@ -316,20 +323,21 @@ class CalculatorEmulator(_Emulator):
         """
         return {}
 
-    def to_calculator(self, *args, calculator=None, center=True, **kwargs):
+    def to_calculator(self, calculator=None, center=True):
         """An instance of the original calculator's class, whose state is predicted, not computed.
 
-        With no arguments, the ones the calculator was constructed with -- while this emulator
-        still has it.  A saved one does not, because a Calculator is not state, and those
-        arguments are the caller's anyway::
+        The root's ``__init__`` never runs, and neither does its ``__post_init__``: they would
+        construct the dependencies this object exists to replace -- a template, and under it a
+        cosmology and a Boltzmann call -- and from a saved emulator they would construct the
+        default ones, a different model from the emulated one.  The object's state comes from the
+        aux and one prediction instead, and its parameters from the emulator.
 
-            emulated_pt = Emulator.read('pt.h5').to_calculator(template=my_template)
+        ``update()`` likewise does nothing.  Parents reconfigure their children freely (an
+        observable does ``theory.update(k=..., ells=...)`` in its own ``__init__``), and an
+        emulated child, whose grid was fixed at training time, has nothing to reconfigure.
 
-        Only ``__call__`` is overridden: ``__init__`` stays the root's own, so the emulated object
-        holds the same Parameter/Variable nodes and the graph discovers them exactly as before.
-
-        ``theory.update(pt=emulated)`` does not work on a constructed calculator: desilike allows
-        ``update()`` only during construction. Use ``replace()`` and recompile.
+        An emulator whose deployed object does need machinery of its own overrides this method
+        and builds it there; ``emulator_namespace`` adds the methods to go with it.
 
         Parameters
         ----------
@@ -353,8 +361,6 @@ class CalculatorEmulator(_Emulator):
 
             ``True`` uses :attr:`Space.center`; a mapping deploys at those values instead;
             ``False`` leaves every parameter as it is.
-        *args, **kwargs
-            Constructor arguments, overriding those of *calculator*.
         """
         from cosmoprimo.emulators.tools import NotTrained
 
@@ -372,12 +378,18 @@ class CalculatorEmulator(_Emulator):
 
         def make_init():
 
-            def __init__(self, *args, **kwargs):
-                # explicit, not zero-arg `super()`: this is defined outside a class body, so
-                # there is no __class__ cell for it to look up
-                root_cls.__init__(self, *args, **kwargs)
+            def __init__(self):
+                # The root's `__init__` never runs. It would construct this class's dependencies
+                # -- a template, and under it a cosmology and a Boltzmann call -- which are exactly
+                # what this object replaces; and from a saved emulator it would construct the
+                # default ones, a different model from the emulated one (measured: a ShapeFit
+                # emulator came back carrying a `DirectSpectrum2Template`, whose five cosmological
+                # parameters joined the likelihood's varied set, changed no prediction, and let the
+                # chain wander until CLASS refused). What the object needs instead is its state,
+                # which `tree_unflatten` rebuilds from the aux and one prediction, and its
+                # parameters, which the emulator holds.
                 self.emulator_derived = dict(derived_nodes)
-                # Hold the parameter nodes as an attribute of this object. `build_graph`
+                # Hold the parameter nodes as an attribute of this object. `_trace_graph`
                 # discovers Nodes nested in dicts, so the compiled graph threads values into
                 # whatever copy of the calculator it evaluates -- and it is that copy's nodes
                 # that carry the current values. Reading a dict captured at fit time reads
@@ -385,6 +397,12 @@ class CalculatorEmulator(_Emulator):
                 # construction default: measured, an emulated pt then returned the fiducial
                 # spectrum for every parameter it was asked about.
                 self.emulator_params = dict(nodes)
+                # And they must be the only copy: `tree_unflatten` below restores whatever the
+                # aux carried, which can include same-named Parameter objects. Two objects per
+                # emulated name start out equal, and `_trace_graph` merges same-named Variables
+                # that agree -- but a prior set on one of them afterwards makes them disagree, and
+                # the build then refuses the tree rather than silently dropping one.
+                _bind_variables(self, nodes.values())
                 # Back-reference to the emulator, shared by every instance this method
                 # returns: a downstream consumer that needs the object the predictions come
                 # from reaches it here. `predict` above is a bound method of the same object.
@@ -427,17 +445,37 @@ class CalculatorEmulator(_Emulator):
         # routing, for instance, has to override `combine_bias_terms_spectrum2_poles` as well
         def make_post_init():
 
-            def __post_init__(self, *args, **kwargs):
-                post_init = getattr(root_cls, '__post_init__', None)
-                if post_init is not None:
-                    post_init(self, *args, **kwargs)
+            def __post_init__(self):
+                # The root's is not called either: it derives from what `__init__` set
+                # (`self._nbar = float(nbar)`), and an object that predicts has no setup of its own.
                 # An emulated calculator is pure JAX
                 self._is_external = False
 
             return __post_init__
 
+        def make_update():
+
+            def update(self, *args, **kwargs):
+                # A no-op, and deliberately so.  `update()` re-runs `__init__`, which for this
+                # class means constructing the dependencies the emulator exists to replace -- and
+                # from a saved emulator, the DEFAULT ones.  Nothing asks for that: the callers are
+                # parents aligning their child to their own configuration (an observable does
+                # `theory.update(k=..., ells=...)` in its `__init__`, always), and the emulated
+                # object's grid is fixed at training time, so there is nothing to align.  Measured
+                # before this existed: a ShapeFit emulator swapped into a `Spectrum2PolesObservable`
+                # came back carrying a default `DirectSpectrum2Template`, whose five cosmological
+                # parameters then joined the likelihood's varied set.  They changed no prediction
+                # -- the log-posterior was bit-identical across them -- so the chain sampled five
+                # dead dimensions until it wandered somewhere CLASS refused to compute.
+                #
+                # An emulator that does have something to reconfigure overrides `to_calculator`
+                # and puts its own `update` in `emulator_namespace`.
+                pass
+
+            return update
+
         namespace = {'__init__': make_init(), '__call__': make_call(),
-                     '__post_init__': make_post_init()}
+                     '__post_init__': make_post_init(), 'update': make_update()}
         namespace.update(self.emulator_namespace())
         EmulatedCalculator = type(f'Emulated{root_cls.__name__}', (root_cls,), namespace)
         EmulatedCalculator.__qualname__ = EmulatedCalculator.__name__
@@ -446,17 +484,27 @@ class CalculatorEmulator(_Emulator):
             # emulator, so whatever it looks up on `self.calculator` at evaluation time has to
             # find the pipeline's own calculator here.
             self.calculator = calculator
-        if not (args or kwargs) and getattr(self, 'calculator', None) is not None:
-            args, kwargs = self.calculator._init
-        deployed = EmulatedCalculator(*args, **kwargs)
+        deployed = EmulatedCalculator()
+        # No constructor ran, so give the object its state now rather than at the first call:
+        # `plot()`, `tree_flatten` and any consumer reading `theory.k` do so before then. The aux
+        # carries the configuration and one prediction at the deployment point carries the rest --
+        # the same two ingredients `__call__` uses, so the object starts out exactly as a called
+        # one looks.
+        centre = dict(self.space.center)
+        predicted = self.predict(**centre)
+        leaves = [predicted[name] for name in self.children_leafnames]
+        children = jax.tree_util.tree_unflatten(self.children_treedef, leaves)
+        rebuilt = self._calculator_cls.tree_unflatten(self.aux, children)
+        for key, value in rebuilt.__dict__.items():
+            setattr(deployed, key, value)
         # Bind the deployed calculator to the emulator's OWN parameter objects.
         #
-        # `__init__` is the root class's, so the deployed object constructs a fresh template (or
-        # cosmology), which declares its own `h`, `logA`, ... alongside the ones this emulator
-        # holds.  `build_graph` would then unify the duplicates first-seen-wins, and the template
-        # is seen first: measured, a prior narrowed in place on `emulator.graph_params['h']` came
-        # back as (0.1, 10.0) instead of (0.66, 0.69), silently discarding what the caller set --
-        # which is exactly what `desi-clustering` does before deploying.
+        # `tree_unflatten` above restores whatever the aux carried, which can include same-named
+        # Parameter objects alongside the ones this emulator holds.  `_trace_graph` would then
+        # unify the duplicates first-seen-wins: measured back when the root constructor still ran,
+        # a prior narrowed in place on `emulator.graph_params['h']` came back as (0.1, 10.0)
+        # instead of (0.66, 0.69), silently discarding what the caller set -- which is exactly
+        # what `desi-clustering` does before deploying.
         #
         # Binding here makes the winner a decision rather than a traversal order, and it is the
         # only reason auto-share fires at all: measured across 355 tests, all six triggers were

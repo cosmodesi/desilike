@@ -333,8 +333,18 @@ class _BaseCandlLikelihood(Likelihood):
         A property, not something ``__call__`` sets: it is the same binning `log_like_for_bdp`
         does internally, and doing it twice on the sampling path would cost every step for the
         sake of a vector only a caller wanting the model reads.
+
+        Whether the binning is a separate step is candl's business and differs by class, so this
+        follows whatever that class's own ``log_like_for_bdp`` does rather than assuming: `Like`
+        bins `get_model_specs` afterwards, `LensLike` returns band powers from it already binned
+        (binning those again raised `dot_general requires contracting dimensions to have the same
+        shape, got (10,) and (3000,)`).
         """
-        return self.like.bin_model_specs(self.like.get_model_specs(self._params_dict()))
+        specs = self.like.get_model_specs(self._params_dict())
+        return self.like.bin_model_specs(specs) if self._bins_model_specs else specs
+
+    #: Whether candl's ``get_model_specs`` still has to be binned -- see :attr:`flattheory`.
+    _bins_model_specs = True
 
     def __call__(self):
         params_dict = self._params_dict()
@@ -368,6 +378,10 @@ class CandlLensLikelihood(_BaseCandlLikelihood):
     """Generic wrapper around a `candl <https://github.com/Lbalkenhol/candl>`_ ``LensLike``
     (CMB lensing) likelihood. See :class:`_BaseCandlLikelihood`."""
     _candl_attr = 'LensLike'
+
+    #: candl's `LensLike.get_model_specs` returns band powers already binned; its own
+    #: `log_like_for_bdp` compares them to the data directly, with no `bin_model_specs` step.
+    _bins_model_specs = False
 
 
 class ACTDR6TTTEEELikelihood(CandlLikelihood):

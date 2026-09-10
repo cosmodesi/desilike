@@ -4,6 +4,8 @@ JAX adaptation of https://github.com/ACTCollaboration/act_dr6_spt_lenslike.
 """
 
 import os
+import contextlib
+import warnings
 
 import numpy as np
 import jax.numpy as jnp
@@ -15,6 +17,115 @@ from desilike.parameter import Parameter, Variable, VariableCollection
 def _pp_to_kk(cl_pp, ells):
     """Convert lensing potential C_ell^pp to convergence C_ell^kk."""
     return cl_pp * (ells * (ells + 1.)) ** 2. / 4.
+
+
+#: Only files at least this large are converted to ``.npy``. The N1 derivative matrices are
+#: 225 MB of ASCII each and everything else under ``like_corrs`` is under 1.2 MB, so this
+#: separates the two by a wide margin rather than by name.
+_LOADTXT_CACHE_MIN_BYTES = 10 * 1024**2
+
+
+def _npy_cache_name(fn):
+    """Cache file name for *fn*, carrying the source's size and mtime.
+
+    The stamp is the invalidation: a data release that replaces a ``.txt`` in place produces a
+    different name, so a stale cache is never read rather than being silently preferred. Old
+    entries are left behind rather than deleted -- this may be a directory shared between users,
+    where deciding that another run's file is dead is not this function's call.
+    """
+    stat = os.stat(fn)
+    stem = os.path.splitext(os.path.basename(fn))[0]
+    return f'{stem}-{stat.st_size}-{int(stat.st_mtime)}.npy'
+
+
+class _CachingNumpy:
+    """Stand-in for the ``np`` binding inside ``act_dr6_spt_lenslike``.
+
+    Everything but :meth:`loadtxt` is numpy itself; :meth:`loadtxt` reads a ``.npy`` conversion
+    where one exists and writes it where it does not. Substituting the module's binding rather
+    than patching ``numpy.loadtxt`` keeps this scoped to the one caller -- patching numpy itself
+    would reach every library in the process.
+    """
+    def __init__(self, read_dir, write_dir):
+        self._read_dir, self._write_dir = read_dir, write_dir
+        self._warned = False
+
+    def __getattr__(self, name):
+        return getattr(np, name)
+
+    def loadtxt(self, fname, **kwargs):
+        # `usecols` / `unpack` change the returned array, and the cache is keyed by file alone,
+        # so anything but a plain read goes straight to numpy. Only the N1 derivative matrices
+        # are read plainly, and they are the whole cost.
+        fn = str(fname)
+        if kwargs or 'like_corrs' not in fn:
+            return np.loadtxt(fname, **kwargs)
+        try:
+            if os.path.getsize(fn) < _LOADTXT_CACHE_MIN_BYTES:
+                return np.loadtxt(fname, **kwargs)
+            name = _npy_cache_name(fn)
+        except OSError:
+            return np.loadtxt(fname, **kwargs)
+        cached = os.path.join(self._read_dir, name)
+        if os.path.isfile(cached):
+            try:
+                return np.load(cached)
+            except (OSError, ValueError):
+                # A truncated or corrupt entry must not be fatal: fall through, re-parse, and
+                # rewrite it below.
+                pass
+        toret = np.loadtxt(fname, **kwargs)
+        self._save(name, toret)
+        return toret
+
+    def _save(self, name, array):
+        """Write *array* to the cache, atomically, and never fatally.
+
+        The rename is what makes this safe under ``srun -n 16``: every rank converts the same
+        file to the same bytes and each publishes it in one step, so a reader sees either the
+        previous entry or a complete new one, never a half-written array.
+        """
+        target = os.path.join(self._write_dir, name)
+        tmp = '{}.tmp.{}'.format(target, os.getpid())
+        try:
+            os.makedirs(self._write_dir, exist_ok=True)
+            np.save(tmp, array)
+            # np.save appends '.npy' unless the name already ends in it
+            os.replace(tmp + '.npy', target)
+        except OSError as exc:
+            if not self._warned:
+                warnings.warn('could not cache {}: {}. Falling back to parsing the ASCII data on '
+                              'every construction, which costs ~50 s each.'.format(target, exc))
+                self._warned = True
+            try: os.remove(tmp + '.npy')
+            except OSError: pass
+
+
+@contextlib.contextmanager
+def _cache_loadtxt(module, section, version):
+    """Give *module* a :class:`_CachingNumpy` for the duration of the block.
+
+    ``act_dr6_spt_lenslike.load_data`` reads its N1 derivative matrices -- five for ACT and,
+    for an ``actplanck``/``actspt3g`` variant, five more for Planck -- with ``np.loadtxt``, at
+    225 MB of ASCII each. That is ~48 s per construction, and desilike's ``build()`` re-runs
+    every ``__init__``, so one posterior pays it two or three times over. Converted to ``.npy``
+    the same matrix loads in 0.02 s against 3.87 s, measured on a Perlmutter compute node.
+
+    The cache is written to the canonical install path and read back through the ``'ro'`` alias
+    (see :meth:`~desilike.install.Installer.data_dir`), which on Perlmutter serves the same
+    bytes over a caching read-only DVS mount -- which is what that alias exists for.
+    """
+    from desilike.install import Installer
+    installer = Installer()
+    sub = os.path.join(version, 'like_corrs_npy')
+    read_dir = os.path.join(installer.data_dir(section, ro=True), sub)
+    write_dir = os.path.join(installer.data_dir(section), sub)
+    original = module.np
+    module.np = _CachingNumpy(read_dir, write_dir)
+    try:
+        yield
+    finally:
+        module.np = original
 
 
 class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
@@ -67,28 +178,37 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
         import act_dr6_spt_lenslike as alike
 
         if data_dir is None:
-            # act_dr6_spt_lenslike ships the bandpowers and like_corrs inside the package, so
-            # prefer those: they are always consistent with the installed code, and the
-            # Installer path only exists if someone has separately downloaded a copy.
-            packaged = os.path.join(os.path.dirname(alike.__file__), 'data', self.version)
-            if os.path.isdir(packaged):
-                data_dir = packaged
-            else:
-                from desilike.install import Installer
-                data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
+            # The copy `install` stages, not the one shipped inside act_dr6_spt_lenslike: that
+            # one lives in the python environment, so it is read at whatever path the package
+            # was installed to and misses the ``'ro'`` alias entirely -- on Perlmutter its
+            # `like_corrs` is a symlink onto the read-write mount, which is the slow way to
+            # read the same bytes. `ro=True` here is the point of putting it under `data_dir`.
+            from desilike.install import Installer
+            data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
+            # A directory is not the data: `like_corrs_npy` alone creates one (see
+            # `_cache_loadtxt`), and so does a partial download. Say what is missing here
+            # rather than letting `load_data` fail on whichever file it happens to want first.
+            if not os.path.isdir(os.path.join(data_dir, 'like_corrs')):
+                raise ValueError('no ACT DR6 lensing data at {}. Run the installer for {} '
+                                 '(desilike.install), or pass `data_dir` explicitly.'
+                                 .format(data_dir, self.installer_section))
 
         only_spt = (variant == 'spt3g')
         if only_spt:
             lens_only = True
         like_corrections = not lens_only
 
-        data = alike.load_data(
-            variant, ddir=data_dir, lens_only=lens_only,
-            like_corrections=like_corrections,
-            apply_hartlap=self.apply_hartlap,
-            nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,
-            trim_lmax=self.trim_lmax, version=self.version,
-        )
+        # The N1 derivative matrices are ASCII, and `like_corrections` is what asks for them:
+        # ~2.25 GB of text parsed per construction. `_cache_loadtxt` converts them to `.npy`
+        # once and reads that thereafter -- see its docstring for the numbers.
+        with _cache_loadtxt(alike.act_dr6_spt_lenslike, self.installer_section, self.version):
+            data = alike.load_data(
+                variant, ddir=data_dir, lens_only=lens_only,
+                like_corrections=like_corrections,
+                apply_hartlap=self.apply_hartlap,
+                nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,
+                trim_lmax=self.trim_lmax, version=self.version,
+            )
 
         self._variant = variant
         self._like_corrections = like_corrections

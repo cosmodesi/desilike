@@ -214,6 +214,26 @@ class PrimordialCosmology(Calculator):
                         if coord in kwargs:
                             spec[coord] = np.unique(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
 
+    def get_requirements(self):
+        """The registry in the form :meth:`add_requirements` and ``requirements=`` take.
+
+        The inverse of :meth:`add_requirements`: static kwargs and the merged coordinate grids,
+        one entry per spec. For a caller that has to carry the registry somewhere a rebuild
+        cannot follow -- ``cosmo.update(requirements=cosmo.get_requirements())`` pins what the
+        consumers registered into ``_init``, so a build of this cosmology on its own replays it
+        instead of starting empty. Training an emulator is such a build: the consumers are not
+        part of it, so nothing re-registers, and the aux the deployed object is rebuilt from
+        would otherwise carry no specs at all.
+        """
+        requirements = {}
+        for (method_key, _), spec in self._requirements.items():
+            kwargs = dict(spec['static'])
+            for coord in _COORDS:
+                if coord in spec:
+                    kwargs[coord] = spec[coord]
+            requirements.setdefault(method_key, []).append(kwargs)
+        return requirements
+
     def get_emulator_cls(self):
         """The emulator this cosmology's requirements call for.
 

@@ -198,10 +198,19 @@ def _insert_first(li, el):
 def source(fn):
     """Source input file ``fn`` and set associated environment variables."""
     import subprocess
-    result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True, text=True)
-    for line in result.stdout.split('\n'):
+    # Bytes, decoded by hand, not ``text=True``: ``env`` prints the *whole* environment of the
+    # child shell, and under a Slurm launcher that environment is not guaranteed to be valid
+    # UTF-8 -- on a 64-rank, 4-node srun step two ranks received an environment variable holding
+    # a stray high byte (0xca, 0xd8), ``text=True`` raised UnicodeDecodeError while importing
+    # desilike, those two ranks died, and the other 62 waited in an MPI collective until the
+    # 3-hour time limit (2026-09-09). 'surrogateescape' is how os.environ itself represents such
+    # bytes on POSIX, so the round trip into ``os.environ`` below is lossless for every other key.
+    result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True)
+    for line in result.stdout.decode('utf-8', errors='surrogateescape').split('\n'):
         try:
-            key, value = line.split('=')
+            # ``split('=', 1)``: a value may itself contain '=' (a PS1, a Slurm variable), and the
+            # plain split then raised ValueError and silently dropped the variable.
+            key, value = line.split('=', 1)
             if key == 'PYTHONPATH':
                 for path in value.split(':')[::-1]: _insert_first(sys.path, path)
             else:

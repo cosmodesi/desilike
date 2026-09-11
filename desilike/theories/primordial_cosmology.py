@@ -525,6 +525,8 @@ class CosmoprimoCosmology(PrimordialCosmology):
     * ``'background.comoving_transverse_distance'`` — kwargs: ``z``
     * ``'background.luminosity_distance'``          — kwargs: ``z``
     * ``'background.growth_factor'``                — kwargs: ``z``
+    * ``'background.h1'``, ``'background.h3'``, ``'background.h5'`` — kwargs: ``z``; the
+      EFT-of-dark-energy functions h_i(eta = -ln(1 + z)) of an EFT-of-DE engine's Background.
     * ``'primordial.pk'``                           — kwargs: ``k``;
       the primordial scalar power spectrum :math:`P_R(k)` on the registered k grid.
     * ``'harmonic.lensed_cl'``                       — kwargs: ``ellmax``; returns a dict
@@ -776,6 +778,21 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 result = cosmo.get_primordial(mode='scalar').pk_interpolator()(_kw_coords['k'])
             elif method_key == 'background.growth_rate':
                 result = cosmo.get_background().growth_rate(**_kw_coords)
+            elif method_key in ('background.h1', 'background.h3', 'background.h5'):
+                # The EFT-of-dark-energy functions of arXiv:1902.06978 (eqs. 64, 66, 68), which
+                # cosmoprimo's 'mochiclass' / 'heftcamb' engines and the propto_omega emulated
+                # engine expose on their Background as h1(eta), h3(eta), h5(eta), eta = ln a.
+                # Registered on the z grid (eta = -ln(1 + z)) so that they travel as leaves:
+                # the FKPT EFT_DE node is an external (numpy) calculator, and inside its
+                # callback a JAX-native cosmology's `_cosmo` holds tracers -- reading the
+                # functions off it there is what broke a jitted chain on an emulated engine.
+                name = method_key.split('.')[1]
+                background = cosmo.get_background()
+                if not hasattr(background, name):
+                    raise ValueError(f"the engine's Background has no {name}(eta); {method_key} needs an EFT-of-DE engine "
+                                     "('mochiclass', 'heftcamb', or the propto_omega emulator)")
+                eta = -jnp.log1p(jnp.asarray(spec['z']))
+                result = jnp.asarray(getattr(background, name)(eta))
             elif method_key == 'harmonic.lensed_cl':
                 # Raw (dimensionless) Cl, indexed by ell from 0 to ellmax; unit conversion
                 # (e.g. to muK^2) is left to the consumer, matching e.g. background.* above.

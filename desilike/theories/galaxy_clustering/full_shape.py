@@ -2939,7 +2939,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                 mg_params_override=None, growth_source='ode', **kwargs):
+                 mg_params_override=None, growth_source='ode', with_now='peakaverage', **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -2948,7 +2948,44 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
-        self.template.update(with_now='peakaverage')
+        # The no-wiggle engine of the template (cosmoprimo's PowerSpectrumBAOFilter), which
+        # splits the linear P(k) into the wiggle / no-wiggle parts the IR resummation needs.
+        # 'peakaverage' stays the default -- it is what every other model in this file uses and
+        # what the FKPT tables were validated with -- but it is now an argument, because for
+        # HDKI + EFT_DE it is not always computable: the quasi-static Horndeski source makes the
+        # linear growth scale-dependent at k ~ 1 / sqrt(h3) ~ 1e-3 h/Mpc, and on backgrounds
+        # with w0 + wa close to 0 (dark energy matter-like at early times) the linear P(k) then
+        # DECREASES with k below ~3e-3 h/Mpc (d ln P / d ln k = -0.9 measured at k = 1e-3 for
+        # c_B = 1.0, c_M = 0.7, w0 = -0.68, wa = 0.62). 'peakaverage' (and 'wallish2018') return
+        # NaN on such a spectrum, and the whole no-wiggle table and the kernel constants follow:
+        # 14% of the nodes of an MLP emulator training over the EFT-of-DE box came back
+        # non-finite for this reason alone. 'hinton2017' (a polynomial broadband fit) is finite
+        # there and is the closest to 'peakaverage' where both work (measured on a fiducial-like
+        # model, LRG1 multipoles: 0.08%, 0.24%, 0.50% on P0, P2, P4, against 0.26 / 0.81 / 1.65%
+        # for 'savgol' and 0.16 / 0.71 / 2.74% for 'ehpoly'). The pipeline passes it for EFT_DE
+        # (desi-clustering tools_MG._fkptjax_pt_options); the choice is part of the theory
+        # options, so training and sampling always agree on it.
+        self.template.update(with_now=with_now)
+
+        # HDKI / EFT_DE: the h1 / h3 / h5 functions and Omega_m as REQUIREMENTS of the template
+        # cosmology, on the eta grid fkptjax's ODE spans. They then reach __call__ (an external,
+        # numpy calculator: pure_callback) as concrete leaves whatever the cosmology's engine.
+        # Reading them off `template.cosmo._cosmo` at call time (the fallback kept in
+        # _mg_kwargs) only works when that object is concrete -- an external engine such as
+        # mochiclass; with a JAX-native engine (the propto_omega emulator) it holds tracers
+        # inside the callback and a jitted chain fails. Same for Omega_m, read below through
+        # cosmo['Omega_m']: a 'params.Omega_m' requirement makes it a leaf.
+        if (str(model).strip().upper() == 'HDKI'
+                and str(mg_variant or '').strip().upper() in ('EFT_DE', 'EFTDE')):
+            self._eft_eta = np.linspace(-3.912023 - 0.2, 0., 512)
+            self._eft_z = np.expm1(-self._eft_eta)
+            self.template.cosmo.add_requirements({f'background.{name}': [{'z': self._eft_z}]
+                                                  for name in ('h1', 'h3', 'h5')})
+            # ... and the cosmology as a DIRECT dependency of this node: desilike injects the
+            # concrete leaves of a node's own dependencies into the callback, not those of its
+            # dependencies' dependencies, and `template.cosmo` is two levels down.
+            self.cosmo = self.template.cosmo
+            self.cosmo.add_requirements({'params.Omega_m': None})
 
         # Fixed at the GR limit (0.) by default, like the other MG parameters below;
         # fixed=False sampling is opt-in (only for model='HDKI', mg_variant='mu_OmDE').
@@ -2986,7 +3023,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                       z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                      mg_params_override=None, growth_source='ode', **kwargs):
+                      mg_params_override=None, growth_source='ode', with_now='peakaverage', **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
         _import_folps()
         self._model = str(model)
@@ -3122,6 +3159,20 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 'eftcamb_h5_interp',
             )
             missing = [name for name in required if out.get(name) is None]
+            if missing and getattr(self, '_eft_eta', None) is not None:
+                # The registered leaves (see __init__): concrete inside this callback for any
+                # engine. Rebuilt as splines per call, so mu(k, eta) follows the cosmology.
+                from scipy.interpolate import CubicSpline
+                for name in list(missing):
+                    key = 'background.' + name[len('eftcamb_'):-len('_interp')]
+                    try:
+                        values = np.asarray(self.cosmo.get(key, z=self._eft_z), dtype='f8')
+                    except KeyError:
+                        break
+                    if not np.all(np.isfinite(values)):
+                        raise ValueError(f'{key}(eta) is not finite on the EFT_DE eta grid; check the smg / EFT parameters')
+                    out[name] = CubicSpline(self._eft_eta, values, extrapolate=True)
+                missing = [name for name in required if out.get(name) is None]
             if missing:
                 # No interpolators were handed in: take them from the template's cosmology.
                 #
@@ -3178,7 +3229,9 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         qper = self.template.qper
         jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
 
-        Om = self.template.cosmo['Omega_m']
+        # through the direct dependency when there is one (EFT_DE, see __init__): its leaves
+        # are the concrete ones inside this callback
+        Om = getattr(self, 'cosmo', self.template.cosmo)['Omega_m']
         xnow = -3.912023
         mg_kwargs = self._mg_kwargs()
         if self._is_binning:

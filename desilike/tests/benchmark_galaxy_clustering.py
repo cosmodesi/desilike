@@ -38,7 +38,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from desilike.base import compile, get_params, Posterior, Prior, replace, SumLikelihood
+from desilike.base import build, get_params, Posterior, Prior, replace, SumLikelihood
 from desilike.emulators import Emulator, Space
 from desilike.theories import ACECosmology
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
@@ -75,7 +75,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 
     window = np.eye(n)
     rng = np.random.default_rng(42)
-    data = compile(theory)()
+    data = build(theory)()
     covariance = np.diag(np.full(n, 1e-6))
 
     observable = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells,
@@ -267,7 +267,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     # Anchor mock data to the theory prediction at default parameters.  Using a fixed
     # absolute noise scale (1e2) with COMET amplitudes (~1e3-1e4) makes chi2 ride the
     # model amplitude to its prior boundary rather than recovering a meaningful best fit.
-    data2 = np.asarray(compile(theory)()).ravel()
+    data2 = np.asarray(build(theory)()).ravel()
     observable2 = Spectrum2PolesObservable(data=data2, theory=theory, k=k, ells=ells)
     observables = [observable2]
     covariances = [np.diag(800**2 * np.ones_like(data2))]
@@ -278,7 +278,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
         else:
             pt3 = COMETPTSpectrum3Poles(k=k3, z=z, ells=ells3, cosmo=cosmo)
             theory3 = COMETTracerSpectrum3Poles(k=k3, z=z, ells=ells3, prior_basis=prior_basis, pt=pt3)
-        data3 = np.asarray(compile(theory3)()).ravel()
+        data3 = np.asarray(build(theory3)()).ravel()
         observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
         observables.append(observable3)
         covariances.append(1000**2 * np.ones_like(data2))
@@ -369,7 +369,7 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
        profile_kwargs=None, **kwargs):
     """Compile and benchmark one pipeline variant."""
     print(f'\n=== {label} ===')
-    pipe = compile(build_fn())
+    pipe = build(build_fn())
 
     params = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
     solved_params = pipe.params.select(solved=True).names()
@@ -536,7 +536,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('direct (Pell, pt=False)', dict(direct=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -553,7 +553,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('shared PT, marg a0/a2/a4/NP0/NP20/NP22 (10 params)', dict(direct=False, marginalize=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -566,7 +566,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         print(f'COMET marg breakdown: primal vs JVP vs extra likelihood pass')
         print(f'ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points)')
         print(f'{"─" * 60}')
-        posterior = compile(build_posterior_comet(direct=False, marginalize=True))
+        posterior = build(build_posterior_comet(direct=False, marginalize=True))
         # Extract the group_fn from the first (and only) group
         for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
              group_theory_pipe, comp_meta, marg_local, best_local,

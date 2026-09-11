@@ -1,5 +1,6 @@
 """Parameter classes for desilike."""
 
+import itertools
 import re
 import copy
 import json
@@ -14,10 +15,19 @@ from .utils import NumpyEncoder, register_type, write as _utils_write, read as _
 
 
 _compile_context = threading.local()
+#: Set while a build is re-running a tree's constructors (`_init_graph`), so that a node whose
+#: `__init__` builds a graph of its own does not restart it again from inside.
+_compile_context.init_graph = False
+
+
+_build_counter = itertools.count(1)
 
 
 class _CompileContext:
     def __init__(self):
+        # Identity of this build. `_build_graph` stamps it onto every Calculator it
+        # configures, and a CompiledGraph checks it before running: a node reconfigured by a
+        # later build belongs to that build, and a graph still pointing at it is stale.
         self.traced = set()           # id(node) seen during dependency discovery (phase 1)
         self.stack = []               # currently-tracing Calculator stack
         self.node_deps = {}           # id(node) -> list[Node], in access order, deduplicated
@@ -168,7 +178,7 @@ def _parameter_object_hook(d):
     return d
 
 
-def _iter_nodes(value, _seen=None):
+def _iter_node(value, _seen=None):
     """Yield every :class:`Node` reachable from *value* through standard containers.
 
     Descends into ``list``/``tuple``/``set``/``frozenset``/``dict`` (both keys and
@@ -185,18 +195,18 @@ def _iter_nodes(value, _seen=None):
         yield value            # a Node is a leaf dependency; do not descend into it
     elif isinstance(value, dict):
         for key, val in value.items():
-            yield from _iter_nodes(key, _seen)
-            yield from _iter_nodes(val, _seen)
+            yield from _iter_node(key, _seen)
+            yield from _iter_node(val, _seen)
     elif isinstance(value, (list, tuple, set, frozenset, VariableCollection)):
         for val in value:
-            yield from _iter_nodes(val, _seen)
+            yield from _iter_node(val, _seen)
     # else: array / scalar / str / arbitrary object → not a dependency container
 
 
-def _substitute_node(value, match, new):
+def _replace_node(value, match, new):
     """Return *value* with every Node satisfying ``match(node)`` replaced by *new*.
 
-    Mutating, path-aware sibling of :func:`_iter_nodes`: rebuilds standard containers
+    Mutating, path-aware sibling of :func:`_iter_node`: rebuilds standard containers
     (``list``/``tuple``/``set``/``frozenset``/``dict``, keys and values) and
     :class:`VariableCollection` so a node held in e.g. a tuple-of-tuples or a collection
     is replaced.  Does not descend into Nodes (a Node is replaced as a whole when it matches).
@@ -204,19 +214,19 @@ def _substitute_node(value, match, new):
     if isinstance(value, Node):
         return new if match(value) else value
     if isinstance(value, dict):
-        return {_substitute_node(key, match, new): _substitute_node(val, match, new) for key, val in value.items()}
+        return {_replace_node(key, match, new): _replace_node(val, match, new) for key, val in value.items()}
     if isinstance(value, list):
-        return [_substitute_node(val, match, new) for val in value]
+        return [_replace_node(val, match, new) for val in value]
     if isinstance(value, tuple):
-        return tuple(_substitute_node(val, match, new) for val in value)
+        return tuple(_replace_node(val, match, new) for val in value)
     if isinstance(value, set):
-        return {_substitute_node(val, match, new) for val in value}
+        return {_replace_node(val, match, new) for val in value}
     if isinstance(value, frozenset):
-        return frozenset(_substitute_node(val, match, new) for val in value)
+        return frozenset(_replace_node(val, match, new) for val in value)
     if isinstance(value, VariableCollection):
         substituted = VariableCollection()
         for val in value:
-            substituted.set(_substitute_node(val, match, new))
+            substituted.set(_replace_node(val, match, new))
         return substituted
     return value
 
@@ -225,6 +235,12 @@ class Node:
     """Common base for mutable objects traced in the pipeline."""
 
     _is_calculator = False
+    #: The compiled graphs currently built over this node, as a WeakSet -- one concept for what
+    #: used to be a build stamp and a lock count. A build takes ownership and invalidates whoever
+    #: held it before; reconfiguring the node invalidates its owners too, each with the reason.
+    #: `Posterior` builds several views over one context and they own it together, none
+    #: invalidating the others (`_take_ownership` keys on the context).
+    _owners = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -239,7 +255,7 @@ class Node:
         if not name.startswith('_'):
             ctx = getattr(_compile_context, 'ctx', None)
             if ctx is not None and ctx.phase == 'call' and ctx.stack and ctx.stack[-1] is self:
-                for node in _iter_nodes(value):
+                for node in _iter_node(value):
                     if object.__getattribute__(node, '_is_calculator'):
                         if id(node) not in ctx.traced:
                             raise RuntimeError(
@@ -1038,7 +1054,7 @@ class Parameter(Variable):
             if '.' in k:
                 expr = expr.replace(k, _safe_keys[k])
 
-        code = compile(expr, '<derived>', 'eval')
+        code = compile(expr, '<derived>', 'eval')   # the Python builtin, not desilike's build
         _ns = {'__builtins__': {}, 'np': np, 'jnp': jnp}
 
         def _fn():

@@ -112,7 +112,7 @@ class PrimordialCosmology(Calculator):
         """
         return VariableCollection()
 
-    def __init__(self, *args, params=None, fiducial=None, **kwargs):
+    def __init__(self, *args, params=None, fiducial=None, requirements=None, **kwargs):
         # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
         if params is None:
             # Forward fiducial only when given, so that an omitted fiducial falls through
@@ -129,6 +129,11 @@ class PrimordialCosmology(Calculator):
         # _results:   spec_key → jnp.array   (populated in __call__)
         self._requirements = {}
         self._results = {}
+        # Out-of-range guard state, here rather than in `__post_init__` so that it exists on
+        # every instance -- a caller may ask an uncompiled cosmology what it enforces -- and so
+        # that the warn-once latch is per object: `__post_init__` runs at every build, and
+        # resetting it there would re-emit the same warning on each one.
+        self._param_clip_ranges = {}
         self._param_values = {}
         # Default engine identifier; overridden by concrete subclasses in __post_init__.
         self._engine = None
@@ -146,6 +151,12 @@ class PrimordialCosmology(Calculator):
                 req = (f'params.{param.basename}', {})
             self._get_derived[param.name] = req
             self.add_requirements({req[0]: req[1]})
+        # Requirements the caller declares are an input, like the parameters. A build re-runs
+        # `__init__` -- that is what clears the ones downstream calculators register at their
+        # `__post_init__` -- so a requirement registered by hand on a bare cosmology would not
+        # survive it; one passed here does.
+        if requirements is not None:
+            self.add_requirements(requirements)
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -154,7 +165,9 @@ class PrimordialCosmology(Calculator):
 
         Called in the downstream calculator's ``__post_init__``.  Multiple callers sharing the
         same cosmology instance are supported: z and k grids are union-merged so only one
-        combined evaluation is needed at runtime.
+        combined evaluation is needed at runtime.  A build re-runs ``__init__`` and so starts
+        from an empty registry, which is what keeps repeated builds from accumulating; a
+        requirement declared by hand therefore goes to the constructor (``requirements=``).
 
         Parameters
         ----------
@@ -201,6 +214,26 @@ class PrimordialCosmology(Calculator):
                         if coord in kwargs:
                             spec[coord] = np.unique(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
 
+    def get_requirements(self):
+        """The registry in the form :meth:`add_requirements` and ``requirements=`` take.
+
+        The inverse of :meth:`add_requirements`: static kwargs and the merged coordinate grids,
+        one entry per spec. For a caller that has to carry the registry somewhere a rebuild
+        cannot follow -- ``cosmo.update(requirements=cosmo.get_requirements())`` pins what the
+        consumers registered into ``_init``, so a build of this cosmology on its own replays it
+        instead of starting empty. Training an emulator is such a build: the consumers are not
+        part of it, so nothing re-registers, and the aux the deployed object is rebuilt from
+        would otherwise carry no specs at all.
+        """
+        requirements = {}
+        for (method_key, _), spec in self._requirements.items():
+            kwargs = dict(spec['static'])
+            for coord in _COORDS:
+                if coord in spec:
+                    kwargs[coord] = spec[coord]
+            requirements.setdefault(method_key, []).append(kwargs)
+        return requirements
+
     def get_emulator_cls(self):
         """The emulator this cosmology's requirements call for.
 
@@ -223,7 +256,7 @@ Answered for every cosmology that flattens to its
             # The routed sections anchor their analytic cores on a cosmoprimo fiducial (see
             # `_RoutedSectionEmulator.set_ref_fiducial`), which an ACE cosmology only carries
             # when it converts through one. Anything else gets the generic expansion.
-            # Not a test on `_fiducial` itself: that is set at compile, and this is asked of
+            # Not a test on `_fiducial` itself: that is set at build, and this is asked of
             # cosmologies that have only been constructed.
             return None
         sectors = {_sector(spec_key[0]) for spec_key in self._requirements}
@@ -294,14 +327,14 @@ Answered for every cosmology that flattens to its
         """Proxy implementation: populate _results with zero placeholders if not already set.
 
         Concrete subclasses (e.g. CosmoprimoCosmology) override this with a real solver.
-        When used as a pre-loaded proxy (results injected externally via compile's ``input``
+        When used as a pre-loaded proxy (results injected externally via build's ``input``
         callable before the graph runs), this is a no-op because _results is already populated.
         """
         params = {param.basename: param.value for param in self.params}
         self._param_values = params
         for spec_key, spec in self._requirements.items():
             if spec_key not in self._results:
-                shape = tuple(spec[coord].size for coord in _COORDS)
+                shape = tuple(spec[coord].size for coord in _COORDS if coord in spec)  # only the coords this spec was registered with
                 self._results[spec_key] = jnp.zeros(shape)
         # Here set derived_params
         for param, getter in self._get_derived.items():
@@ -315,8 +348,8 @@ Answered for every cosmology that flattens to its
             if spec_key in self._results:
                 leaves.append(self._results[spec_key])
             else:
-                # Placeholder of correct shape for compile-time structure inference.
-                shape = tuple(spec[coord].size for coord in _COORDS)
+                # Placeholder of correct shape for build-time structure inference.
+                shape = tuple(spec[coord].size for coord in _COORDS if coord in spec)  # only the coords this spec was registered with
                 leaves.append(jnp.zeros(shape))
         # Derived param values as leaves so they propagate as JAX Tracers through the
         # external (pure_callback) path and appear correctly in derived_dict.
@@ -968,6 +1001,58 @@ def _find_capse_ellmax(spectrum_dir, nout):
     return int(round(float(np.max(ell))))
 
 
+def _intersect_ranges(ranges_per_emulator):
+    """Intersect ``{name: (low, high)}`` mappings: the tightest range each name is valid over.
+
+    One implementation, because there are two consumers that must not drift apart --
+    :meth:`ACECosmology.training_ranges` over the declared engine spec, and
+    :meth:`ACECosmology._load_emulators_for_new_requirements` over the emulators actually loaded.
+    """
+    intersected = {}
+    for ranges in ranges_per_emulator:
+        for name, (low, high) in ranges.items():
+            previous_low, previous_high = intersected.get(name, (-np.inf, np.inf))
+            intersected[name] = (max(low, previous_low), min(high, previous_high))
+    return intersected
+
+
+def _warn_priors_beyond_ranges(params, ranges):
+    """Warn for each varied parameter whose prior reaches outside the emulators' training ranges.
+
+    Outside them every emulated result is NaN-masked, which a posterior turns into ``-inf``: the
+    prior is effectively truncated whether or not anybody said so.  :meth:`ACECosmology.truncate_priors`
+    makes it explicit; this is the warning for those who have not called it.
+
+    No de-duplication state is kept: the message names the parameter, so it differs per parameter,
+    and :mod:`warnings` already suppresses repeats of an identical message from one location.
+    """
+    for param in params:
+        name = param.basename
+        if param.fixed or name not in ranges:
+            continue
+        limits = param.prior.limits
+        low, high = ranges[name]
+        if limits[0] < low or limits[1] > high:
+            warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
+                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+
+
+def _add_h_from_H0(ranges, replace):
+    """Report an ``H0`` range as ``h`` as well, scaled by 1/100.
+
+    ``replace`` says whether ``H0`` itself survives, and the two consumers genuinely differ:
+    prior truncation works in desilike names, so ``H0`` is popped; the run-time guard clips by
+    whatever name it is asked for -- the networks' native ``H0`` and desilike's ``h`` both reach
+    it -- so there it must keep both.
+    """
+    if 'H0' not in ranges:
+        return ranges
+    low, high = ranges.pop('H0') if replace else ranges['H0']
+    previous_low, previous_high = ranges.get('h', (-np.inf, np.inf))
+    ranges['h'] = (max(low / 100., previous_low), min(high / 100., previous_high))
+    return ranges
+
+
 def _find_capse_metadata(emulator_dir):
     """Introspect a Capse-style Cl emulator directory: per-spectrum network subdirectories
     ('TT', 'TE', 'EE', and optionally 'BB', 'PP'), each holding nn_setup.json / weights.npy /
@@ -1249,6 +1334,28 @@ class ACECosmology(PrimordialCosmology):
         """
         if basis not in ('cosmo', 'emulator'):
             raise ValueError(f"basis must be 'cosmo' or 'emulator', got {basis!r}")
+        if isinstance(engine, PrimordialCosmology):
+            # A cosmology may be handed over instead of a spec, so that a caller need not test how
+            # far it has got. Resolved first, because what it yields is an engine spec like any
+            # other and has to go through the normalisation below.
+            #
+            # Only an ACECosmology has packaged emulators; anything else declares no ranges.
+            if not isinstance(engine, ACECosmology):
+                return {}
+            cosmology = engine
+            # `_param_clip_ranges` is filled by `_load_emulators_for_new_requirements`, at build.
+            # Once it is, it is what the out-of-range guard actually enforces; before that, the
+            # engine spec the instance was constructed with is all there is.
+            if cosmology._param_clip_ranges:
+                ranges = dict(cosmology._param_clip_ranges)
+                if basis == 'cosmo':
+                    # The guard keeps both bases, since it is asked for whichever name the caller
+                    # uses; 'cosmo' reports desilike names only.
+                    ranges.pop('H0', None)
+                return ranges
+            engine = cosmology._init[1].get('engine', 'ace')
+            if base_dir is None:
+                base_dir = cosmology._init[1].get('base_dir')
         base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
         if isinstance(engine, str):
             engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section_: engine for section_ in ['harmonic', 'fourier', 'background']}
@@ -1258,23 +1365,19 @@ class ACECosmology(PrimordialCosmology):
             if unknown:
                 raise ValueError(f'unknown section(s) {unknown}; engine has {sorted(engine)}')
             engine = {name: engine[name] for name in sections}
-        training_ranges = {}
+        ranges_per_emulator = []
         for engine_name in set(engine.values()):
             if engine_name is None:
                 continue
             emulator_dir = base_emulator_dir / engine_name
             if (emulator_dir / 'TT' / 'nn_setup.json').is_file():
                 # Capse-style Cl emulator directory: introspect the networks' training ranges.
-                emulator_ranges = _find_capse_metadata(emulator_dir)['ranges']
+                ranges_per_emulator.append(_find_capse_metadata(emulator_dir)['ranges'])
             else:
-                emulator_ranges = _PACKAGED_EMULATORS.get(engine_name, {}).get('ranges', {})
-            for name, (low, high) in emulator_ranges.items():
-                previous_low, previous_high = training_ranges.get(name, (-np.inf, np.inf))
-                training_ranges[name] = (max(low, previous_low), min(high, previous_high))
-        if basis == 'cosmo' and 'H0' in training_ranges:
-            low, high = training_ranges.pop('H0')
-            previous_low, previous_high = training_ranges.get('h', (-np.inf, np.inf))
-            training_ranges['h'] = (max(low / 100., previous_low), min(high / 100., previous_high))
+                ranges_per_emulator.append(_PACKAGED_EMULATORS.get(engine_name, {}).get('ranges', {}))
+        training_ranges = _intersect_ranges(ranges_per_emulator)
+        if basis == 'cosmo':
+            training_ranges = _add_h_from_H0(training_ranges, replace=True)
         return training_ranges
 
     @classmethod
@@ -1489,40 +1592,13 @@ class ACECosmology(PrimordialCosmology):
                                      "(engine['background'], e.g. 'ACE_mnuw0wacdm_ln10As_basis') providing f_z")
                 if self._ace_emulator_key is not None and self._ace_emulator_key not in self._loaded_emulators:
                     self._loaded_emulators[self._ace_emulator_key] = self._load_emulator(self._ace_emulator_key)
-        self._rebuild_param_clip_ranges()
-
-    def _rebuild_param_clip_ranges(self):
-        """Intersect the training ranges of all loaded packaged / Capse-style emulators, keyed by
-        desilike parameter name.  __call__ clips its inputs to these ranges before evaluation and
-        masks every result to NaN when any parameter falls outside (graceful rejection instead of
-        a non-finite crash in downstream spline / linear solves)."""
-        self._param_clip_ranges = {}
-        for emulator_key in self._loaded_emulators:
-            for name, (low, high) in self._emulator_metadata[emulator_key].get('ranges', {}).items():
-                if name in self._param_clip_ranges:
-                    prev_low, prev_high = self._param_clip_ranges[name]
-                    self._param_clip_ranges[name] = (max(low, prev_low), min(high, prev_high))
-                else:
-                    self._param_clip_ranges[name] = (low, high)
-        if 'H0' in self._param_clip_ranges:
-            low, high = self._param_clip_ranges['H0']
-            self._param_clip_ranges.setdefault('h', (low / 100., high / 100.))
-        # One-time warning per parameter whose prior extends beyond the emulator training range:
-        # such samples yield NaN results, i.e. the prior is effectively truncated to the range.
-        warned = getattr(self, '_warned_prior_ranges', set())
-        for param in self.params:
-            name = param.basename
-            if name in warned or name not in self._param_clip_ranges or param.fixed:
-                continue
-            limits = getattr(param.prior, 'limits', None)
-            if limits is None:
-                continue
-            low, high = self._param_clip_ranges[name]
-            if limits[0] < low or limits[1] > high:
-                warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
-                              f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
-                warned.add(name)
-        self._warned_prior_ranges = warned
+        # The ranges the out-of-range guard enforces: intersected over the emulators actually
+        # loaded, keyed by parameter name.  `replace=False` keeps `H0` alongside `h`, since the
+        # guard is asked for whichever name the caller uses.
+        self._param_clip_ranges = _add_h_from_H0(
+            _intersect_ranges(self._emulator_metadata[emulator_key].get('ranges', {})
+                              for emulator_key in self._loaded_emulators), replace=False)
+        _warn_priors_beyond_ranges(self.params, self._param_clip_ranges)
 
     def __call__(self):
         import jaxace
@@ -1557,7 +1633,7 @@ class ACECosmology(PrimordialCosmology):
         # Out-of-range guard for packaged emulators: clip parameter values to the training
         # ranges so every internal evaluation (networks, splines, BAO filter) stays finite,
         # record per-parameter validity, and mask all results to NaN below when invalid.
-        clip_ranges = getattr(self, '_param_clip_ranges', {})
+        clip_ranges = self._param_clip_ranges
         params_in_range = {}
         if clip_ranges:
             unclipped_get_param = get_param
@@ -2576,20 +2652,20 @@ class CosmologyEmulator(_SectionEmulator):
                      if _sector(spec_key[0]) == name]
             if not specs:
                 continue
-            # A cosmology like the emulated one, registered with this sector's requirements
-            # only. Fresh parameter nodes, not the pipeline's: one node shared by two separately
-            # compiled graphs is its own bug. A derived parameter goes with the sector its
-            # getter is read from.
+            # A cosmology like the emulated one, declared with this sector's requirements only
+            # -- through the constructor, since a build starts a cosmology from its declaration.
+            # Fresh parameter nodes, not the pipeline's: training sets values on them, and the
+            # pipeline's should not move. A derived parameter goes with the sector its getter is
+            # read from.
             params = [param.clone() for param in root.params]
             params += [param.clone() for param in root.derived_params
                        if _sector(root._get_derived[param.name][0]) == name]
-            args, kwargs = root._init
-            sub = type(root)(*args, **{**kwargs, 'params': VariableCollection(params)})
             requirements = {}
             for spec_key, spec in specs:
                 requirements.setdefault(spec_key[0], []).append(
                     {**spec['static'], **{coord: spec[coord] for coord in _COORDS if coord in spec}})
-            sub.add_requirements(requirements)
+            args, kwargs = root._init
+            sub = type(root)(*args, **{**kwargs, 'params': VariableCollection(params), 'requirements': requirements})
             # `exact` belongs to the routed sectors (see `_RoutedSectionEmulator.__init__`)
             self._sectors[name] = cls(sub, space, **(options if name == 'harmonic' else dict(options, exact=exact)))
         if len(self._sectors) < 2:
@@ -2633,14 +2709,28 @@ class CosmologyEmulator(_SectionEmulator):
             raise RuntimeError(f'no sector predicts the leaves {missing}')
         return out
 
-    def to_calculator(self, *args, calculator=None, **kwargs):
-        deployed = super().to_calculator(*args, calculator=calculator, **kwargs)
-        # a sector read back from a file has no calculator, and the harmonic one reads the
-        # fiducial's neutrino content off it whenever that is not varied
+    def to_calculator(self, calculator=None, center=True):
+        # The sectors get their calculator BEFORE the deploy, not after. The base runs no
+        # constructor, so it gives the deployed object its state by predicting at the space
+        # centre -- and that prediction goes through each sector's `to_training`, which reads the
+        # fiducial's neutrino content (`m_ncdm`, `N_ur`, `T_cmb`) off the sector's own calculator.
+        # A sector read back from a file has none, and handing them one afterwards is too late:
+        # `TypeError: 'NoneType' object is not subscriptable` out of `_theta_args`.
+        if calculator is not None:
+            self.calculator = calculator
+        source = getattr(self, 'calculator', None)
+        # `_fiducial` is latched in `__post_init__`, i.e. at a build, so a calculator that has
+        # only been constructed carries none -- and the harmonic sector is the one sector with no
+        # fiducial of its own (the routed ones rebuild theirs from their anchors), so it reads
+        # the neutrino content off this calculator and gets None. Run that setup here rather than
+        # requiring the caller to have built what they hand over.
+        if source is not None and getattr(source, '_fiducial', None) is None:
+            args, kwargs = source._init
+            source.__post_init__(*args, **kwargs)
         for sub in self._sectors.values():
             if getattr(sub, 'calculator', None) is None:
-                sub.calculator = self.calculator
-        return deployed
+                sub.calculator = source
+        return super().to_calculator(calculator=calculator, center=center)
 
     def __getstate__(self):
         state = super().__getstate__()

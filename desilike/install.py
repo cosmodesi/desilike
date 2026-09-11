@@ -358,9 +358,9 @@ class Installer(object):
             func(self)
             self.setenv()
 
-        from .base import Calculator, _iter_calculators
+        from .base import Calculator, _iter_nodes
         if isinstance(obj, Calculator):
-            for calculator in _iter_calculators(obj):
+            for calculator in _iter_nodes(obj):
                 install(type(calculator))
         else:
             install(obj if isinstance(obj, type) else type(obj))

@@ -3,6 +3,7 @@
 
 import jax.numpy as jnp
 from desilike.base import GaussianLikelihood
+from desilike.parameter import Variable
 
 
 class BaseBBNLikelihood(GaussianLikelihood):
@@ -32,7 +33,7 @@ class BaseBBNLikelihood(GaussianLikelihood):
             cosmo = CosmoprimoCosmology(fiducial='DESI')
         self.cosmo = cosmo
         self._quantities = list(quantities)
-        self.flatdata = jnp.asarray(mean)
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(mean))
         self.precision = jnp.linalg.inv(jnp.asarray(covariance))
 
     def __post_init__(self, *args, **kwargs):

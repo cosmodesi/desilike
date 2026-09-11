@@ -45,7 +45,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import GaussianLikelihood
-from desilike.parameter import VariableCollection
+from desilike.parameter import Variable, VariableCollection
 
 
 #: Component names, exactly as the release spells them: they key ``BPWF`` and ``s``, and are
@@ -107,7 +107,7 @@ class SPT3G2yrMUSELikelihood(GaussianLikelihood):
             raise ValueError(f'band-power windows span ell {ells[0]}..{ells[-1]}, expected '
                              f'{self.ellmin}..{self.ellmax}')
 
-        self.flatdata = jnp.asarray(np.asarray(like.d_transformed_vec, dtype='f8'))
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.asarray(like.d_transformed_vec, dtype='f8')))
         covariance = np.asarray(like.Σ_transformed, dtype='f8')
         self.precision = jnp.asarray(np.linalg.inv(covariance))
 

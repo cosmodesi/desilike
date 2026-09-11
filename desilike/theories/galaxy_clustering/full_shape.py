@@ -587,12 +587,16 @@ class KaiserTracerSpectrum2Poles(Calculator):
         return self.poles
 
     def tree_flatten(self):
-        return [self.poles], None
+        # `k` and `ells` in aux, as the pt classes already do: they decide what `poles` means,
+        # and an emulated instance is reconstructed from exactly this -- a bare `to_calculator()`
+        # would otherwise carry the constructor's default grid beside poles on the trained one.
+        return [self.poles], {'k': self.k, 'ells': self.ells}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj.poles = children[0]
+        obj.k, obj.ells = aux['k'], aux['ells']
         return obj
 
 
@@ -662,7 +666,7 @@ class TNSPTSpectrum2Poles(Calculator):
     TNS 1-loop matter power spectrum multipoles.
 
     Implements the model of Taruya, Nishimichi & Saito 2010 (arXiv:0912.0244).
-    TNS loop kernels are precomputed at compile time (``__post_init__``).
+    TNS loop kernels are precomputed at build time (``__post_init__``).
 
     Parameters
     ----------
@@ -868,7 +872,7 @@ class TNSTracerCorrelation2Poles(Calculator):
     TNS tracer correlation function multipoles via FFTLog.
 
     The FFTLog Hankel transform is linear, so a transformation matrix is precomputed
-    at compile time and applied as a JAX einsum in ``__call__``.
+    at build time and applied as a JAX einsum in ``__call__``.
 
     Parameters
     ----------
@@ -2506,12 +2510,16 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
 
     def tree_flatten(self):
-        return [self.poles], None
+        # `k` and `ells` in aux, as the pt classes already do: they decide what `poles` means,
+        # and an emulated instance is reconstructed from exactly this -- a bare `to_calculator()`
+        # would otherwise carry the constructor's default grid beside poles on the trained one.
+        return [self.poles], {'k': self.k, 'ells': self.ells}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj.poles = children[0]
+        obj.k, obj.ells = aux['k'], aux['ells']
         return obj
 
 
@@ -2747,7 +2755,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
                 Parameter('snb0', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
-                Parameter('X_FoG', value=0., fixed=True, latex=r'X_{\mathrm{FoG}}'),
+                # the same declaration as the power spectrum's: one tracer's Finger-of-God
+                # parameter is one parameter, and a joint P+B fit unifies them by name --
+                # which a build refuses when the two declarations disagree (they differed
+                # in `ref`, since an unset prior leaves it unbounded)
+                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r'X_{\mathrm{FoG}}'),
             ]
         else:
             auto_params = [
@@ -2758,7 +2770,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('c2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
                 Parameter('snb0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
-                Parameter('X_FoG', value=0., fixed=True, latex=r'X_{\mathrm{FoG}}'),
+                # the same declaration as the power spectrum's: one tracer's Finger-of-God
+                # parameter is one parameter, and a joint P+B fit unifies them by name --
+                # which a build refuses when the two declarations disagree (they differed
+                # in `ref`, since an unset prior leaves it unbounded)
+                Parameter('X_FoG', value=0., fixed=True, prior=dict(dist='uniform', limits=[0, 10]), latex=r'X_{\mathrm{FoG}}'),
             ]
         return propose_params_multitracer(auto_params, tracers)  # no cross (bispectra not implemented)
 
@@ -3662,7 +3678,7 @@ class JAXEffortPTSpectrum2Poles(Calculator):
         self.z = float(z)
         if cosmo is None:
             cosmo = ACECosmology(engine='ace', fiducial=fiducial)
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo = cosmo  # Calculator dep; _trace_graph discovers it from __dict__
 
     def __post_init__(self, z=0.5, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI',
                       model='velocileptors_rept_mnuw0wacdm', with_amplitude=False, params=None, **kwargs):
@@ -4197,7 +4213,7 @@ class COMETPTSpectrum2Poles(Calculator):
         if ells is None:
             ells = (0, 2, 4)
         self.ells = tuple(ells)
-        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; _trace_graph discovers it from __dict__
         self._backend = backend
         self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
 
@@ -4447,7 +4463,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             # calculator (there is no PT to route it to).
             if len(avir_vc):
                 assign_params(self, avir_vc, tracers)
-            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; _trace_graph discovers it from __dict__
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
@@ -4736,7 +4752,7 @@ class COMETPTSpectrum3Poles(Calculator):
         if ells is None:
             ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
-        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; _trace_graph discovers it from __dict__
         self._backend = backend
         if backend == 'numpy':
             self._is_external = True
@@ -4896,7 +4912,7 @@ class COMETTracerSpectrum3Poles(Calculator):
                 Parameter('cnloB', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c^B_{\mathrm{nlo}}'),
             ], tracers)
             assign_params(self, cnloB_vc, tracers)
-            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; _trace_graph discovers it from __dict__
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
@@ -5210,7 +5226,11 @@ class _ScaledEmulator(CalculatorEmulator):
         # which a training restored entirely from a checkpoint never reaches.
         import jax
 
-        children = jax.tree_util.tree_leaves(calculator.tree_flatten()[0])
+        # `self.calculator`, not the argument: `CalculatorEmulator.__init__` emulates a *copy*
+        # (so that tracing the tree does not supersede a graph the caller already built on it),
+        # and it is that copy `build` ran.  The argument was never called, so its state is
+        # whatever it held before -- for a FOLPS pt, no `table` at all.
+        children = jax.tree_util.tree_leaves(self.calculator.tree_flatten()[0])
         self._set_fiducial(
             {name: np.asarray(leaf) for name, leaf in zip(self.children_leafnames, children)},
             {param.name: param.value for param in self.graph.params if not param.derived})
@@ -5225,18 +5245,22 @@ class _ScaledEmulator(CalculatorEmulator):
         self.precondition = tuple(name for name in type(self).precondition
                                   if find_conflicts(name, self.space.params))
 
-    def to_calculator(self, *args, **kwargs):
-        """As the base, plus the run-time scalar provider when the caller supplies a template.
+    def to_calculator(self, calculator=None, center=True):
+        """As the base, plus the run-time scalar provider when the caller supplies a calculator.
 
         A saved emulator has no calculator to take one from, and the closed-form routing needs
-        one -- the template passed here is exactly it.  Cloned, because the deployed pt is
-        constructed with that same object and compiling one calculator twice corrupts the
-        pure_callback layout.  An emulated provider travels in the state and wins over this.
+        one -- the template of the calculator passed here is exactly it.  Cloned, because that
+        same object stays wired into the caller's pipeline and compiling one calculator twice
+        corrupts the pure_callback layout.  An emulated provider travels in the state and wins
+        over this.
         """
-        template = kwargs.get('template')
+        # the deployed-from calculator when the caller named one, this emulator's own otherwise
+        # (a live emulator has one; a saved emulator is why `calculator` exists)
+        source = calculator if calculator is not None else getattr(self, 'calculator', None)
+        template = getattr(source, 'template', None)
         if template is not None and self.graph_scalars is None and self._state_scalars is None:
             self.graph_scalars = _compile_scalars(template.clone())
-        return super().to_calculator(*args, **kwargs)
+        return super().to_calculator(calculator=calculator, center=center)
 
     # ── the hooks ─────────────────────────────────────────────────────────────
     def select_params(self, names):
@@ -5270,7 +5294,7 @@ class _ScaledEmulator(CalculatorEmulator):
                 raise ValueError(
                     'no run-time scalar provider: a saved emulator whose scalars are closed-form '
                     'carries none, because a Calculator is not part of the state. Deploy it with '
-                    '`to_calculator(template=...)`, or set `emulator.graph_scalars` yourself.')
+                    '`to_calculator(calculator=...)`, or set `emulator.graph_scalars` yourself.')
             # A saved emulator carries the fitted provider, not a calculator -- but the provider
             # gives one back, which is what keeps this a single path.
             from cosmoprimo.emulators.tools import Emulator as _Emulator

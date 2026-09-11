@@ -23,9 +23,9 @@ def _check(result, name=''):
 def _eval(theory, output='poles', **overrides):
     """Compile *theory* and evaluate it at its default parameters (with optional
     *overrides*); return the named output attribute as a numpy array."""
-    from desilike.base import compile, params
-    pipe = compile(theory)
-    values = {par.name: par._value for par in params(theory)}
+    from desilike.base import build, get_params
+    pipe = build(theory)
+    values = {par.name: par._value for par in get_params(theory)}
     values.update(overrides)
     pipe(values)
     return np.asarray(getattr(theory, output))
@@ -33,8 +33,8 @@ def _eval(theory, output='poles', **overrides):
 
 def _varied(theory):
     """Return the list of non-fixed parameters of *theory*."""
-    from desilike.base import params
-    return list(params(theory).select(fixed=False))
+    from desilike.base import get_params
+    return list(get_params(theory).select(fixed=False))
 
 
 def _direct_template(**kw):
@@ -49,17 +49,17 @@ class TestBAOSpectrum2Template:
     def test_basic(self):
         """Compile and evaluate; check shapes, positivity, df and AP scaling."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         tmpl = BAOSpectrum2Template(k=k, z=1., fiducial=fiducial)
 
-        p = params(tmpl)
+        p = get_params(tmpl)
         names = {par.name for par in p}
         assert 'qpar' in names and 'qper' in names and 'df' in names
 
-        pipe = compile(tmpl)
+        pipe = build(tmpl)
         pipe({'qpar': 1., 'qper': 1., 'df': 1.})
         assert tmpl.pk_dd.shape == (50,)
         assert tmpl.pknow_dd.shape == (50,)
@@ -80,13 +80,13 @@ class TestBAOSpectrum2Template:
     def test_apmodes(self):
         """All AP modes produce no distortion at default parameter values."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         for apmode in ('qparqper', 'qisoqap', 'qiso', 'qap'):
             tmpl = BAOSpectrum2Template(fiducial=fiducial, apmode=apmode)
-            p = params(tmpl)
-            pipe = compile(tmpl)
+            p = get_params(tmpl)
+            pipe = build(tmpl)
             pipe({par.name: par._value for par in p})
             assert abs(float(tmpl.DH_over_rd) / tmpl._DH_over_rd_fid - 1.) < 1e-10, apmode
             assert abs(float(tmpl.DM_over_rd) / tmpl._DM_over_rd_fid - 1.) < 1e-10, apmode
@@ -94,12 +94,12 @@ class TestBAOSpectrum2Template:
     def test_only_now(self):
         """only_now replaces pk_dd with pknow_dd."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         tmpl = BAOSpectrum2Template(fiducial=fiducial, only_now=True)
-        pipe = compile(tmpl)
-        pipe({p.name: p._value for p in params(tmpl)})
+        pipe = build(tmpl)
+        pipe({p.name: p._value for p in get_params(tmpl)})
         assert np.allclose(tmpl.pk_dd, tmpl.pknow_dd)
 
 
@@ -110,15 +110,15 @@ class TestFixedSpectrum2Template:
     def test_basic(self):
         """No free parameters; pk_dd/pknow_dd shapes and positivity; qpar=qper=1."""
         from desilike.theories.galaxy_clustering import FixedSpectrum2Template
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         tmpl = FixedSpectrum2Template(k=k, z=1., fiducial=fiducial)
 
-        assert len(params(tmpl)) == 0
+        assert len(get_params(tmpl)) == 0
 
-        pipe = compile(tmpl)
+        pipe = build(tmpl)
         pipe({})
         assert tmpl.pk_dd.shape == (50,)
         assert tmpl.pknow_dd.shape == (50,)
@@ -131,24 +131,24 @@ class TestFixedSpectrum2Template:
     def test_only_now(self):
         """only_now replaces pk_dd with pknow_dd."""
         from desilike.theories.galaxy_clustering import FixedSpectrum2Template
-        from desilike.base import compile
+        from desilike.base import build
 
         fiducial = _make_fiducial()
         tmpl = FixedSpectrum2Template(fiducial=fiducial, only_now=True)
-        pipe = compile(tmpl)
+        pipe = build(tmpl)
         pipe({})
         assert np.allclose(tmpl.pk_dd, tmpl.pknow_dd)
 
     def test_downstream_theory(self):
         """Plugs into a downstream Spectrum2Poles theory like any other template."""
         from desilike.theories.galaxy_clustering import FixedSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         theory = DampedBAOWigglesPTSpectrum2Poles(k=k, template=FixedSpectrum2Template(fiducial=fiducial), ells=(0, 2))
-        pipe = compile(theory)
-        result = pipe({par.name: par._value for par in params(theory)})
+        pipe = build(theory)
+        result = pipe({par.name: par._value for par in get_params(theory)})
         _check(np.asarray(result), 'FixedSpectrum2Template downstream')
 
 
@@ -157,19 +157,19 @@ class TestFixedSpectrum2Template:
 class TestDampedBAOWigglesPoles:
 
     def test_spectrum_basic(self):
-        """DampedBAOWigglesPTSpectrum2Poles: compile and evaluate, check shapes and parameter names."""
+        """DampedBAOWigglesPTSpectrum2Poles: build and evaluate, check shapes and parameter names."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         theory = DampedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial), ells=(0, 2))
 
-        p = params(theory)
+        p = get_params(theory)
         names = {par.name for par in p}
         assert {'b1', 'dbeta', 'sigmapar', 'sigmaper', 'qpar'} <= names
 
-        pipe = compile(theory)
+        pipe = build(theory)
         pipe({par.name: par._value for par in p})
         assert theory.poles.shape == (2, 50)
         assert np.all(np.isfinite(theory.poles))
@@ -177,25 +177,25 @@ class TestDampedBAOWigglesPoles:
     def test_spectrum_models(self):
         """DampedBAOWigglesPTSpectrum2Poles: all model variants run."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 30)
         for model in ('standard', 'fix-damping', 'move-all', 'fog-damping'):
             theory = DampedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial), model=model)
-            pipe = compile(theory)
-            pipe({par.name: par._value for par in params(theory)})
+            pipe = build(theory)
+            pipe({par.name: par._value for par in get_params(theory)})
             assert theory.poles.shape == (2, 30), model
 
     def test_spectrum_reciso(self):
         """DampedBAOWigglesPTSpectrum2Poles: reciso reconstruction runs."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         theory = DampedBAOWigglesPTSpectrum2Poles(template=BAOSpectrum2Template(fiducial=fiducial), mode='reciso')
-        pipe = compile(theory)
-        pipe({par.name: par._value for par in params(theory)})
+        pipe = build(theory)
+        pipe({par.name: par._value for par in get_params(theory)})
         assert np.all(np.isfinite(theory.poles))
 
     def test_spectrum_templates(self):
@@ -222,23 +222,23 @@ class TestDampedBAOWigglesPoles:
             break
 
     def test_tracer_spectrum_basic(self):
-        """DampedBAOWigglesTracerSpectrum2Poles: compile, evaluate, broadband params present."""
+        """DampedBAOWigglesTracerSpectrum2Poles: build, evaluate, broadband params present."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles, DampedBAOWigglesTracerSpectrum2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         pt = DampedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial))
         tracer = DampedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt, ells=(0, 2))
 
-        p = params(tracer)
+        p = get_params(tracer)
         names = {par.name for par in p}
         assert 'al0_-3' in names and 'al2_1' in names
         assert 'b1' in names and 'qpar' in names
 
-        pipe = compile(tracer)
+        pipe = build(tracer)
         param_vals = {par.name: par._value for par in p}
         pipe(param_vals)
         assert tracer.poles.shape == (2, 50)
@@ -273,19 +273,19 @@ class TestDampedBAOWigglesPoles:
         assert not np.allclose(r0, r1), "broadband param had no effect"
 
     def test_correlation_basic(self):
-        """DampedBAOWigglesPTCorrelation2Poles: compile and evaluate, check shapes."""
+        """DampedBAOWigglesPTCorrelation2Poles: build and evaluate, check shapes."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles, DampedBAOWigglesPTCorrelation2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         s = np.linspace(50., 150., 51)
         pt = DampedBAOWigglesPTSpectrum2Poles(template=BAOSpectrum2Template(fiducial=fiducial))
         corr = DampedBAOWigglesPTCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
 
-        pipe = compile(corr)
-        pipe({par.name: par._value for par in params(corr)})
+        pipe = build(corr)
+        pipe({par.name: par._value for par in get_params(corr)})
         assert corr.poles.shape == (2, 51)
         assert np.all(np.isfinite(corr.poles))
 
@@ -318,24 +318,24 @@ class TestDampedBAOWigglesPoles:
             break
 
     def test_tracer_correlation_basic(self):
-        """DampedBAOWigglesTracerCorrelation2Poles: compile, evaluate, broadband params, zero-bb identity."""
+        """DampedBAOWigglesTracerCorrelation2Poles: build, evaluate, broadband params, zero-bb identity."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles,
             DampedBAOWigglesPTCorrelation2Poles, DampedBAOWigglesTracerCorrelation2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         s = np.linspace(50., 150., 51)
         pt = DampedBAOWigglesPTSpectrum2Poles(template=BAOSpectrum2Template(fiducial=fiducial))
         tracer = DampedBAOWigglesTracerCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
 
-        p = params(tracer)
+        p = get_params(tracer)
         names = {par.name for par in p}
         assert 'al0_-2' in names and 'al2_1' in names
         assert 'b1' in names and 'qpar' in names
 
-        pipe = compile(tracer)
+        pipe = build(tracer)
         param_vals = {par.name: par._value for par in p}
         pipe(param_vals)
         assert tracer.poles.shape == (2, 51)
@@ -344,8 +344,10 @@ class TestDampedBAOWigglesPoles:
         # zero broadband → tracer equals bare correlation
         bb_zero = {n: 0. for n in names if n.startswith('al')}
         pipe({**param_vals, **bb_zero})
+        # `DampedBAOWigglesPTCorrelation2Poles.__init__` sizes the pt it is handed, which
+        # invalidates this graph; we have finished calling it (only `tracer.poles` is read below).
         bare = DampedBAOWigglesPTCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
-        bare_pipe = compile(bare)
+        bare_pipe = build(bare)
         # the bare correlation has no broadband parameters, and a name a pipeline does not have
         # is an error rather than a silent drop
         bare_pipe({name: value for name, value in param_vals.items() if name in bare_pipe.params})
@@ -374,19 +376,19 @@ class TestDampedBAOWigglesPoles:
 class TestResummedBAOWigglesPoles:
 
     def test_spectrum_basic(self):
-        """ResummedBAOWigglesPTSpectrum2Poles: compile and evaluate, check shapes and parameter names."""
+        """ResummedBAOWigglesPTSpectrum2Poles: build and evaluate, check shapes and parameter names."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template, ResummedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         theory = ResummedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial), ells=(0, 2))
 
-        p = params(theory)
+        p = get_params(theory)
         names = {par.name for par in p}
         assert {'b1', 'dbeta', 'd', 'qpar'} <= names
 
-        pipe = compile(theory)
+        pipe = build(theory)
         pipe({par.name: par._value for par in p})
         assert theory.poles.shape == (2, 50)
         assert np.all(np.isfinite(theory.poles))
@@ -394,20 +396,20 @@ class TestResummedBAOWigglesPoles:
     def test_spectrum_modes(self):
         """ResummedBAOWigglesPTSpectrum2Poles: reconstruction modes and model variants run."""
         from desilike.theories.galaxy_clustering import BAOSpectrum2Template, ResummedBAOWigglesPTSpectrum2Poles
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 30)
         for mode in ('', 'recsym', 'reciso'):
             theory = ResummedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial), mode=mode)
-            pipe = compile(theory)
-            pipe({par.name: par._value for par in params(theory)})
+            pipe = build(theory)
+            pipe({par.name: par._value for par in get_params(theory)})
             assert np.all(np.isfinite(theory.poles)), mode
 
         for model in ('standard', 'move-all', 'fog-damping'):
             theory = ResummedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial), model=model)
-            pipe = compile(theory)
-            pipe({par.name: par._value for par in params(theory)})
+            pipe = build(theory)
+            pipe({par.name: par._value for par in get_params(theory)})
             assert np.all(np.isfinite(theory.poles)), model
 
     def test_spectrum_templates(self):
@@ -434,19 +436,19 @@ class TestResummedBAOWigglesPoles:
             break
 
     def test_tracer_spectrum_basic(self):
-        """ResummedBAOWigglesTracerSpectrum2Poles: compile and evaluate."""
+        """ResummedBAOWigglesTracerSpectrum2Poles: build and evaluate."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, ResummedBAOWigglesPTSpectrum2Poles, ResummedBAOWigglesTracerSpectrum2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         k = np.linspace(0.01, 0.3, 50)
         pt = ResummedBAOWigglesPTSpectrum2Poles(k=k, template=BAOSpectrum2Template(fiducial=fiducial))
         tracer = ResummedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt, ells=(0, 2))
 
-        pipe = compile(tracer)
-        pipe({par.name: par._value for par in params(tracer)})
+        pipe = build(tracer)
+        pipe({par.name: par._value for par in get_params(tracer)})
         assert tracer.poles.shape == (2, 50)
         assert np.all(np.isfinite(tracer.poles))
 
@@ -474,19 +476,19 @@ class TestResummedBAOWigglesPoles:
         assert not np.allclose(r0, r1), "broadband param had no effect"
 
     def test_correlation_basic(self):
-        """ResummedBAOWigglesPTCorrelation2Poles: compile and evaluate, check shapes."""
+        """ResummedBAOWigglesPTCorrelation2Poles: build and evaluate, check shapes."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, ResummedBAOWigglesPTSpectrum2Poles, ResummedBAOWigglesPTCorrelation2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         s = np.linspace(50., 150., 51)
         pt = ResummedBAOWigglesPTSpectrum2Poles(template=BAOSpectrum2Template(fiducial=fiducial))
         corr = ResummedBAOWigglesPTCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
 
-        pipe = compile(corr)
-        pipe({par.name: par._value for par in params(corr)})
+        pipe = build(corr)
+        pipe({par.name: par._value for par in get_params(corr)})
         assert corr.poles.shape == (2, 51)
         assert np.all(np.isfinite(corr.poles))
 
@@ -516,19 +518,19 @@ class TestResummedBAOWigglesPoles:
             break
 
     def test_tracer_correlation_basic(self):
-        """ResummedBAOWigglesTracerCorrelation2Poles: compile and evaluate."""
+        """ResummedBAOWigglesTracerCorrelation2Poles: build and evaluate."""
         from desilike.theories.galaxy_clustering import (
             BAOSpectrum2Template, ResummedBAOWigglesPTSpectrum2Poles, ResummedBAOWigglesTracerCorrelation2Poles,
         )
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
 
         fiducial = _make_fiducial()
         s = np.linspace(50., 150., 51)
         pt = ResummedBAOWigglesPTSpectrum2Poles(template=BAOSpectrum2Template(fiducial=fiducial))
         tracer = ResummedBAOWigglesTracerCorrelation2Poles(s=s, pt=pt, ells=(0, 2))
 
-        pipe = compile(tracer)
-        pipe({par.name: par._value for par in params(tracer)})
+        pipe = build(tracer)
+        pipe({par.name: par._value for par in get_params(tracer)})
         assert tracer.poles.shape == (2, 51)
         assert np.all(np.isfinite(tracer.poles))
 

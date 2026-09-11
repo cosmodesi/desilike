@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import Likelihood
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 
 
 class _BaseCandlLikelihood(Likelihood):
@@ -137,6 +137,10 @@ class _BaseCandlLikelihood(Likelihood):
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+        # After the ell_cuts crop: `crop_for_data_selection()` shortens `_data_bandpowers`, and it
+        # is the cropped vector the likelihood compares against.  (`like.effective_ells` is *not*
+        # cropped -- use `N_bins` for per-bin bookkeeping.)
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.like._data_bandpowers))
 
     def _clear_internal_priors(self, clear):
         """Drop Gaussian priors candl would otherwise apply inside its own ``log_like``.
@@ -314,13 +318,42 @@ class _BaseCandlLikelihood(Likelihood):
             Dl[spec_type] = dl_full[2:ellmax + 1]
         return Dl
 
-    def __call__(self):
+    def _params_dict(self):
+        """Nuisance values, the cosmological parameters candl applies its own priors to, and Dl."""
         params_dict = {name: param.value for name, param in self.params.items()}
         for name in self._cosmo_prior_names:
             params_dict[name] = self.cosmo[self._cosmo_params.get(name, name)]
         params_dict['Dl'] = self._build_Dl()
+        return params_dict
 
-        logpdf = self.like.log_like(params_dict)
+    @property
+    def flattheory(self):
+        """The binned model band powers, in the order of the data vector.
+
+        A property, not something ``__call__`` sets: it is the same binning `log_like_for_bdp`
+        does internally, and doing it twice on the sampling path would cost every step for the
+        sake of a vector only a caller wanting the model reads.
+
+        Whether the binning is a separate step is candl's business and differs by class, so this
+        follows whatever that class's own ``log_like_for_bdp`` does rather than assuming: `Like`
+        bins `get_model_specs` afterwards, `LensLike` returns band powers from it already binned
+        (binning those again raised `dot_general requires contracting dimensions to have the same
+        shape, got (10,) and (3000,)`).
+        """
+        specs = self.like.get_model_specs(self._params_dict())
+        return self.like.bin_model_specs(specs) if self._bins_model_specs else specs
+
+    #: Whether candl's ``get_model_specs`` still has to be binned -- see :attr:`flattheory`.
+    _bins_model_specs = True
+
+    def __call__(self):
+        params_dict = self._params_dict()
+
+        # `log_like_for_bdp` rather than `log_like`: the two differ only in where the band powers
+        # come from -- candl's own docstring names this use case ("calculating the derivative for
+        # different mock data sets") -- and both apply `prior_logl` identically, so the
+        # split-prior subtraction below is unaffected.
+        logpdf = self.like.log_like_for_bdp(params_dict, jnp.asarray(self.flatdata))
         for name in self._split_param_names:
             # Remove the diagonal piece now owned by desilike's Parameter.prior (added back by
             # the Prior calculator), to avoid double-counting; see the class Note for why this
@@ -345,6 +378,10 @@ class CandlLensLikelihood(_BaseCandlLikelihood):
     """Generic wrapper around a `candl <https://github.com/Lbalkenhol/candl>`_ ``LensLike``
     (CMB lensing) likelihood. See :class:`_BaseCandlLikelihood`."""
     _candl_attr = 'LensLike'
+
+    #: candl's `LensLike.get_model_specs` returns band powers already binned; its own
+    #: `log_like_for_bdp` compares them to the data directly, with no `bin_model_specs` step.
+    _bins_model_specs = False
 
 
 class ACTDR6TTTEEELikelihood(CandlLikelihood):
@@ -503,6 +540,15 @@ class _BaseClikCandlLikelihood(Likelihood):
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+        # Only the Gaussian clik arms have a data vector to register.  plik-lite goes through
+        # clipy's `cmbonly`, which is `-0.5 (X_data - X_model)^T C^-1 (X_data - X_model)`, so the
+        # vector is `X_data` and `__call__` evaluates that form here (see there for why it is not
+        # enough to overwrite `like.X_data`).  The tabulated low-ell arms -- commander through
+        # `gibbs.py`, and the Sroll2 EE likelihood -- are genuinely non-Gaussian and have no
+        # linear data slot: `flatdata` stays None, which is how a caller building a synthetic
+        # data vector can tell that this arm cannot take one.
+        self._is_gaussian_clik = hasattr(self.like, 'X_data') and hasattr(self.like, 'inv_cov')
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.like.X_data)) if self._is_gaussian_clik else None
 
     def __post_init__(self, *args, **kwargs):
         if self._ellmax_standard:
@@ -557,10 +603,37 @@ class _BaseClikCandlLikelihood(Likelihood):
             Dl[spec_type] = dl_full[2:ellmax + 1]
         return Dl
 
+    @property
+    def flattheory(self):
+        """``X_model``, the Gaussian arms' model vector.
+
+        The tabulated arms -- commander, Sroll2 -- are not Gaussian in any data vector and have no
+        model vector at all, so for them this attribute does not exist (`hasattr` is False), which
+        is how a caller wanting the model learns that this arm cannot provide one.
+        """
+        if not self._is_gaussian_clik:
+            raise AttributeError(
+                f'{type(self).__name__} is a tabulated likelihood: it is not Gaussian in a data '
+                f'vector, so it has no `flattheory`.')
+        params_dict = {name: param.value for name, param in self.params.items()}
+        params_dict['Dl'] = self._build_Dl()
+        cls, nuisance = self.like.normalize_from_candl(params_dict)
+        return self.like._X_model(cls, nuisance)
+
     def __call__(self):
         params_dict = {name: param.value for name, param in self.params.items()}
         params_dict['Dl'] = self._build_Dl()
-        self.logpdf = self.like.log_like(params_dict)
+        if self._is_gaussian_clik:
+            # The chi-squared is evaluated here rather than by clipy so that the data vector is
+            # the Variable.  Overwriting `like.X_data` would not work: clipy jits its own
+            # `__call__` with `static_argnums=(0,)`, so the vector it read on the first call is
+            # baked into the compiled function and a later assignment is silently ignored.
+            # `_X_model` carries no such state -- it is the model side only.
+            cls, nuisance = self.like.normalize_from_candl(params_dict)
+            residual = jnp.asarray(self.flatdata) - self.like._X_model(cls, nuisance)
+            self.logpdf = -0.5 * residual @ (self.like.inv_cov @ residual)
+        else:
+            self.logpdf = self.like.log_like(params_dict)
         # Non-finite Dl (e.g. the NaN masking of out-of-training-range emulator results in
         # ACECosmology) must reject the sample: clipy's tabulated low-ell likelihoods clamp
         # NaN in table lookups and would otherwise return finite garbage.

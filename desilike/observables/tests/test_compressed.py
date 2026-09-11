@@ -15,9 +15,9 @@ def _make_cosmo(fiducial):
 
 
 def _run(obs):
-    from desilike.base import compile
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    from desilike.base import build
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
     return pipe_params
 
@@ -161,7 +161,7 @@ def test_gaussian_likelihood_with_bao_compression():
     """ObservablesGaussianLikelihood: BAOCompressionObservable plugs in like any other observable."""
     from desilike.observables.galaxy_clustering import BAOCompressionObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     fiducial = _make_fiducial()
     cosmo = _make_cosmo(fiducial)
@@ -172,8 +172,8 @@ def test_gaussian_likelihood_with_bao_compression():
                                     cosmo=cosmo, z=0.5, fiducial=fiducial)
     like = ObservablesGaussianLikelihood(observables=obs)
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert like.flattheory.shape == (2,)
@@ -186,7 +186,7 @@ def test_gaussian_likelihood_multi_compressed_observable():
     """ObservablesGaussianLikelihood: BAO and turn-over compressed observables are concatenated correctly."""
     from desilike.observables.galaxy_clustering import BAOCompressionObservable, TurnOverCompressionObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     fiducial = _make_fiducial()
     cosmo_bao = _make_cosmo(fiducial)
@@ -200,8 +200,8 @@ def test_gaussian_likelihood_multi_compressed_observable():
     cov = np.diag([1e-4, 1e-4, 1e-4])
     like = ObservablesGaussianLikelihood(observables=[obs_bao, obs_to], covariance=cov)
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert like.flatdata.shape == (3,)
@@ -224,7 +224,7 @@ def test_posterior_camb_invalid_omega_cdm():
     from desilike.observables.galaxy_clustering import BAOCompressionObservable
     from desilike.theories.primordial_cosmology import CosmoprimoCosmology
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile, Posterior, get_params
+    from desilike.base import build, Posterior, get_params
 
     fiducial = fid.DESI(engine='camb')
     cosmo = CosmoprimoCosmology(engine='camb', fiducial=fiducial)
@@ -233,8 +233,8 @@ def test_posterior_camb_invalid_omega_cdm():
     like = ObservablesGaussianLikelihood(observables=obs, covariance=np.diag([1e-4, 1e-4]))
     post = Posterior(like)
 
-    pipe = compile(post)
-    defaults = {p.name: float(p._value) for p in get_params(pipe)}
+    pipe = build(post)
+    defaults = {p.name: np.asarray(p._value) if p.shape else float(p._value) for p in get_params(pipe)}
 
     # Sanity: the fiducial point is finite.
     logpdf_fiducial = pipe(defaults)

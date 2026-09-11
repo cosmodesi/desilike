@@ -166,10 +166,10 @@ class DESIDR2BAOLikelihood(ObservablesGaussianLikelihood):
 
         super().__init__(observables, covariance=joint_covariance)
 
-    def __post_init__(self, observables, covariance=None, scale_covariance=1.,
-                      correct_covariance=None, precision=None):
-        # _init is set by ObservablesGaussianLikelihood.__init__ (called from our __init__),
-        # so __post_init__ receives ObservablesGaussianLikelihood's signature at compile time.
+    def __post_init__(self, *args, **kwargs):
+        # `*args, **kwargs`: this class overrides `__init__` with a signature of its own
+        # (zbins, data_dir, ...), and a class's `__post_init__` is handed what its own
+        # `__init__` received -- none of which this body reads.
         self.precision = self._precision if self._precision is not None else self.covariance.inv(level=1)
 
     @classmethod

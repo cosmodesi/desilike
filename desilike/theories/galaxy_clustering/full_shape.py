@@ -2955,7 +2955,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                 mg_params_override=None, growth_source='ode', with_now='peakaverage', **kwargs):
+                 mg_params_override=None, growth_source='ode', with_now='peakaverage', params=None, **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -3030,6 +3030,24 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self.gamma_a = Parameter('gamma_a', value=float(gamma_a), fixed=True, latex=r'\gamma_a')
         self.t_k = Parameter('t_k', value=float(t_k), fixed=True, latex=r't_k')
         self.d_s = Parameter('d_s', value=float(d_s), fixed=True, latex=r'd_s')
+        # ``params``: caller-supplied Parameter objects for the MG parameters declared above,
+        # bound BY IDENTITY (same name -> that object replaces the default one). Why this exists:
+        # a tracer configures its parameters through ``update(params=...)``, and its ``__init__``
+        # keeps the configured objects as attributes of its own -- while re-running this
+        # constructor (``pt.update(k=..., ells=...)`` from every tracer ``__init__``) re-declares
+        # the defaults above, so ``mu0`` (or ``fR0_HS``, ``beta_1``, ...) then exists twice: the
+        # tracer's configured copy and this node's default. ``get_params`` / ``build`` refuse a
+        # graph whose same-named Variables are distinct objects that disagree (before that guard
+        # the first seen won silently, and the sampled ``mu0`` could come back with the default
+        # prior). Passing the configured objects here puts them in this node's ``_init`` kwargs,
+        # so every re-initialisation rebinds to the same objects and the graph holds one ``mu0``.
+        # Only names this node declares are taken; anything else in ``params`` is the caller's
+        # business (the tracer's biases, for instance) and is ignored here.
+        if params is not None:
+            from desilike.base import Variable as _Variable
+            for variable in (params.values() if isinstance(params, dict) else params):
+                if isinstance(variable, _Variable) and isinstance(getattr(self, variable.name, None), _Variable):
+                    setattr(self, variable.name, variable)
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
                       model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,

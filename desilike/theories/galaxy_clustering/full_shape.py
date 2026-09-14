@@ -1449,9 +1449,9 @@ class PyBirdPTSpectrum2Poles(Calculator):
         Pctl = jnp.asarray(self._pt.Pctl)
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _z
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _z
-        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol],
+        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, jnp.asarray(self._pt.f)],
                 {'k': self.k, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
-                 'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
+                 'eft_basis': self._pt.eft_basis,
                  'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
 
     @classmethod
@@ -1459,8 +1459,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
         from pybird.bird import Bird
         obj = object.__new__(cls)
         pt = Bird.__new__(Bird)
-        pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol = children
-        pt.f = aux['f']
+        pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol, pt.f = children
         pt.eft_basis = aux['eft_basis']
         pt.with_stoch = aux['with_stoch']
         pt.with_nnlo_counterterm = aux['with_nnlo']

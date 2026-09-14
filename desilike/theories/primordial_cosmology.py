@@ -12,6 +12,7 @@ CosmoprimoCosmology
     (``'eisenstein_hu'``) and external Boltzmann codes (``'camb'``, ``'class'``, …).
 """
 
+import os
 import warnings
 from pathlib import Path
 
@@ -129,6 +130,13 @@ class PrimordialCosmology(Calculator):
         # _results:   spec_key → jnp.array   (populated in __call__)
         self._requirements = {}
         self._results = {}
+        # BAO filters, one per `fourier.pk_now` requirement, held between calls where that is
+        # exact: everything a filter does with the fiducial -- locating the peaks of the
+        # fiducial wiggles, which takes scipy -- it does in its `_prepare`, once, and only what
+        # depends on the point (the rs_drag rescaling and the no-wiggle envelope) in `_compute`.
+        # See `_bao_filter`, which is where the exception lives. Latched on the fiducial, so
+        # `__post_init__` clears it.
+        self._bao_filters = {}
         # Out-of-range guard state, here rather than in `__post_init__` so that it exists on
         # every instance -- a caller may ask an uncompiled cosmology what it enforces -- and so
         # that the warn-once latch is per object: `__post_init__` runs at every build, and
@@ -157,6 +165,33 @@ class PrimordialCosmology(Calculator):
         # survive it; one passed here does.
         if requirements is not None:
             self.add_requirements(requirements)
+
+    def _bao_filter(self, spec_key, pk_interpolator, fiducial_pk_interpolator=None, engine=None,
+                    cosmo=None, cosmo_fid=None):
+        r"""The BAO filter for this requirement, built once at the fiducial and re-called after.
+
+        A filter splits in two: :meth:`~cosmoprimo.bao_filter.BasePowerSpectrumBAOFilter._prepare`
+        is the fiducial half, which locates the peaks of the fiducial wiggles with scipy, and
+        ``_compute`` the point half (the :math:`r_\mathrm{drag}` rescaling and the no-wiggle
+        envelope). Calling a built filter -- ``bao_filter(pk_interpolator, cosmo=cosmo)`` -- redoes only
+        the second, so the peak finding is paid once for a whole chain rather than at every point.
+
+        Built on *fiducial_pk_interpolator* rather than on the first point that happens to arrive.
+        For the filters whose preparation reads only ``cosmo_fid`` (``wallish2018``, the default,
+        along with ``peakaverage``, ``brieden2022`` and ``savgol``) the two are the same thing. For
+        one that reads the input spectrum as well -- ``hinton2017`` takes its maximum -- they are
+        not, and the fiducial is the defensible choice: the answer then depends on the fiducial the
+        caller declared, not on the order in which a sampler proposed its points.
+        """
+        from cosmoprimo import PowerSpectrumBAOFilter
+
+        bao_filter = self._bao_filters.get(spec_key, None)
+        if bao_filter is None:
+            built_on = pk_interpolator if fiducial_pk_interpolator is None else fiducial_pk_interpolator()
+            bao_filter = self._bao_filters[spec_key] = PowerSpectrumBAOFilter(
+                built_on, engine=engine, cosmo=cosmo_fid if cosmo_fid is not None else cosmo,
+                cosmo_fid=cosmo_fid)
+        return bao_filter(pk_interpolator, cosmo=cosmo)
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -207,7 +242,18 @@ class PrimordialCosmology(Calculator):
                     spec['static'] = static
                     for coord in _COORDS:
                         if coord in kwargs:
-                            spec[coord] = np.sort(np.atleast_1d(kwargs[coord]))
+                            # `unique`, not `sort`: a merge below dedupes, so a grid registered
+                            # once and the same grid registered twice would otherwise have
+                            # different lengths -- and the results array is built from whichever
+                            # was in force when it was computed while `get` indexes with whichever
+                            # is in force now. A grid carrying a repeated value is ordinary
+                            # (`DirectSpectrum2Template` prepends k0 = 1e-3 to a grid that starts
+                            # there), and one registration then gave a 401-long array against a
+                            # 400-long grid: `searchsorted` is off by one from the second entry
+                            # on, so the consumer reads the spectrum shifted a bin down the k
+                            # axis. Measured on a two-observable LRG3 fit, that read as a smooth
+                            # -2% to +6% error across the fitted range and cost |dchi2| ~ 12.
+                            spec[coord] = np.unique(np.atleast_1d(kwargs[coord]))
                 else:
                     spec = self._requirements[spec_key]
                     for coord in _COORDS:
@@ -237,7 +283,7 @@ class PrimordialCosmology(Calculator):
     def get_emulator_cls(self):
         """The emulator this cosmology's requirements call for.
 
-Answered for every cosmology that flattens to its
+        Answered for every cosmology that flattens to its
         registered requirements, which is what the routing reads -- an :class:`ACECosmology`
         included, and there the point is not the Boltzmann call (ACE is already fast) but the
         routing and the leaf naming, plus training nodes cheap enough to check a box in seconds.
@@ -380,6 +426,17 @@ Answered for every cosmology that flattens to its
 
 # Engines that produce JAX-traceable outputs through cosmoprimo.Cosmology.clone.
 _JAX_ENGINES = frozenset({'eisenstein_hu'})
+
+
+def _is_emulator_path(engine):
+    """Whether this engine name is the path to a saved cosmoprimo emulator.
+
+    The same test :func:`cosmoprimo.cosmology.get_engine` makes: a name with one of these
+    suffixes, or an existing file, is read back as an emulated engine rather than looked up in
+    the engine registry.
+    """
+    return isinstance(engine, str) and (engine.endswith(('.h5', '.hdf5', '.npy', '.npz'))
+                                        or os.path.exists(engine))
 
 # Parameter name conversion: desilike name → cosmoprimo clone kwarg.
 _CONVERSIONS = {}
@@ -684,19 +741,26 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # are the truth the fit is only as good as.
         self._precision = {key: dict((precision or {}).get(key, {}) or {})
                            for key in ('calc_params', 'extra_params')}
-        # ``engine`` may be a cosmoprimo engine CLASS as well as a name -- notably
-        # ``EmulatedEngine.read(fn)``, the documented way to use a trained cosmoprimo
-        # emulator (e.g. an emulated harmonic section shared by CMB / FS / SN likelihoods).
-        # str() would turn such a class into "<class '...'>" and cosmoprimo would then fail
-        # with 'Unknown engine'.
+        # ``engine`` may be a cosmoprimo engine class as well as a name -- notably
+        # ``cosmoprimo.emulators.read_engine(fn)``, the documented way to use a trained
+        # cosmoprimo emulator (e.g. an emulated harmonic section shared by CMB / FS / SN
+        # likelihoods). str() would turn such a class into "<class '...'>" and cosmoprimo
+        # would then fail with 'Unknown engine'.
         self._engine = str(engine) if isinstance(engine, str) else engine
-        # A non-string engine is a JAX-traceable emulator unless it says otherwise; named
-        # engines are looked up in the JAX list as before.
-        self._is_external = isinstance(self._engine, str) and self._engine not in _JAX_ENGINES
+        # A non-string engine is a jax-traceable emulator unless it says otherwise; named
+        # engines are looked up in the jax list as before -- with the path to a saved emulator
+        # counting as one, since `cosmoprimo.cosmology.get_engine` resolves such a path to the
+        # emulated engine (`Cosmology(engine='my_emulator.npy')`). Getting that wrong is not a
+        # crash but a silent loss: the cosmology would run through `pure_callback` with
+        # finite-difference derivatives, which is both slower than the emulator it wraps and
+        # no longer differentiable through.
+        self._is_external = isinstance(self._engine, str) and self._engine not in _JAX_ENGINES \
+            and not _is_emulator_path(self._engine)
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
         # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
         self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
+        self._bao_filters = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -788,12 +852,28 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 fo = cosmo.get_fourier()
                 result = fo.pk_interpolator(of=static['of'], **_kw_pk)(**_kw_coords).T
             elif method_key == 'fourier.pk_now':
-                from cosmoprimo import PowerSpectrumBAOFilter
-                fo = cosmo.get_fourier()
-                pk_interp = fo.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=_kw_coords['z'])
-                bao = PowerSpectrumBAOFilter(pk_interp, engine=static['engine'],
-                                             cosmo=cosmo, cosmo_fid=self._fiducial)
-                result = bao.smooth_pk_interpolator()(_kw_coords['k']).T
+                fourier = cosmo.get_fourier()
+                if hasattr(fourier, 'pk_now_interpolator'):
+                    # An emulated section filters the spectrum it predicts, holding its filter
+                    # between calls -- which is what makes the peak-finding filters traceable, and
+                    # what keeps the no-wiggle spectrum consistent with the wiggle one. Building a
+                    # filter here instead would locate its peaks with scipy inside the jit, and
+                    # would hand it `self._fiducial`, which for an emulated engine is a cosmology
+                    # that can only answer for what was emulated (measured: `'delta_m' was not
+                    # emulated` out of the filter's own reference spectrum).
+                    result = fourier.pk_now_interpolator(of=static['of'], engine=static['engine'],
+                                                         **_kw_pk)(**_kw_coords).T
+                else:
+                    pk_interp = fourier.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=_kw_coords['z'])
+
+                    def fiducial_pk_interp(of=static['of'], z=_kw_coords['z']):
+                        # the fiducial's own spectrum, on the same grid and settings; called once,
+                        # when the filter is built
+                        return self._fiducial.get_fourier().pk_interpolator(of=of, **_kw_pk).to_1d(z=z)
+
+                    result = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
+                                              engine=static['engine'], cosmo=cosmo,
+                                              cosmo_fid=self._fiducial).smooth_pk_interpolator()(_kw_coords['k']).T
             elif method_key == 'fourier.sigma8_z':
                 fo = cosmo.get_fourier()
                 result = fo.sigma8_z(**_kw_coords, of=static['of'])
@@ -1460,6 +1540,7 @@ class ACECosmology(PrimordialCosmology):
             # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
             self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+        self._bao_filters = {}
 
     def add_requirements(self, requirements):
         super().add_requirements(requirements)
@@ -1746,14 +1827,25 @@ class ACECosmology(PrimordialCosmology):
                     # cosmoprimo interpolator needs concrete k knots, so first resample the pk
                     # (whose emulator k grid divided by traced h is itself traced) onto a fixed
                     # h/Mpc grid covering the emulator range for any reasonable h.
-                    from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
+                    from cosmoprimo import PowerSpectrumInterpolator1D
                     k_fixed = np.geomspace(1e-5, 50., 300)
                     pk_fixed = _interp_loglog(k_fixed, k_grid / h, (pk * h**3).T)
                     pk_interp = PowerSpectrumInterpolator1D(k_fixed, pk_fixed, **_kw_pk)
                     filter_cosmo = cosmoprimo_cosmo if self._conversion == 'cosmoprimo' else None
-                    bao = PowerSpectrumBAOFilter(pk_interp, engine=spec['static']['engine'], cosmo=filter_cosmo,
-                                                 cosmo_fid=self._fiducial if self._conversion == 'cosmoprimo' else None)
-                    result = bao.smooth_pk_interpolator()(spec['k']).T
+                    filter_cosmo_fid = self._fiducial if self._conversion == 'cosmoprimo' else None
+
+                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z):
+                        # the same fixed grid the emulated spectrum was resampled onto, so the
+                        # filter is prepared on the fiducial and called on every point after
+                        if filter_cosmo_fid is None:
+                            return pk_interp
+                        return pk_interp.clone(
+                            pk=filter_cosmo_fid.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
+
+                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
+                                                  engine=spec['static']['engine'],
+                                                  cosmo=filter_cosmo, cosmo_fid=filter_cosmo_fid)
+                    result = bao_filter.smooth_pk_interpolator()(spec['k']).T
                 else:
                     result = _interp_loglog(spec['k'], k_grid / h, (pk * h**3).T).T
             elif kind == 'jaxcapse':
@@ -2556,7 +2648,12 @@ class BackgroundEmulator(_RoutedSectionEmulator):
         """
         transforms = super()._transforms()
         if self._omega_basis(self.space.params):
-            transforms.update({name: 'log' for name in self._DENSITIES.values()})
+            # only the densities this space actually varies: the basis change converts those and
+            # leaves the rest alone, so declaring a transform for a fraction the mapping never
+            # introduces is refused by `Space.map` ("['Omega_b'] are not among the mapped
+            # parameters"). A pipeline varying `omega_cdm` and holding `omega_b` is ordinary.
+            transforms.update({fraction: 'log' for density, fraction in self._DENSITIES.items()
+                               if density in self.space.params})
         return transforms
 
     def training_space(self):

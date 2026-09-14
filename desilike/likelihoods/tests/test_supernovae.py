@@ -14,7 +14,7 @@ import numpy as np
 import jax
 import pytest
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.supernovae import (
     PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood,
@@ -121,7 +121,7 @@ def test_likelihood(tmp_path, Likelihood, make_fixture):
     like = Likelihood(data_dir=str(tmp_path), cosmo=cosmo)
 
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
 
     logpdf = pipe(defaults)
@@ -131,7 +131,7 @@ def test_likelihood(tmp_path, Likelihood, make_fixture):
     assert np.isclose(float(logpdf), float(jit_logpdf))
 
     grad = jax.grad(pipe)(defaults)
-    assert all(np.isfinite(v) for v in grad.values())
+    assert all(np.all(np.isfinite(v)) for v in grad.values())
 
 
 def test_pantheonplus_zcut(tmp_path):
@@ -171,7 +171,7 @@ def test_pantheonplusshoes_calibrator(tmp_path):
 
     # The z=0.005 calibrator is kept despite z < 0.01, because it is a calibrator.
     assert len(like.light_curve_params['zcmb']) == 5
-    compile(like)()
+    build(like)()
     is_calibrator = like.light_curve_params['is_calibrator']
     assert is_calibrator.sum() == 1
     expected = like.light_curve_params['cepheid_distance'][is_calibrator][0] + like.Mb.value
@@ -193,7 +193,7 @@ def test_desy5_dovekie_install(tmp_path, monkeypatch):
 
     cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
     like = DESY5DovekieSNLikelihood(cosmo=cosmo)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'

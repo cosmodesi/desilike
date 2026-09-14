@@ -5,7 +5,7 @@ import os
 import numpy as np
 import jax.numpy as jnp
 
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 from .base import BaseSNLikelihood
 
 
@@ -27,7 +27,7 @@ class _BaseDESY5SNLikelihood(BaseSNLikelihood):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         flatdata = self.light_curve_params['MU'] - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + self.light_curve_params['zHD']))
-        self.flatdata = jnp.asarray(flatdata)
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(flatdata))
 
     def __post_init__(self, *args, **kwargs):
         self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zHD']}]})

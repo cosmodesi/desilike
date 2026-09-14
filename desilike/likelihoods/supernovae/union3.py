@@ -4,7 +4,7 @@ import os
 
 import jax.numpy as jnp
 
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 from .base import BaseSNLikelihood
 
 
@@ -41,7 +41,7 @@ class _BaseUnion3SNLikelihood(BaseSNLikelihood):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.flatdata = jnp.asarray(self.light_curve_params['mb'])
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.light_curve_params['mb']))
         self.precision = jnp.asarray(self.covariance)
 
     def __post_init__(self, *args, **kwargs):

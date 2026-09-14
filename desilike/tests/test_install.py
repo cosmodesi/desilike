@@ -121,10 +121,17 @@ class TestExtract:
 # ── download (requests mocked) ───────────────────────────────────────────────
 
 class _FakeResponse:
+    """Stands in for a `requests` response, including what `download`'s retry loop reads off it
+    (`status_code`, `raise_for_status`, `text`) -- not only the body."""
 
-    def __init__(self, content=b'', headers=None):
+    def __init__(self, content=b'', headers=None, status_code=200):
         self.content = content
         self.headers = headers or {}
+        self.status_code = status_code
+        self.text = ''
+
+    def raise_for_status(self):
+        pass
 
     def iter_content(self, chunk_size=1):
         for start in range(0, len(self.content), chunk_size):
@@ -381,11 +388,22 @@ class TestInstallerDataDir:
         installer.config['mysection'] = {'data_dir': '/explicit/data'}
         assert installer.data_dir('mysection') == '/explicit/data'
 
-    def test_ro_replacement(self, isolated_config):
+    def test_ro_replacement(self, isolated_config, monkeypatch):
         installer = Installer()
         installer.config['mysection'] = {'data_dir': '/install/path/data'}
         installer.config['ro'] = ['/install', '/readonly']
+        # The alias is taken only where it is actually there, so that a rule which is wrong (or
+        # right only on one machine) costs nothing instead of becoming a missing-file error far
+        # from the configuration that caused it.
+        monkeypatch.setattr(os.path, 'exists', lambda path: path == '/readonly/path/data')
         assert installer.data_dir('mysection', ro=True) == '/readonly/path/data'
+
+    def test_ro_replacement_is_skipped_when_the_alias_is_not_there(self, isolated_config, monkeypatch):
+        installer = Installer()
+        installer.config['mysection'] = {'data_dir': '/install/path/data'}
+        installer.config['ro'] = ['/install', '/readonly']
+        monkeypatch.setattr(os.path, 'exists', lambda path: False)
+        assert installer.data_dir('mysection', ro=True) == '/install/path/data'
 
     def test_ro_false_keeps_path(self, isolated_config):
         installer = Installer()

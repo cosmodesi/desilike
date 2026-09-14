@@ -359,7 +359,7 @@ class CobayaLikelihood(Likelihood):
         if cosmo is None:
             from ..theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(engine='camb', fiducial='DESI')
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo = cosmo  # Calculator dep; _trace_graph discovers it from __dict__
         self._param_map = {**_DEFAULT_PARAM_MAP, **(param_map or {})}
         vc = _params_from_cobaya(getattr(self._cobaya_like, 'params', None))
         if params is not None:

@@ -9,11 +9,11 @@ Base class:
 
 Lifecycle:
 - Calculator(*args, **kwargs) saves args and runs __init__ (inside a construction context).
-  __init__ defines and updates ALL nodes (Parameters + Calculator deps + dep.update()), fixing
+  __init__ defines and updates every node (Parameters + Calculator deps + dep.update()), fixing
   node identity at construction (enabling replace()/share_params() and cheap construction).
-- compile() runs __post_init__ on each node in dependency order (then __call__). __post_init__
+- build() runs __post_init__ on each node in dependency order (then __call__). __post_init__
   is non-node setup only (numpy/scalars, non-Node helpers); it never creates nodes or calls update().
-- build_graph/CompiledGraph discover dependencies by scanning instance attributes for Node objects
+- _trace_graph/CompiledGraph discover dependencies by scanning instance attributes for Node objects
   set in __init__ (before __post_init__ runs).
 
 __call__() interface:
@@ -37,8 +37,11 @@ Pipeline:
 
 import difflib
 import functools
+import os
+import weakref
 import logging
 from collections.abc import Callable
+from typing import NamedTuple
 
 import numpy as np
 import jax
@@ -54,7 +57,7 @@ from collections import defaultdict
 jax.config.update('jax_enable_x64', True)
 
 from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context,
-                        _CompileContext, _iter_nodes, _substitute_node)
+                        _CompileContext, _iter_node, _replace_node)
 from .distributed import default_mpicomm, get_mpicomm, gather as _mpi_gather
 
 
@@ -65,13 +68,13 @@ class Calculator(Node):
     Base class for calculators implemented with JAX ops.
 
     Subclasses define:
-      __init__(*args, **kwargs): define AND update all nodes here — create every
+      __init__(*args, **kwargs): both define and update all nodes here — create every
         Variable/Parameter and Calculator dependency as a public (non-underscore) attribute
         (self.b1 = Parameter(...), self.pt = pt) and call any dep.update(...). These attributes
         (incl. Nodes nested in list/tuple/dict) are auto-discovered as dependencies.
       __post_init__(*args, **kwargs): non-node setup only — numpy/scalar config and non-Node
         helper objects. May read what __init__ set; must NOT create Parameters or Calculator deps.
-        __post_init__ may be called more than once (e.g. when compile() is re-run). Any derived
+        __post_init__ may be called more than once (e.g. when build() is re-run). Any derived
         quantity that is computed from a raw input (e.g. precision from covariance) must be
         re-derived from the original value each time. Store the raw input under a private name
         in __init__ (e.g. self._precision) and read it in __post_init__ rather than modifying
@@ -84,13 +87,15 @@ class Calculator(Node):
         carrying only the output attrs (no dep refs, no init args).
 
     __init__ runs at construction (saving args and wiring all nodes); __post_init__ runs at
-    compile() in dependency order, then __call__(). build_graph scans attributes for Nodes
+    build() in dependency order, then __call__(). _trace_graph scans attributes for Nodes
     (set in __init__) to discover dependencies before __post_init__ runs.
     """
 
     _is_calculator = True
+    #: Nesting depth of the running ``__init__`` (see ``__init_subclass__``); 0 outside one.
+    _init_depth = 0
     # Whether this node is evaluated as a non-JAX (numpy/arbitrary-Python) calculator,
-    # wrapped via pure_callback + finite-difference JVP. Read off the *instance* at compile
+    # wrapped via pure_callback + finite-difference JVP. Read off the *instance* at build
     # time, so a subclass may toggle it per-instance (e.g. a cosmology wrapper that is
     # JAX-traceable for some engines and external for others). Defaults to False (pure JAX).
     _is_external = False
@@ -98,25 +103,76 @@ class Calculator(Node):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)  # Node.__init_subclass__ registers the pytree
         cls.logger = logging.getLogger(cls.__name__)
+        # `__init__` and `__post_init__` are handed the same arguments -- the ones this object was
+        # constructed with. A class whose `__post_init__` (its own, or the one it inherits) cannot
+        # accept its `__init__`'s arguments would fail at build time, deep inside a build, on
+        # whichever pipeline happens to use it. Checked here instead, when the class is defined:
+        # an import-time error naming both methods.
+        if '__init__' in cls.__dict__:
+            import inspect
+            owner = next((klass for klass in cls.__mro__ if '__post_init__' in klass.__dict__), None)
+            if owner is not None:
+                post = inspect.signature(owner.__dict__['__post_init__']).parameters
+                init = inspect.signature(cls.__dict__['__init__']).parameters
+                if not any(param.kind is param.VAR_KEYWORD for param in post.values()):
+                    missing = [name for name in init if name not in post]
+                    if missing:
+                        raise TypeError(
+                            f'{cls.__name__}.__init__ takes {missing}, which the __post_init__ it '
+                            f'{"defines" if owner is cls else f"inherits from {owner.__name__}"} does not '
+                            f'accept -- and the two are handed the same arguments. Give it a matching '
+                            f'signature, or `*args, **kwargs` when it reads none of them.')
+                required = [name for name, param in list(post.items())[1:]
+                            if param.default is param.empty
+                            and param.kind not in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+                            and name not in init]
+                if required:
+                    raise TypeError(
+                        f'the __post_init__ {cls.__name__} inherits from {owner.__name__} requires '
+                        f'{required}, which {cls.__name__}.__init__ does not take. Define a '
+                        f'__post_init__ matching this class\'s own signature.')
         if '__init__' in cls.__dict__:
             _orig_init = cls.__dict__['__init__']
             @functools.wraps(_orig_init)
             def _wrapped_init(self, *args, _f=_orig_init, **kwargs):
-                self._init = (args, kwargs)
-                _f(self, *args, **kwargs)
+                # How was this object built?  The outermost call answers that, and it is what
+                # re-running the constructor needs (`copy`, or a build restarting the tree) and
+                # what `__post_init__` is handed.  Recording at every level instead would leave
+                # `_init` holding the arguments a subclass passed to `super().__init__(...)`, and
+                # rebuilding from those raises `unexpected keyword argument` on the subclass's
+                # own signature.
+                depth = self._init_depth
+                self._init_depth = depth + 1
+                if depth == 0:
+                    self._init = (args, kwargs)
+                try:
+                    _f(self, *args, **kwargs)
+                finally:
+                    self._init_depth = depth
             cls.__init__ = _wrapped_init
 
     def __init__(self, *args, **kwargs):
-        # No custom __init__: nothing to wire at construction; __post_init__ runs at compile().
+        # No custom __init__: nothing to wire at construction; __post_init__ runs at build().
         self._init = (args, kwargs)
 
     def update(self, *args, **kwargs):
         """Re-initialize in-place with overridden arguments; new kwargs override old ones.
 
-        Only permitted **during construction** (``__init__``/``__post_init__``) — e.g. a
-        parent configuring a child dependency.  Outside construction the dependency graph
-        is immutable; reconstruct the calculator or use :func:`replace` instead.
+        Meant for construction: a parent configuring the child it is handed (``theory.update(k=...)``
+        from an observable's ``__init__``).  The child may already belong to a graph -- a built
+        theory handed to a second observable is the ordinary way to reuse it -- and re-running
+        its ``__init__`` swaps its dependencies under that graph, which would keep evaluating
+        the old ones while the node reads the new (a template that created a fresh cosmology
+        this way raised a ``KeyError`` two steps later, at the first point its cache did not
+        cover).  So the node's claim is released here, and the graph that held it refuses to
+        run from now on; build the new root and use that, or reconfigure :func:`copy` of the
+        tree to keep both.
         """
+        # Reconfiguring goes through -- configuring a calculator you were handed is how every
+        # theory sizes its template, and swapping an emulator in is `update()` too. What it costs
+        # is the graphs built over this node: they would go on holding the dependencies just
+        # replaced, so they are invalidated here, and say so (with this call site) when next used.
+        _invalidate_owners(self, f'{type(self).__name__} was reconfigured')
         old_args, old_kwargs = self._init
         merged_args = args if args else old_args
         merged_kwargs = {**old_kwargs, **kwargs}
@@ -150,7 +206,7 @@ class Calculator(Node):
         """Return the :class:`~cosmoprimo.emulators.tools.Emulator` subclass to emulate this
         calculator with, or ``None`` for the generic one.
 
-        A classmethod here, but :func:`desilike.emulators.Emulator` asks the INSTANCE, so a
+        A classmethod here, but :func:`desilike.emulators.Emulator` asks the instance, so a
         calculator whose answer depends on how it was configured may override this as a plain
         method -- the FOLPS pts do, to dispatch on ``output``.
 
@@ -164,7 +220,7 @@ class Calculator(Node):
 
         A subclass may return a dedicated class instead — declaring, through the emulated-
         calculator protocol (``get_emulator_params``, ``flatten_root``,
-        ``__init__(emulator, **kwargs)``, ``_reconstruct``), which quantities are emulated
+        ``__init__(emulator, **kwargs)``, ``_init_graph``), which quantities are emulated
         coefficients, which parameters are routed exactly at run time instead of expanded, and
         which extra node dependencies (passed through ``to_calculator(**kwargs)``) that routing
         needs.  See ``FOLPSPTSpectrum2Poles.get_emulator_cls`` for the motivating case.
@@ -193,6 +249,12 @@ class Likelihood(Calculator):
     def ndata(self):
         return None
 
+    #: A likelihood may expose ``flattheory``, its model vector at the current parameters, as an
+    #: attribute or a property.  A Gaussian one sets it in ``__call__`` anyway; one that hands its
+    #: parameters to an external code can compute it on access.  Whatever needs the model rather
+    #: than the likelihood -- generating synthetic data, above all -- reads it, and an arm that is
+    #: not Gaussian in any data vector simply does not have it.
+
     def tree_flatten(self):
         return [self.logpdf], None
 
@@ -208,8 +270,15 @@ class GaussianLikelihood(Likelihood):
     Base class for Gaussian chi-squared likelihoods.
 
     Subclasses must implement:
-      __post_init__(): set self.flatdata (1D array, the observations) and self.precision
-        (2D array, C⁻¹), along with any Calculator deps and Variable/Parameter instances.
+      __init__(): set self.flatdata (the observations) and self.precision (2D array, C⁻¹),
+        along with any Calculator deps and Variable/Parameter instances.  Make the observations
+        a ``Variable`` -- ``self.flatdata = Variable(f'{type(self).__name__}.flatdata',
+        value=jnp.asarray(x))`` -- so they are a node the graph fills, and can be overridden by
+        name (an Asimov vector, a mock realisation) instead of by assigning an attribute a
+        traced graph would ignore.  It must not be a ``Parameter``: ``input``, ``varied`` and
+        ``solved`` are Parameter properties, so a plain ``Variable`` is skipped by
+        ``select(varied=True)`` and, being ``derived=False``, is written to no chain.
+        A plain array still works: the arithmetic below is the same either way.
       __call__(): set self.flattheory (1D JAX array), then call super().__call__() to compute
         self.logpdf = -½ (flatdata - flattheory)ᵀ precision (flatdata - flattheory).
 
@@ -315,7 +384,12 @@ class Prior(Calculator):
                 params.append(arg)
         for p in kwargs.values():
             params.append(p)
-        self.params = VariableCollection(params)
+        # Parameters only.  `Prior(get_params(likelihood))` is on the critical path of every
+        # run and hands over every Variable the graph has, including the likelihoods' data
+        # vectors, which have neither a prior nor a `fixed` flag to read.  A plain Variable
+        # contributes zero to the log-prior by definition, so dropping it here is the whole of
+        # its treatment.
+        self.params = VariableCollection([p for p in params if isinstance(p, Parameter)])
 
     def __call__(self):
         logprior = jnp.zeros(())
@@ -365,6 +439,165 @@ def _transitive_param_names(node: Calculator, pipe: 'CompiledGraph') -> set:
     return param_names
 
 
+class SolvedBlock(NamedTuple):
+    """One independent block of the marginalisation plan, before any graph is wired to it."""
+    alpha_names: object
+    alpha_sizes: object
+    alpha_shapes: object
+    gaussians: object       # the likelihood nodes this block's theory pipe must output
+    components: object      # GaussianComponents, alpha_idx in this block's DOF numbering
+    marg_local: object
+    best_local: object
+    prior_precision: object
+    prior_center: object
+    stage_i_ids: object
+
+
+def plan_marginalisation(components, solved_params, stage_i_ids_of):
+    """Partition the solved parameters into blocks that must be solved together, and re-index
+    each component against the block that owns it.  Returns a list of :class:`SolvedBlock`.
+
+    Two solved parameters belong together exactly when some Gaussian component depends on both,
+    so union-find over the components gives the blocks, and each is then solved on its own,
+    n_g x n_g.  Everything after that is bookkeeping: expressing each component's dependence in
+    its block's own degree-of-freedom numbering, where a vector parameter contributes one DOF
+    per element.
+
+    It builds no graph and touches no compiled state -- that is the point of it being here
+    rather than in ``Posterior.__init__``, which then only wires pipes to a plan it did not
+    compute.
+
+    Parameters
+    ----------
+    components : list of GaussianComponent
+        Only those that depend on a solved parameter, ``alpha_idx`` indexing *solved_params*.
+    solved_params : list of Parameter
+        The likelihood's solved parameters, in the order ``alpha_idx`` refers to.
+    stage_i_ids_of : callable
+        ``{name} -> frozenset`` of node ids that do not depend on those parameters, so are
+        evaluated once ahead of the linearisation rather than differentiated through.
+    """
+    parent = list(range(len(solved_params)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for comp in components:
+        for i in range(1, len(comp.alpha_idx)):
+            union(comp.alpha_idx[0], comp.alpha_idx[i])
+
+    # Collect and sort global alpha indices per group root.
+    root_globals = defaultdict(set)
+    for comp in components:
+        root_globals[find(comp.alpha_idx[0])].update(comp.alpha_idx)
+    root_sorted = {root: sorted(indices) for root, indices in root_globals.items()}
+
+    # Remap each component's alpha_idx to local (group-relative) indices.
+    root_comps = defaultdict(list)
+    for comp in components:
+        global_idx = root_sorted[find(comp.alpha_idx[0])]
+        g_to_l = {gi: li for li, gi in enumerate(global_idx)}
+        root_comps[find(comp.alpha_idx[0])].append(
+            comp._replace(alpha_idx=[g_to_l[g] for g in comp.alpha_idx]))
+
+    # Per solved param: DOF count (np.prod(shape), 1 for a scalar), prior inverse-scale (0 when
+    # improper) and prior center.  The prior is treated as independent per element, the same 1-D
+    # ParameterPrior applied to each DOF.
+    sizes = [int(np.prod(p.shape)) if p.shape else 1 for p in solved_params]
+    shapes = [p.shape for p in solved_params]
+    inv_scales, centers = [], []
+    for p in solved_params:
+        std = p.prior.std() if p.prior is not None else None
+        inv_scales.append((1. / std) if (std is not None and np.isfinite(std)) else 0.)
+        centers.append(float(p.prior.center()) if p.prior is not None else 0.)
+    marg_global = {i for i, p in enumerate(solved_params) if p.derived == 'marg'}
+    best_global = {i for i, p in enumerate(solved_params) if p.derived == 'best'}
+
+    blocks = []
+    for root, global_idx in root_sorted.items():
+        comps = root_comps[root]
+        alpha_sizes = [sizes[g] for g in global_idx]
+
+        # DOF offset within the group for each local param index j.
+        dof_offsets, offset = [], 0
+        for g in global_idx:
+            dof_offsets.append(offset)
+            offset += sizes[g]
+
+        def dofs_of(selected):
+            """DOF indices of the selected global params, in this block's numbering."""
+            return np.array([dof_offsets[j] + k for j, g in enumerate(global_idx)
+                             if g in selected for k in range(sizes[g])], dtype=int)
+
+        blocks.append(SolvedBlock(
+            alpha_names=[solved_params[g].name for g in global_idx],
+            alpha_sizes=alpha_sizes,
+            alpha_shapes=[shapes[g] for g in global_idx],
+            gaussians=[comp.likelihood for comp in comps],
+            # param-level local indices -> DOF-level, so that a solved param of shape (2,)
+            # contributes two columns
+            components=[comp._replace(alpha_idx=[dof_offsets[j] + k for j in comp.alpha_idx
+                                                 for k in range(alpha_sizes[j])])
+                        for comp in comps],
+            marg_local=dofs_of(marg_global),
+            best_local=dofs_of(best_global),
+            # the same value repeated for every DOF of a param
+            prior_precision=jnp.array([inv_scales[g] ** 2 for g in global_idx for _ in range(sizes[g])]),
+            prior_center=jnp.array([centers[g] for g in global_idx for _ in range(sizes[g])]),
+            stage_i_ids=stage_i_ids_of({solved_params[g].name for g in global_idx})))
+    return blocks
+
+
+class GaussianComponent(NamedTuple):
+    """One Gaussian leaf of a likelihood, with what analytic marginalisation needs of it.
+
+    ``alpha_idx`` is re-indexed as the plan narrows: solved-parameter indices over the whole
+    likelihood first, then group-local parameter indices, then group-local DOF indices (a
+    vector parameter contributing one per element).  Each step is a ``_replace``.
+    """
+    likelihood: object
+    theory: object          # CompiledGraph over its flattheory; None once a group owns it
+    precision: object
+    flatdata: object
+    alpha_idx: object
+
+
+class ComponentBlock(NamedTuple):
+    """A component's slice of a group's concatenated theory vector."""
+    precision: object
+    flatdata: object
+    dof_idx: object
+    offset: int
+    size: int
+
+
+class MarginalisationGroup(NamedTuple):
+    """Solved parameters that must be solved together, and the machinery to do it.
+
+    Two parameters share a group when some component depends on both, so the blocks are
+    independent and each is solved on its own.
+    """
+    alpha_names: object
+    alpha_sizes: object
+    alpha_shapes: object
+    theory_pipe: object
+    components: object      # list of ComponentBlock
+    marg_local: object
+    best_local: object
+    prior_precision: object
+    prior_center: object
+    stage_i_pipe: object
+    stage_i_ids: object
+
+
 class Posterior(Calculator):
     """
     Log-posterior = log-likelihood + log-prior, with optional analytic treatment of solved params.
@@ -395,21 +628,51 @@ class Posterior(Calculator):
     """
 
     def __init__(self, likelihood, prior=None):
-        # Posterior builds its internal compiled sub-pipelines and surfaces the
-        # likelihood's Parameters (self.likelihood_params) as its node dependencies — all
-        # in __init__ so they are discoverable before __post_init__/compile.
+        # Declarations only.  Every graph this class needs is built in `__post_init__`, which is
+        # where the lifecycle puts setup -- and here that is not a style point: a constructor that
+        # builds cannot survive a rebuild of the tree it is part of.  `_init_graph` re-runs each
+        # `__init__` and `_bind_variables` then rewires the tree back to the caller's Parameter
+        # objects, but it cannot reach inside a CompiledGraph an `__init__` had already built, so
+        # that graph is left holding Parameters nobody else references.  Nothing restores them,
+        # and a traced call left a JVPTracer on the derived one, which the next eager call
+        # tripped over (measured).  Building here instead, after every `__init__` has run, the
+        # graphs only ever see the settled tree.
+        params = get_params(likelihood)
+        self._likelihood_node = likelihood
+        self._solved_params = params.select(solved=True)
+
         if prior is None:
-            prior = Prior(get_params(likelihood))
-        # Build __post_init__ + __call__ context once; all same-root CompiledGraphs below
-        # (self._likelihood, per-component no-alpha pipes, group_theory_pipes) are created
-        # from this shared context without re-running __post_init__.  Re-running __post_init__
-        # is harmful: template nodes call cosmo.add_requirements() there, and repeated calls
-        # accumulate duplicate k/z grid entries that mis-align tree_flatten leaf shapes.
-        _likelihood_ctx = _run_compile_phases(likelihood)
+            prior = Prior(params)
+        prior.update(params.select(solved=False) if self._solved_params else params)
+        self._prior_calculator = prior
+        _prior_params = list(get_params(prior))
+        self._prior_param_names = [p.name for p in _prior_params]
+
+        # Public (scanned by _trace_graph) so non-solved likelihood params are in Posterior's
+        # deps and get their values set before each __call__.  Solved params are excluded here
+        # because they are exposed separately via self.solved_params below.
+        self.likelihood_params = [p for p in params if not getattr(p, 'solved', False)]
+        # Expose originals (derived='marg'/'best') as a public attribute so _trace_graph
+        # discovers them as Posterior's deps and the pipeline tracks their best-fit values.
+        self.solved_params = list(self._solved_params)
+        # Derived outputs exposed to the pipeline (their .value is set in __call__).
+        self.logposterior = Variable(basename='logposterior', value=0., derived=True, latex=r'\ln\mathcal{P}')
+        self.logprior = Variable(basename='logprior', value=0., derived=True, latex=r'\ln\Pi')
+        self.loglikelihood = Variable(basename='loglikelihood', value=0., derived=True, latex=r'\ln\mathcal{L}')
+        # Number of data points (None when the likelihood does not expose it), surfaced
+        # for ndof bookkeeping downstream (e.g. the profiler / Profiles.to_stats).
+        self.ndata = getattr(likelihood, 'ndata', None)
+
+    def __post_init__(self, likelihood, prior=None):
+        likelihood, prior = self._likelihood_node, self._prior_calculator
+        # One build; every CompiledGraph below (self._likelihood, per-component no-alpha pipes,
+        # group_theory_pipes) is a view over its context.  Views share one claim on the nodes,
+        # where a second build would supersede the first and leave it stale.
+        _likelihood_ctx = _build_graph(likelihood)
         self._likelihood = CompiledGraph(likelihood, _likelihood_ctx)
         self._solved_params = self._likelihood.params.select(solved=True)
 
-        # Public (scanned by build_graph) so non-solved likelihood params are in Posterior's
+        # Public (scanned by _trace_graph) so non-solved likelihood params are in Posterior's
         # deps and get their values set before each __call__.  Solved params are excluded here
         # because they are exposed separately via self.solved_params below.
         self.likelihood_params = [p for p in self._likelihood.params if not getattr(p, 'solved', False)]
@@ -426,8 +689,11 @@ class Posterior(Calculator):
             alpha_names_set = set(p.name for p in self._solved_params)
             non_gaussian_comps = []
             for ng in non_gaussians:
-                ng_pipe = compile(ng)
-                bad = alpha_names_set & set(ng_pipe.params.names())
+                # A view over the one context rather than a fresh build, which would reconfigure
+                # `ng`'s nodes under `self._likelihood`. A view's `.params` span the whole context,
+                # so the dependence check reads `ng`'s own transitive parameters instead.
+                ng_pipe = CompiledGraph(ng, _likelihood_ctx)
+                bad = alpha_names_set & _transitive_param_names(ng, self._likelihood)
                 if bad:
                     raise ValueError(
                         f'Non-Gaussian likelihood component depends on solved '
@@ -437,89 +703,26 @@ class Posterior(Calculator):
                 non_gaussian_comps.append(ng_pipe)
             self._non_gaussian_comps = non_gaussian_comps
 
-            alpha_names = [p.name for p in self._solved_params]
-            n_alpha = len(alpha_names)
-            marg_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'marg'}
-            best_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'best'}
-
-            # Per solved param: prior inverse-scale (0 for improper), prior center, DOF count, shape.
-            # DOF count: np.prod(p.shape) for shaped params, 1 for scalars (shape=()).
-            # The prior for each solved param is treated as independent per-element with the same
-            # 1D ParameterPrior applied to each DOF.
-            inv_scales = {}
-            alpha_prior_centers = {}
-            alpha_sizes_map = {}
-            alpha_shapes_map = {}
-            for i, p in enumerate(self._solved_params):
-                std = p.prior.std() if p.prior is not None else None
-                inv_scales[i] = (1. / std) if (std is not None and np.isfinite(std)) else 0.
-                alpha_prior_centers[i] = float(p.prior.center()) if p.prior is not None else 0.
-                alpha_sizes_map[i] = int(np.prod(p.shape)) if p.shape else 1
-                alpha_shapes_map[i] = p.shape  # () for scalars, (k,...) for arrays
-
-            # Build per-gaussian-component list: (gauss, theory_pipe, precision, flatdata, alpha_idx).
-            # For alpha-dependent components, theory_pipe is not used later (the group_theory_pipe
-            # covers them); alpha params are discovered by subgraph BFS over self._likelihood
-            # without triggering another compile.  For no-alpha components, theory_pipe IS used for
-            # evaluation: build it from the shared context when possible (g is likelihood) so that
-            # __post_init__ still does not re-run; fall back to a fresh compile otherwise.
+            # Build one record per Gaussian component.  For alpha-dependent ones the theory pipe
+            # is not used later (the group pipe covers them); their alpha params are discovered by
+            # subgraph BFS over self._likelihood without triggering another build.  For the rest
+            # the pipe is indeed used for evaluation, as a view over the one context so that
+            # __post_init__ does not run again and reconfigure the nodes under self._likelihood.
             components = []
             for g in gaussians:
                 comp_param_names = _transitive_param_names(g, self._likelihood)
                 alpha_idx = [i for i, p in enumerate(self._solved_params) if p.name in comp_param_names]
-                if alpha_idx:
-                    theory = None  # dropped below; group_theory_pipe takes over
-                elif g is likelihood:
-                    theory = CompiledGraph(g, _likelihood_ctx, output=lambda g=g: g.flattheory)
-                else:
-                    theory = compile(g, output=lambda g=g: g.flattheory)
-                components.append((g, theory, g.precision, g.flatdata, alpha_idx))
+                theory = None if alpha_idx else CompiledGraph(g, _likelihood_ctx, output=lambda g=g: g.flattheory)
+                components.append(GaussianComponent(g, theory, g.precision, g.flatdata, alpha_idx))
 
-            # Components with no solved-param dependence: keep the per-component pipe for evaluation.
-            self._no_alpha_components = [(theory, precision, flatdata) for g, theory, precision, flatdata, ai in components if not ai]
-            alpha_components = [(g, precision, flatdata, ai) for g, theory, precision, flatdata, ai in components if ai]
+            self._no_alpha_components = [comp for comp in components if not comp.alpha_idx]
 
-            # Union-find: group alpha indices that appear together in any component.
-            parent = list(range(n_alpha))
-
-            def find(x):
-                while parent[x] != x:
-                    parent[x] = parent[parent[x]]
-                    x = parent[x]
-                return x
-
-            def union(x, y):
-                rx, ry = find(x), find(y)
-                if rx != ry:
-                    parent[rx] = ry
-
-            for _, _, _, alpha_idx in alpha_components:
-                for i in range(1, len(alpha_idx)):
-                    union(alpha_idx[0], alpha_idx[i])
-
-            # Collect and sort global alpha indices per group root.
-            root_globals = defaultdict(set)
-            for _, _, _, alpha_idx in alpha_components:
-                root_globals[find(alpha_idx[0])].update(alpha_idx)
-            root_sorted = {r: sorted(gs) for r, gs in root_globals.items()}
-
-            # Remap each component's alpha_idx to local (group-relative) indices.
-            root_comps = defaultdict(list)
-            for gauss, precision, flatdata, alpha_idx in alpha_components:
-                root = find(alpha_idx[0])
-                global_idx = root_sorted[root]
-                g_to_l = {gi: li for li, gi in enumerate(global_idx)}
-                root_comps[root].append((gauss, precision, flatdata, [g_to_l[g] for g in alpha_idx]))
-
-            # Build one descriptor per independent group.
-            # All group_theory_pipes share _likelihood_ctx so __post_init__ doesn't re-run per group.
-            # Two-stage partition (computed before creating pipes so we can find globally-stage-i nodes):
-            # Stage i = nodes whose transitive param deps have zero overlap with group_alpha_names.
-            # Stage ii = nodes that (transitively) depend on alpha params.
-            # Only Stage ii is traced through jax.linearize, so stage-i external nodes (cosmo,
-            # PT emulators) are never differentiated through.
-            # Since all group_theory_pipes share the same graph, _node_var_deps/_node_calc_deps
-            # are the same as self._likelihood's — compute stage_i_ids from there directly.
+            # Two-stage partition, computed before any group pipe exists so that the globally
+            # stage-i nodes can be found.  Stage i = nodes whose transitive param deps have zero
+            # overlap with the block's solved params; stage ii = the rest.  Only stage ii is traced
+            # through jax.linearize, so stage-i external nodes (cosmo, PT emulators) are never
+            # differentiated through.  Every group pipe shares this graph, so its
+            # _node_var_deps / _node_calc_deps are self._likelihood's.
             def _compute_stage_i_ids(group_alpha_names_set):
                 alpha_dep_ids = set()
                 for pipe_node in self._likelihood.nodes:
@@ -529,54 +732,18 @@ class Posterior(Calculator):
                         alpha_dep_ids.add(id(pipe_node))
                 return frozenset(id(pipe_node) for pipe_node in self._likelihood.nodes if id(pipe_node) not in alpha_dep_ids)
 
-            # Phase A: compute per-group stage_i_ids and DOF-level metadata before creating any CompiledGraph.
-            # Converts comp local_idx from param-level indices to DOF-level indices so that _marg_loglik
-            # can handle solved params with non-scalar shapes (e.g. shape=(2,)).
-            pending_groups = []
-            for root, global_idx in root_sorted.items():
-                comps = root_comps[root]
-                group_gaussians = [gauss for gauss, _, _, _ in comps]
-                group_alpha_names = [alpha_names[g] for g in global_idx]
-                group_alpha_sizes = [alpha_sizes_map[g] for g in global_idx]
-                group_alpha_shapes = [alpha_shapes_map[g] for g in global_idx]
+            # The plan itself: which solved params must be solved together, and each component's
+            # place in its block.  Pure, and computed before a single pipe is built.
+            pending_groups = plan_marginalisation(
+                [comp for comp in components if comp.alpha_idx], list(self._solved_params),
+                _compute_stage_i_ids)
 
-                # DOF offset within the group for each local param index j.
-                group_dof_offsets = []
-                dof_off = 0
-                for g in global_idx:
-                    group_dof_offsets.append(dof_off)
-                    dof_off += alpha_sizes_map[g]
-
-                # marg/best membership at DOF level.
-                marg_local = np.array([group_dof_offsets[j] + k for j, g in enumerate(global_idx)
-                                       if g in marg_global for k in range(alpha_sizes_map[g])], dtype=int)
-                best_local = np.array([group_dof_offsets[j] + k for j, g in enumerate(global_idx)
-                                       if g in best_global for k in range(alpha_sizes_map[g])], dtype=int)
-
-                # Per-DOF prior precision and center (same value repeated for all DOFs of a param).
-                prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx
-                                        for _ in range(alpha_sizes_map[g])])
-                prior_center = jnp.array([alpha_prior_centers[g] for g in global_idx
-                                          for _ in range(alpha_sizes_map[g])])
-
-                # Remap comp local_idx_params (param-level local indices) → DOF-level indices.
-                comps_dof = []
-                for gauss, precision, flatdata, local_idx_params in comps:
-                    local_dof_idx = [group_dof_offsets[j] + k for j in local_idx_params
-                                     for k in range(group_alpha_sizes[j])]
-                    comps_dof.append((gauss, precision, flatdata, local_dof_idx))
-
-                stage_i_ids = _compute_stage_i_ids(set(group_alpha_names))
-                pending_groups.append((root, global_idx, comps_dof, group_gaussians, group_alpha_names,
-                                       group_alpha_sizes, group_alpha_shapes, stage_i_ids,
-                                       marg_local, best_local, prior_prec, prior_center))
-
-            # Phase B: build a shared node_state dict for nodes that are stage-i in ALL groups.
+            # Phase B: build a shared node_state dict for nodes that are stage-i in every group.
             # When multiple CompiledGraph instances share the same node_state object for a
             # globally-stage-i external node (e.g. CosmoprimoCosmology), the pure_callback
-            # cache hit from the first group's pre-pass is visible to all other groups AND to
+            # cache hit from the first group's pre-pass is visible to all other groups and to
             # self._likelihood's extra derived-params pass — CAMB runs once, not n_groups+1 times.
-            global_stage_i_ids = frozenset.intersection(*[gdata[7] for gdata in pending_groups]) if pending_groups else frozenset()
+            global_stage_i_ids = frozenset.intersection(*[block.stage_i_ids for block in pending_groups]) if pending_groups else frozenset()
             shared_node_states = {
                 id(node): {'last_params': None, 'was_called': False, 'last_result': None,
                            'dep_result': None, 'call_result': None, 'last_dep_args': None}
@@ -594,33 +761,31 @@ class Posterior(Calculator):
 
             # Phase C: create group CompiledGraphs with the shared node_states injected.
             self._groups = []
-            for (root, global_idx, comps_dof, group_gaussians, group_alpha_names,
-                 group_alpha_sizes, group_alpha_shapes, stage_i_ids,
-                 marg_local, best_local, prior_prec, prior_center) in pending_groups:
+            for block in pending_groups:
+                stage_i_ids = block.stage_i_ids
                 group_theory_pipe = CompiledGraph(likelihood, _likelihood_ctx,
-                                                  output=make_group_output(group_gaussians),
+                                                  output=make_group_output(block.gaussians),
                                                   shared_node_states=shared_node_states)
 
                 # Per-component metadata for splitting the concatenated theories/Jacobians.
-                # local_dof_idx: DOF indices (within the group's alpha_vec) for this component.
                 comp_meta = []
                 data_offset = 0
-                for gauss, precision, flatdata, local_dof_idx in comps_dof:
-                    flat_data = np.ravel(np.asarray(flatdata))
-                    n_i = flat_data.size
-                    comp_meta.append((precision, flat_data, local_dof_idx, data_offset, n_i))
-                    data_offset += n_i
+                for comp in block.components:
+                    flat_data = np.ravel(np.asarray(comp.flatdata))
+                    comp_meta.append(ComponentBlock(comp.precision, flat_data, comp.alpha_idx,
+                                                    data_offset, flat_data.size))
+                    data_offset += flat_data.size
 
                 stage_i_nodes_ordered = [pipe_node for pipe_node in group_theory_pipe.nodes
                                          if id(pipe_node) in stage_i_ids]
 
-                # Build Stage-i pre-pass: runs ALL Stage-i nodes via group_theory_pipe with
+                # Build Stage-i pre-pass: runs every Stage-i node via group_theory_pipe with
                 # Stage-ii nodes skipped (skip_ids), captures every Stage-i node's
                 # tree_flatten leaves as the return value (output_override).  This fixes a
-                # prior bug where compile(stage_i_root, ...) only ran the sub-graph reachable
+                # prior bug where build(stage_i_root, ...) only ran the sub-graph reachable
                 # from the last Stage-i node in topo order, leaving earlier-branch Stage-i
                 # nodes (e.g. pt_LRG / pt_ELG in a 3-tracer pipeline) with stale
-                # compile-time values in stage_i_flat.
+                # build-time values in stage_i_flat.
                 if stage_i_nodes_ordered:
                     stage_ii_ids = frozenset(id(pipe_node) for pipe_node in group_theory_pipe.nodes
                                              if id(pipe_node) not in stage_i_ids)
@@ -646,30 +811,16 @@ class Posterior(Calculator):
                 else:
                     stage_i_pipe = None
 
-                self._groups.append((group_alpha_names, group_alpha_sizes, group_alpha_shapes,
-                                     group_theory_pipe, comp_meta, marg_local, best_local,
-                                     prior_prec, prior_center, stage_i_pipe, stage_i_ids))
+                self._groups.append(MarginalisationGroup(
+                    block.alpha_names, block.alpha_sizes, block.alpha_shapes, group_theory_pipe,
+                    comp_meta, block.marg_local, block.best_local, block.prior_precision,
+                    block.prior_center, stage_i_pipe, stage_i_ids))
 
-            prior.update(self._likelihood.params.select(solved=False))
-        else:
-            prior.update(self._likelihood.params)
 
-        _prior_params = list(get_params(prior))
-        self._prior_param_names = [p.name for p in _prior_params]
+        _prior_params = [p for p in get_params(prior)]
         _prior_ref = prior
-        self._prior = compile(prior, output=lambda: (_prior_ref.logpdf, [p.value for p in _prior_params]))
-
-        # Derived outputs exposed to the pipeline (their .value is set in __call__).
-        self.logposterior = Variable(basename='logposterior', value=0., derived=True, latex=r'\ln\mathcal{P}')
-        self.logprior = Variable(basename='logprior', value=0., derived=True, latex=r'\ln\Pi')
-        self.loglikelihood = Variable(basename='loglikelihood', value=0., derived=True, latex=r'\ln\mathcal{L}')
-        # Expose originals (derived='marg'/'best') as a public attribute so build_graph
-        # discovers them as Posterior's deps and the pipeline tracks their best-fit values.
-        # _derived_params uses a truthy check on derived, so solved params are included.
-        self.solved_params = list(self._solved_params)
-        # Number of data points (None when the likelihood does not expose it), surfaced
-        # for ndof bookkeeping downstream (e.g. the profiler / Profiles.to_stats).
-        self.ndata = getattr(likelihood, 'ndata', None)
+        self._prior = build(prior, output=lambda: (_prior_ref.logpdf, [p.value for p in _prior_params]))
+        self._prior_param_names = [p.name for p in _prior_params]
 
     def _marg_loglik(self, params):
         """Profile/marginalize over solved params, one independent group at a time.
@@ -688,16 +839,16 @@ class Posterior(Calculator):
             logL = logL + ng_pipe(ng_params)
 
         # Gaussian components with no solved-param dependence: standard chi-squared.
-        for theory_pipe, precision, flatdata in self._no_alpha_components:
-            comp_params = {p.name: jnp.asarray(params[p.name]) for p in theory_pipe.params}
-            theory = theory_pipe(comp_params)
-            r = flatdata - theory
-            logL = logL - 0.5 * r @ (precision @ r)
+        for comp in self._no_alpha_components:
+            comp_params = {p.name: jnp.asarray(params[p.name]) for p in comp.theory.params}
+            r = comp.flatdata - comp.theory(comp_params)
+            logL = logL - 0.5 * r @ (comp.precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
-             group_theory_pipe, comp_meta, marg_local, best_local,
-             prior_prec, prior_center, stage_i_pipe, stage_i_ids) in self._groups:
+        for group in self._groups:
+            (group_alpha_names, group_alpha_sizes, group_alpha_shapes, group_theory_pipe,
+             comp_meta, marg_local, best_local, prior_prec, prior_center,
+             stage_i_pipe, stage_i_ids) = group
             # n_g: total DOF across all alpha params in this group (sum of per-param sizes).
             n_g = sum(group_alpha_sizes)
 
@@ -718,7 +869,7 @@ class Posterior(Calculator):
 
             if stage_i_pipe is not None and stage_i_ids:
                 # Two-stage JVP optimisation:
-                # Stage i — run ALL non-alpha nodes once (via group_theory_pipe with Stage-ii
+                # Stage i — run every non-alpha node once (via group_theory_pipe with Stage-ii
                 # nodes skipped), capture every Stage-i node's tree_flatten leaves as a flat
                 # tuple of live JAX values.  XLA computes this block once; none of it appears
                 # inside the JVP binary.
@@ -751,13 +902,14 @@ class Posterior(Calculator):
             b_g = jnp.zeros(n_g)
             logL_g = jnp.zeros(())
 
-            for precision, flat_data, local_dof_idx, data_offset, n_i in comp_meta:
+            for block in comp_meta:
+                data_offset, n_i, precision = block.offset, block.size, block.precision
                 theory_i = theories_concat[data_offset:data_offset + n_i]
                 # B_rows[dof_j, data_k] = Jacobian; transpose to (n_i, n_g), select local DOF columns.
-                B_i = B_rows[:, data_offset:data_offset + n_i].T[:, local_dof_idx]  # (n_i, n_local_dof)
-                r_i = flat_data - theory_i
+                B_i = B_rows[:, data_offset:data_offset + n_i].T[:, block.dof_idx]  # (n_i, n_local_dof)
+                r_i = block.flatdata - theory_i
                 BtP = B_i.T @ precision
-                ix = np.array(local_dof_idx)
+                ix = np.array(block.dof_idx)
                 F_g = F_g.at[ix[:, None], ix[None, :]].add(BtP @ B_i)
                 b_g = b_g.at[ix].add(BtP @ r_i)
                 logL_g = logL_g - 0.5 * r_i @ (precision @ r_i)
@@ -839,15 +991,6 @@ class Posterior(Calculator):
 # _fd_stencil now lives in cosmoprimo.emulators.tools.utils (imported above).
 
 
-def _jacfwd_wrap(fn, name):
-    """Lift *fn(p_dict) -> y* to one ``jax.jacfwd`` pass w.r.t. parameter *name*.
-
-    Nest k times to obtain the k-th derivative."""
-    def wrapped(p_dict):
-        return jax.jacfwd(lambda v: fn({**p_dict, name: v}))(p_dict[name])
-    return wrapped
-
-
 def _jacfwd_dict_wrap(fn, names):
     """Lift *fn(p_dict) -> pytree* to one ``jax.jacfwd`` pass w.r.t. the dict of
     parameters *names*, all in a single trace.
@@ -883,6 +1026,109 @@ def _fd_parse_eps(fd_eps_val):
 
 
 # _FD_TRANSFORMS now lives in cosmoprimo.emulators.tools.utils (imported above).
+
+
+#: Sentinel for "argument not given", where ``None`` is itself a meaningful value.
+_UNSET = object()
+
+
+class FDSpec(NamedTuple):
+    """Everything :func:`_fd_direct_wrap` needs to build one parameter's stencil.
+
+    Either a collocation spec (*nodes* set, *offsets* / *coeffs* / *eps* ``None``) or a
+    finite-difference one (the reverse); *transform* applies to both.
+    """
+    offsets: object
+    coeffs: object
+    eps: object
+    prior_limits: object
+    transform: object
+    nodes: object
+
+
+def _fd_wrap(fn, name, spec, k, prior_limits=_UNSET):
+    """:func:`_fd_direct_wrap` from an :class:`FDSpec`; *prior_limits* overrides the spec's."""
+    return _fd_direct_wrap(fn, name, spec.offsets, spec.coeffs, spec.eps, k,
+                           prior_limits=spec.prior_limits if prior_limits is _UNSET else prior_limits,
+                           transform=spec.transform, nodes=spec.nodes)
+
+
+def _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights, divisor=None):
+    """``sum_j w_j fn(p_dict with *name* at node j) / divisor``, over any pytree *fn* returns.
+
+    The one shape every finite-difference stencil in this module has: evaluate at each node,
+    weight, accumulate, divide.  What the three stencils differ in is only what they pass here
+    -- fixed collocation nodes with interpolation weights and no divisor, a uniform grid with
+    the static centered coefficients, or a boundary-shifted grid with weights solved at trace
+    time -- so they share this.
+
+    Parameters
+    ----------
+    p0 : array
+        The parameter's current value; its ``ndim`` picks the scalar or the vectorised path.
+    node_values : sequence
+        One entry per node: the value *name* takes there.  Scalar *p0*: a scalar each.  Array
+        *p0*: broadcastable to ``(p0.size,)``, the value an element takes when it is the one
+        being perturbed -- every other element keeps its ``p0`` value.
+    weights : array
+        ``(n_nodes,)`` for a scalar *p0*, ``(p0.size, n_nodes)`` for an array one, so that each
+        element may carry its own weights (they do, wherever the node grid depends on the point).
+    divisor : float or None
+        Divided out at the end; ``None`` to skip it.
+    """
+    n_nodes = len(node_values)
+
+    if p0.ndim == 0:
+        accumulated = None
+        for node_idx in range(n_nodes):
+            weight = weights[node_idx]
+            contribution = jax.tree_util.tree_map(lambda x: weight * x,
+                                                  fn({**p_dict, name: node_values[node_idx]}))
+            if accumulated is None:
+                accumulated = contribution
+            else:
+                accumulated = jax.tree_util.tree_map(lambda a, b: a + b, accumulated, contribution)
+        if divisor is None:
+            return accumulated
+        return jax.tree_util.tree_map(lambda x: x / divisor, accumulated)
+
+    # Array parameter: one vmapped pass per node over the one-hot basis directions, so the
+    # Python loop runs over the stencil only.
+    flat_size = p0.size
+    p0_flat = p0.reshape(-1)
+    basis = jnp.eye(flat_size)
+    accumulated = None
+    for node_idx in range(n_nodes):
+        nodes_flat = jnp.broadcast_to(jnp.asarray(node_values[node_idx]), (flat_size,))
+
+        def eval_along(one_hot, _nodes=nodes_flat):
+            values = p0_flat * (1. - one_hot) + _nodes * one_hot
+            return fn({**p_dict, name: values.reshape(p0.shape)})
+
+        # values: pytree with each leaf of shape (flat_size, *leaf_shape)
+        values = jax.vmap(eval_along)(basis)
+        weight_column = weights[:, node_idx]
+        scaled = jax.tree_util.tree_map(
+            lambda x: x * weight_column.reshape((flat_size,) + (1,) * (x.ndim - 1)), values)
+        if accumulated is None:
+            accumulated = scaled
+        else:
+            accumulated = jax.tree_util.tree_map(lambda a, b: a + b, accumulated, scaled)
+
+    if divisor is not None:
+        accumulated = jax.tree_util.tree_map(lambda x: x / divisor, accumulated)
+
+    # Move the leading batch axis (flat_size) to trailing axes matching the parameter's shape:
+    # each leaf comes out of the vmap as (flat_size, *leaf_shape) and the caller wants
+    # (*leaf_shape, *p0.shape).
+    def _move_batch_to_param_axes(x):
+        n_out = x.ndim - 1
+        if n_out == 0:
+            return x.reshape(p0.shape)
+        moved = jnp.transpose(x, tuple(range(1, n_out + 1)) + (0,))   # (*leaf_shape, flat_size)
+        return moved.reshape(moved.shape[:-1] + p0.shape)
+
+    return jax.tree_util.tree_map(_move_batch_to_param_axes, accumulated)
 
 
 def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transform=None, nodes=None):
@@ -924,67 +1170,23 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transf
     if transform is not None:
         fwd, inv = _FD_TRANSFORMS[transform]
 
-    def _tree_scale_local(tree, s):
-        return jax.tree_util.tree_map(lambda x: s * x, tree)
-
-    def _tree_add_local(tree_a, tree_b):
-        return jax.tree_util.tree_map(lambda a, b: a + b, tree_a, tree_b)
-
     if nodes is not None:
-        # Chebyshev collocation: FIXED nodes (transformed units) spanning the parameter's
-        # fd.limits; the k-th derivative at the CURRENT point u(p0) is taken from the full
+        # Chebyshev collocation: nodes fixed in transformed units, spanning the parameter's
+        # fd.limits; the k-th derivative at the current point u(p0) is taken from the full
         # node set via polynomial-interpolation weights, so the order-n Taylor built from
         # these calls is identically the degree-n interpolant through the nodes.
         node_positions = np.asarray(nodes, dtype='f8')
         n_nodes = len(node_positions)
         if k >= n_nodes:
             raise ValueError(f'collocation for {name}: derivative order {k} needs more than {n_nodes} nodes')
-        node_values = node_positions if inv is None else inv(node_positions)
-
-        def _weights_at(u0):
-            return interpolation_weights(node_positions, u0, k)
+        node_values = list(node_positions if inv is None else inv(node_positions))
 
         def wrapped(p_dict):
             p0 = jnp.asarray(p_dict[name])
             u0 = p0 if fwd is None else fwd(p0)
-
-            if p0.ndim == 0:
-                weights = _weights_at(u0)  # (n_nodes,)
-                acc_tree = None
-                for node_idx in range(n_nodes):
-                    fi = fn({**p_dict, name: node_values[node_idx]})
-                    contrib = _tree_scale_local(fi, weights[node_idx])
-                    acc_tree = contrib if acc_tree is None else _tree_add_local(acc_tree, contrib)
-                return acc_tree
-
-            # Array param: same fixed nodes for every element; per-element weights.
-            flat_size = p0.size
-            p0_flat = p0.reshape(-1)
-            u0_flat = u0.reshape(-1)
-            weights = _weights_at(u0_flat)  # (flat_size, n_nodes)
-            basis = jnp.eye(flat_size)
-            acc_vmap = None
-            for node_idx in range(n_nodes):
-                node_value = node_values[node_idx]
-                def eval_along(e_flat, _node=node_value):
-                    values = p0_flat * (1. - e_flat) + _node * e_flat
-                    return fn({**p_dict, name: values.reshape(p0.shape)})
-                vals = jax.vmap(eval_along)(basis)
-                w_col = weights[:, node_idx]
-                scaled_vals = jax.tree_util.tree_map(
-                    lambda x: x * w_col.reshape((flat_size,) + (1,) * (x.ndim - 1)), vals)
-                acc_vmap = scaled_vals if acc_vmap is None else _tree_add_local(acc_vmap, scaled_vals)
-
-            def _move(tree, p_shape):
-                def _per_leaf(x):
-                    n_out = x.ndim - 1
-                    if n_out == 0:
-                        return x.reshape(p_shape)
-                    perm = tuple(range(1, n_out + 1)) + (0,)
-                    moved = jnp.transpose(x, perm)
-                    return moved.reshape(moved.shape[:-1] + p_shape)
-                return jax.tree_util.tree_map(_per_leaf, tree)
-            return _move(acc_vmap, p0.shape)
+            # the same fixed nodes for every element; the weights are per element
+            weights = interpolation_weights(node_positions, u0 if p0.ndim == 0 else u0.reshape(-1), k)
+            return _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights)
 
         return wrapped
 
@@ -1000,51 +1202,17 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transf
         if np.isfinite(_lo): _prior_lo = float(_lo) if fwd is None else float(fwd(_lo))
         if np.isfinite(_hi): _prior_hi = float(_hi) if fwd is None else float(fwd(_hi))
 
-    def _tree_scale(tree, s):
-        return jax.tree_util.tree_map(lambda x: s * x, tree)
-
-    def _tree_add(tree_a, tree_b):
-        return jax.tree_util.tree_map(lambda a, b: a + b, tree_a, tree_b)
-
-    def _tree_div(tree, s):
-        return jax.tree_util.tree_map(lambda x: x / s, tree)
-
-    def _move_batch_to_param_axes(tree, p_shape):
-        """Move the leading batch axis (flat_size) to trailing axes matching p_shape."""
-        def _per_leaf(x):
-            # x: (flat_size, *leaf_shape)
-            n_out = x.ndim - 1
-            if n_out == 0:
-                return x.reshape(p_shape)
-            perm = tuple(range(1, n_out + 1)) + (0,)
-            moved = jnp.transpose(x, perm)   # (*leaf_shape, flat_size)
-            return moved.reshape(moved.shape[:-1] + p_shape)
-        return jax.tree_util.tree_map(_per_leaf, tree)
-
     if _prior_lo is None and _prior_hi is None and eps_below == eps_above and transform is None:
         # Static path: symmetric steps, no boundary, no transform — the uniform centered
         # weights apply as-is and zero-weight nodes stay skipped.
         def wrapped(p_dict):
             p0 = jnp.asarray(p_dict[name])
-
-            if p0.ndim == 0:
-                acc = None
-                for off, coeff in zip(offsets, coeffs):
-                    fi = fn({**p_dict, name: p0 + off * eps_avg})
-                    acc = _tree_scale(fi, coeff) if acc is None else _tree_add(acc, _tree_scale(fi, coeff))
-                return _tree_div(acc, h_k)
-
-            flat_size = p0.size
-            basis = jnp.eye(flat_size)  # (flat_size, flat_size)
-            acc_vmap = None
-            for off, coeff in zip(offsets, coeffs):
-                def eval_along(e_flat, _off=off):
-                    return fn({**p_dict, name: p0 + _off * eps_avg * e_flat.reshape(p0.shape)})
-                # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
-                vals = jax.vmap(eval_along)(basis)
-                acc_vmap = _tree_scale(vals, coeff) if acc_vmap is None else _tree_add(acc_vmap, _tree_scale(vals, coeff))
-            result = _tree_div(acc_vmap, h_k)
-            return _move_batch_to_param_axes(result, p0.shape)
+            base = p0 if p0.ndim == 0 else p0.reshape(-1)
+            node_values = [base + off * eps_avg for off in offsets]
+            weights = jnp.asarray(coeffs)
+            if p0.ndim:
+                weights = jnp.broadcast_to(weights, (p0.size, len(coeffs)))
+            return _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights, h_k)
 
         return wrapped
 
@@ -1066,10 +1234,6 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transf
         raise ValueError('cannot fit the order-{:d} stencil for {} (steps {}, {}) within prior limits {}; '
                          'decrease fd_eps or widen the prior'.format(k, name, eps_below, eps_above, prior_limits))
 
-    def _shift_base(p0):
-        """Shift the stencil base inward so every node stays within the prior limits."""
-        return jnp.clip(p0, base_lo, base_hi)
-
     def _node_weights(p0, p_base):
         """Interpolation weights w such that f^(k)(p0) = sum_j w_j f(node_j) / h_k.
 
@@ -1090,43 +1254,14 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transf
         # All stencil geometry (base shift, node positions, weights) lives in the
         # expansion variable u; only the function evaluations map back to p.
         u0 = p0 if fwd is None else fwd(p0)
-        u_base = _shift_base(u0)
-
-        if p0.ndim == 0:
-            weights = _node_weights(u0, u_base)  # (n_nodes,)
-            acc = None
-            for node_idx in range(n_nodes):
-                u_node = u_base + signed_steps[node_idx]
-                fi = fn({**p_dict, name: u_node if inv is None else inv(u_node)})
-                contrib = _tree_scale(fi, weights[node_idx])
-                acc = contrib if acc is None else _tree_add(acc, contrib)
-            return _tree_div(acc, h_k)
-
-        # Array param: each one-hot basis direction perturbs one element, whose own
-        # value sets its shift and weights.
-        flat_size = p0.size
-        p0_flat = p0.reshape(-1)
-        u0_flat = u0.reshape(-1)
-        base_flat = u_base.reshape(-1)
-        weights = _node_weights(u0_flat, base_flat)  # (flat_size, n_nodes)
-        basis = jnp.eye(flat_size)  # (flat_size, flat_size)
-        # Along basis direction e, the perturbed element must sit at its shifted node
-        # while every other element keeps its p0 value.
-        acc_vmap = None
-        for node_idx in range(n_nodes):
-            u_nodes_flat = base_flat + signed_steps[node_idx]  # (flat_size,)
-            nodes_flat = u_nodes_flat if inv is None else inv(u_nodes_flat)
-            def eval_along(e_flat, _nodes=nodes_flat):
-                values = p0_flat * (1. - e_flat) + _nodes * e_flat
-                return fn({**p_dict, name: values.reshape(p0.shape)})
-            # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
-            vals = jax.vmap(eval_along)(basis)
-            w_col = weights[:, node_idx]
-            scaled = jax.tree_util.tree_map(lambda x: x * w_col.reshape((flat_size,) + (1,) * (x.ndim - 1)), vals)
-            acc_vmap = scaled if acc_vmap is None else _tree_add(acc_vmap, scaled)
-
-        result = _tree_div(acc_vmap, h_k)
-        return _move_batch_to_param_axes(result, p0.shape)
+        # shift the stencil base inward so every node stays within the prior limits
+        u_base = jnp.clip(u0, base_lo, base_hi)
+        if p0.ndim:
+            u0, u_base = u0.reshape(-1), u_base.reshape(-1)
+        # each element's own value sets its shift and so its weights
+        weights = _node_weights(u0, u_base)
+        node_values = [u_base + step if inv is None else inv(u_base + step) for step in signed_steps]
+        return _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights, h_k)
 
     return wrapped
 
@@ -1311,7 +1446,7 @@ def _build_graph_call_fn(pipeline):
             if id(node) in skip_ids:
                 continue
             # Every node, not just the External ones: a node that calls a non-jax library
-            # DIRECTLY (rather than through a pure_callback of its own) needs the same
+            # directly (rather than through a pure_callback of its own) needs the same
             # eager-raise / traced-NaN contract, and the only place able to observe the outer
             # trace status is here. External nodes additionally stash it in `node_state` below,
             # because their callback runs after this loop has finished.
@@ -1339,7 +1474,7 @@ def _build_graph_call_fn(pipeline):
                 # where values are always concrete) can tell whether the *enclosing* graph
                 # execution is jax-traced — pure_callback itself can never expose that.
                 # Written into the persistent node_state dict (read back by _run_or_cache
-                # right before it actually calls node()), NOT a plain node attribute:
+                # right before it actually calls node()), rather than a plain node attribute:
                 # jax.pure_callback defers the actual callback invocation to program
                 # *execution* time, which happens after this trace-time loop (and the
                 # is_tracing-restore block below it) has already finished running, so a
@@ -1593,6 +1728,11 @@ class CompiledGraph:
         self.output = output
         self.input = input
         self.nodes = ctx.node_order
+        # One concept for "is this graph still the current one for its nodes": it owns them until
+        # something else claims them or they are reconfigured, and then carries the reason.
+        self._context_id = id(ctx)
+        self._invalid = None
+        _take_ownership(self, self.nodes, self._context_id)
 
         # Per-node dep lists split by type.
         self._node_var_deps = {}
@@ -1622,7 +1762,7 @@ class CompiledGraph:
                              for node in self.nodes}
         # Allow callers to share a node_state dict across multiple CompiledGraph instances so
         # that a pure_callback cache hit in one graph is visible to sibling graphs.  The shared
-        # dict must be installed BEFORE _fn_dep closures are built below, because those closures
+        # dict must be installed before _fn_dep closures are built below, because those closures
         # capture node_state by reference at creation time.
         if shared_node_states:
             for nid, shared_state in shared_node_states.items():
@@ -1681,6 +1821,31 @@ class CompiledGraph:
         """JIT-compiled version of ``_call_fn``; created once and cached on the graph."""
         return jax.jit(self._call_fn)
 
+    def release(self):
+        """Give up ownership of this graph's nodes, without invalidating this graph.
+
+        Rarely needed: reconfiguring a node invalidates its owners by itself, and a graph nobody
+        refers to is collected.  It is here for the case where something still holds this graph --
+        a notebook's ``Out[7]``, a profiler -- and you want the nodes free of it.
+        """
+        for node in self.nodes:
+            if node._owners is not None:
+                node._owners.discard(self)
+
+    def _check_not_stale(self):
+        """Raise if this graph is no longer the current one for its nodes.
+
+        One flag, set by whoever invalidated it, carrying the reason: another build claimed these
+        nodes, or one of them was reconfigured.  The node objects are shared and a build writes
+        their setup (`__post_init__`) onto them in place, so a graph that has been superseded
+        would otherwise compute on someone else's configuration -- which it did, silently, before
+        this check existed.
+        """
+        if self._invalid is not None:
+            raise RuntimeError(
+                f'{type(self.root).__name__} graph is no longer valid: {self._invalid}. '
+                f'Build it again, or build the other one on `copy(...)` of the tree to keep both.')
+
     def _check_names(self, names):
         """Raise on any parameter name this graph does not have.
 
@@ -1715,7 +1880,7 @@ class CompiledGraph:
 
         Calling conventions
         -------------------
-        When no *input* callable was supplied to :func:`compile`:
+        When no *input* callable was supplied to :func:`build`:
 
             pipe(params_dict)          # explicit {name: value} dict
             pipe(**overrides)          # override specific params; rest from defaults
@@ -1739,18 +1904,18 @@ class CompiledGraph:
         to whatever they were on entry, so that finite-difference mutations
         inside ``pure_callback`` do not corrupt subsequent default-argument calls.
         """
+        self._check_not_stale()
         if self.input is not None:
             self.input(args[0] if args else None)
             params = args[1] if len(args) > 1 else None
         else:
             params = args[0] if args else None
         # Snapshot current values; used as defaults and for post-call restoration.
-        # Only non-derived params are restored: derived Variables are computed
-        # *outputs* whose values the caller reads after the call.  Input params
-        # may be mutated by pure_callback FD side-effects and must be restored.
+        # What decides the restore is whether the call is traced, not whether a param is
+        # derived: a traced value must not outlive its trace, whatever it is attached to, and an
+        # eager one is the result the caller just asked for, whatever it is attached to.  See
+        # the `finally` below.
         all_saved = {p.name: p._value for p in self.params}
-        input_saved = {n: v for n, v in all_saved.items()
-                       if not self.params[n].derived}
         # Reject unknown names before the merge, in both calling conventions: after the merge
         # an unknown name is indistinguishable from a legitimate one.
         if params is not None:
@@ -1767,54 +1932,78 @@ class CompiledGraph:
                 params.update(kwargs)
         fd_params_tuple = tuple(jnp.asarray(params[n]) for n in self._fd_names)
         jax_params_tuple = tuple(jnp.asarray(params[n]) for n in self._jax_names)
+        # A tracer among the inputs means every value this call writes onto a node is a tracer.
+        is_tracing = any(isinstance(value, jax.core.Tracer) for value in params.values())
         try:
             return_val, derived_dict, _ = self._call_fn(fd_params_tuple, jax_params_tuple)
         finally:
-            # Restore only input params to pre-call values (undo FD mutations).
-            for p in self.params:
-                if p.name in input_saved:
-                    p._value = input_saved[p.name]
+            if is_tracing:
+                # Nothing survives a trace. A tracer left on a node escapes into the next eager
+                # call, where using it raises `UnexpectedTracerError` far from here -- measured
+                # across the profiler suite, from a derived Parameter a traced call had written.
+                # The values themselves are not lost: they are in `derived_dict`.
+                for p in self.params:
+                    p._value = all_saved[p.name]
+            # Eager: nothing is restored. The tree is left reflecting the evaluation that just
+            # ran -- `get_params(graph)['b1'].value` is what was passed, and a node's computed
+            # outputs (a derived Parameter, a `flattheory` Variable) are there to be read. An
+            # operation that perturbs a parameter *internally* puts it back itself; see
+            # `differentiate`.
         if return_derived:
             return return_val, derived_dict
         return return_val
 
 
-def _node_sources(calc):
-    """Return the values to scan for a calculator's Node references: its constructor
-    args/kwargs (``_init``) plus its public attributes."""
-    args, kwargs = calc._init
-    return list(args) + list(kwargs.values()) + [val for key, val in calc.__dict__.items() if not key.startswith('_')]
+def _iter_nodes(calc, level=None, exclude=None, filter=None):
+    """Yield the nodes reachable from *calc*, walking its transitive Calculator dependencies
+    (depth-first, cycle-safe).
 
-
-def _iter_calculators(calc, maxlevel=None, exclude=None):
-    """Yield *calc* and its transitive Calculator dependencies (depth-first, cycle-safe).
-
-    Sub-calculators are discovered (via :func:`_iter_nodes`) in both the constructor
-    args (``_init``) and the public attributes.  Each calculator is yielded *before* its
-    children are scanned, so a consumer that mutates a calculator (e.g. :func:`replace`)
-    affects what is subsequently descended into.
+    Sub-calculators are discovered (via :func:`_iter_node`) in both the constructor args
+    (``_init``) and the public attributes.  Each calculator is yielded *before* its children are
+    scanned, so a consumer that mutates a calculator (e.g. :func:`replace`) affects what is
+    subsequently descended into.
 
     Parameters
     ----------
-    maxlevel : int or None
+    level : int or None
         Maximal recursion depth (``None`` = unlimited, ``0`` = *calc* only, ``1`` =
         *calc* and its direct Calculator dependencies, ...).
     exclude : set of int or None
         Object ids never yielded nor descended into.
+    filter : type, callable or None
+        What to yield.  ``None`` (the default) yields the Calculators, which is the walk almost
+        every caller wants.  A type or a predicate yields the nodes matching it instead:
+        ``filter=Variable`` gives every Variable reachable from *calc*, at any depth, which is
+        what :func:`share_params` needs.  The walk descends through Calculators either way.
     """
     seen = set(exclude or ())
+    if filter is None:
+        def match(node): return isinstance(node, Calculator)
+    elif isinstance(filter, type):
+        def match(node, _type=filter): return isinstance(node, _type)
+    else:
+        match = filter
 
-    def _walk(current, level):
+    def _walk(current, depth):
         if id(current) in seen:
             return
         seen.add(id(current))
-        yield current
-        if maxlevel is not None and level >= maxlevel:
+        if match(current):
+            yield current
+        if level is not None and depth >= level:
             return
-        for src in _node_sources(current):
-            for dep in _iter_nodes(src):
-                if isinstance(dep, Calculator) and id(dep) not in seen:
-                    yield from _walk(dep, level + 1)
+        # a calculator's Node references live in its constructor args/kwargs and its public
+        # attributes; both are scanned, so a dep reachable by either path is found
+        args, kwargs = current._init
+        sources = list(args) + list(kwargs.values())
+        sources += [val for key, val in current.__dict__.items() if not key.startswith('_')]
+        for src in sources:
+            for dep in _iter_node(src):
+                if isinstance(dep, Calculator):
+                    if id(dep) not in seen:
+                        yield from _walk(dep, depth + 1)
+                elif match(dep):
+                    yield dep
 
     yield from _walk(calc, 0)
 
@@ -1833,12 +2022,12 @@ def replace(node, old, new, level: int=None):
     new : Node
         Replacement node.
     level : int or None
-        Maximal dependency depth to descend into (see :func:`_iter_calculators`);
+        Maximal dependency depth to descend into (see :func:`_iter_nodes`);
         ``None`` (default) is unlimited.
 
     Walks both the stored constructor arguments (``_init``) and the public attributes
     (``__dict__``), rebuilding nested containers.  Intended at construction time, before
-    :func:`compile` — e.g. to share a parameter across calculators::
+    :func:`build` — e.g. to share a parameter across calculators::
 
         replace(bispectrum, bispectrum.b1, power_spectrum.b1)
         replace(bispectrum, lambda p: p.name == 'b1', power_spectrum.b1)
@@ -1853,24 +2042,24 @@ def replace(node, old, new, level: int=None):
         match = old
     # Never descend into (or substitute inside) the freshly-inserted replacement.
     exclude = {id(new)} if isinstance(new, Node) else None
-    for calc in _iter_calculators(node, maxlevel=level, exclude=exclude):
+    for calc in _iter_nodes(node, level=level, exclude=exclude):
         # Constructor args (so a later __post_init__ that reads _init stays consistent).
         args, kwargs = calc._init
-        new_args = tuple(_substitute_node(arg, match, new) for arg in args)
-        new_kwargs = {key: _substitute_node(val, match, new) for key, val in kwargs.items()}
+        new_args = tuple(_replace_node(arg, match, new) for arg in args)
+        new_kwargs = {key: _replace_node(val, match, new) for key, val in kwargs.items()}
         # Public attributes.
         extra_init_kwargs = {}
         for key, val in list(calc.__dict__.items()):
             if key.startswith('_'):
                 continue
-            new_val = _substitute_node(val, match, new)
+            new_val = _replace_node(val, match, new)
             if new_val is not val:
                 setattr(calc, key, new_val)
                 # Sync _init for direct Calculator-valued attributes so that a subsequent
                 # update() re-uses the replacement rather than re-creating the old node.
                 # Variables/Parameters are excluded (their identity in _init is fine to keep
                 # as-is; auto-share replaces them in _init directly above).
-                # Containers are excluded because _substitute_node already updated their
+                # Containers are excluded because _replace_node already updated their
                 # counterparts in new_args/new_kwargs, and adding a container key here would
                 # duplicate positional args already stored in _init.
                 if isinstance(val, Calculator) and (key not in new_kwargs or new_kwargs[key] is not new_val):
@@ -1879,24 +2068,36 @@ def replace(node, old, new, level: int=None):
     return node
 
 
-def copy(node, level=1):
-    """Return a (partially) independent copy of *node* and its Calculator dependencies.
+def copy(node, level=None):
+    """Return an independent copy of *node* and its Calculator dependencies.
 
-    Each Calculator in the tree up to depth *level* is re-instantiated (the constructor is
-    called again with a shallow copy of the stored ``_init`` arguments), so that mutations
-    such as :func:`replace` on the copy do not affect the original.  Nodes *below* the
-    copied region — and all :class:`Variable` / :class:`Parameter` nodes — are shared with
-    the original, not duplicated.
+    Every Calculator in the tree (down to depth *level*, all of it by default) is
+    re-instantiated -- the constructor is called again with a shallow copy of the stored
+    ``_init`` arguments -- so no Calculator is shared.  That is what makes the copy the way to
+    build a second graph over one tree: a build configures Calculators in place, so two graphs
+    must not share any.
 
-    The *level* semantics follow :func:`_iter_calculators` and :func:`replace`:
+    Variables are shared, all of them: the ones the copy's constructors create are bound back
+    by name to the original's, exactly as a build binds the ones ``__init__`` creates to the ones
+    it was handed.  So ``get_params(copy)['b1'] is get_params(original)['b1']``, with whatever
+    prior was set on it, and one sampled value feeds both graphs.
+
+    The default is the whole tree because that is what every caller means by ``copy``.
+    ``desi-clustering`` copies a likelihood to get a profiler's, a sampler's and an emulated
+    one; with the old default of ``level=1`` those shared every theory, template and
+    cosmology below the root and each build reconfigured the others' -- it only worked
+    because the graphs were used one after another.  Pass *level* for a deliberately shallow
+    copy.
+
+    The *level* semantics follow :func:`_iter_nodes` and :func:`replace`:
     ``level=0`` copies only *node* itself; ``level=1`` copies *node* and its direct
-    Calculator dependencies; ``None`` copies the entire tree.
+    Calculator dependencies; ``None`` (default) copies the entire tree.
 
     Parameters
     ----------
     node : Calculator
         Root calculator to copy.
-    level : int or None, default=1
+    level : int or None, default=None
         Maximum dependency depth to copy (``None`` = unlimited).
 
     Returns
@@ -1904,42 +2105,67 @@ def copy(node, level=1):
     Calculator
         The newly-created root instance.
     """
-    # Collect all Calculator nodes up to *level* in depth-first (root-first) order.
-    # Reversing gives bottom-up order so that deps are copied before their parents.
-    nodes_to_copy = list(_iter_calculators(node, maxlevel=level))
+    return _init_graph(node, level=level, fresh=True, bind=get_params(node))
 
-    # Build old-id → new-instance mapping, bottom-up.
-    old_to_new = {}
+
+def _init_graph(node, level=None, fresh=False, bind=None):
+    """Run every Calculator's ``__init__`` again from its stored arguments -- on new objects
+    (*fresh*, what :func:`copy` does) or in place (what a build does) -- and return the root.
+
+    A calculator's arguments go first: a constructor is free to reconfigure the calculators it
+    is handed (``self.template.update(k=...)`` is how every theory sizes its template), so they
+    must be the reconstructed ones by then.  Copying in reversed traversal order once handed a
+    ``pt`` the *original* template whenever it was reachable by two paths (through the theory's
+    own arguments and through ``pt``), and the original template then swapped its cosmology
+    under the graph built on it.  Recursing through ``_init`` visits every argument once,
+    however many paths lead to it; calculators a constructor creates itself are created by it.
+
+    In place, the build claims on the tree are lifted first, so that a graph built earlier over
+    it is stale for one reason, this build, and not for each ``update()`` a constructor makes.
+
+    *bind* is the collection every reconstructed node is rewired to, node by node as it is built
+    rather than once at the end -- see the comment at the call.
+    """
+    to_visit = {id(calc) for calc in _iter_nodes(node, level=level)}
+    done = {}
 
     def _remap(value):
-        """Recursively substitute copied Calculators in nested containers."""
-        if isinstance(value, Calculator) and id(value) in old_to_new:
-            return old_to_new[id(value)]
+        if isinstance(value, Calculator):
+            if id(value) not in to_visit:
+                return value
+            if id(value) not in done:
+                args, kwargs = value._init
+                args = [_remap(arg) for arg in args]
+                kwargs = {key: _remap(val) for key, val in kwargs.items()}
+                if fresh:
+                    new = done[id(value)] = type(value)(*args, **kwargs)
+                else:
+                    value.__init__(*args, **kwargs)
+                    new = done[id(value)] = value
+                if bind is not None:
+                    # Here, not once after the whole traversal: a constructor is free to read its
+                    # children's parameters -- `Posterior.__init__` calls `get_params` -- and one
+                    # that does has to see settled objects. `__init__` makes fresh Parameters
+                    # every time it runs, so between a child's reconstruction and a single bind at
+                    # the end the tree holds two objects per name. Measured: a joint P+B build
+                    # raised on `b1` from inside this traversal, before that bind could repair it.
+                    #
+                    # The whole subtree, so that a constructor which reconfigured what it was
+                    # handed (`self.template.update(k=...)`) is repaired by its own parent's turn.
+                    #
+                    # By name, which is what leaves `update()` free to change the parameter set at
+                    # all -- counterterms and band powers come and go with `k` and `ells`. Names
+                    # that disappeared stay gone, names that appeared are left alone, and only the
+                    # survivors are rewired to the object the tree already had.
+                    _bind_variables(new, bind)
+            return done[id(value)]
         if isinstance(value, (list, tuple)):
-            remapped = [_remap(item) for item in value]
-            return type(value)(remapped)
+            return type(value)([_remap(item) for item in value])
         if isinstance(value, dict):
             return {key: _remap(val) for key, val in value.items()}
         return value
 
-    for calc in reversed(nodes_to_copy):
-        args, kwargs = calc._init
-        new_args = tuple(_remap(arg) for arg in args)
-        new_kwargs = {key: _remap(val) for key, val in kwargs.items()}
-        old_to_new[id(calc)] = type(calc)(*new_args, **new_kwargs)
-
-    return old_to_new[id(node)]
-
-
-def _deep_variables(calc, level=None):
-    """Yield every :class:`Variable` reachable from *calc* through its constructor args
-    (``_init``), public attributes, and (transitive) Calculator dependencies, down to
-    dependency depth *level* (``None`` = unlimited)."""
-    for current in _iter_calculators(calc, maxlevel=level):
-        for src in _node_sources(current):
-            for node in _iter_nodes(src):
-                if isinstance(node, Variable):
-                    yield node
+    return _remap(node)
 
 
 def share_params(calculators, names=None, level: int=None):
@@ -1956,7 +2182,7 @@ def share_params(calculators, names=None, level: int=None):
         Parameter name(s) to share.  ``None`` (default) shares **every** name that
         appears, i.e. all same-named parameters across *calculators* are unified.
     level : int or None
-        Maximal dependency depth to search/rewrite (see :func:`_iter_calculators`);
+        Maximal dependency depth to search/rewrite (see :func:`_iter_nodes`);
         ``None`` (default) is unlimited.
 
     Returns
@@ -1976,7 +2202,7 @@ def share_params(calculators, names=None, level: int=None):
     # Canonical Parameter per name: first occurrence (in calculator order) wins.
     canonical = {}
     for calc in calculators:
-        for var in _deep_variables(calc, level=level):
+        for var in _iter_nodes(calc, level=level, filter=Variable):
             if names is not None and var.name not in names:
                 continue
             canonical.setdefault(var.name, var)
@@ -1988,16 +2214,16 @@ def share_params(calculators, names=None, level: int=None):
 
 
 def _trace_node(node: Calculator, ctx: _CompileContext) -> None:
-    """DFS helper for build_graph: scan __dict__ for deps (all nodes were created in
+    """DFS helper for _trace_graph: scan __dict__ for deps (all nodes were created in
     ``__init__`` at construction, so dependencies are present here before ``__post_init__``)."""
     ctx.traced.add(id(node))
-    # Discover deps from public attributes set during construction (__init__/__post_init__).  _iter_nodes
+    # Discover deps from public attributes set during construction (__init__/__post_init__).  _iter_node
     # walks arbitrarily nested standard containers (list/tuple/set/dict), stopping
     # at each Node, so deps held in e.g. a dict or tuple-of-tuples are all found.
     for key, val in node.__dict__.items():
         if key.startswith('_'):
             continue
-        for dep in _iter_nodes(val):
+        for dep in _iter_node(val):
             deps = ctx.node_deps.setdefault(id(node), [])
             if id(dep) not in {id(d) for d in deps}:
                 deps.append(dep)
@@ -2006,7 +2232,34 @@ def _trace_node(node: Calculator, ctx: _CompileContext) -> None:
     ctx.node_order.append(node)
 
 
-def build_graph(root: Calculator) -> _CompileContext:
+def _variables_agree(one, other):
+    """Whether two same-named :class:`Variable` objects carry the same metadata.
+
+    Merging duplicates that agree loses nothing; merging duplicates that differ silently discards
+    one of two answers, which is the failure this guards.  Compared through ``__getstate__`` so a
+    subclass's own fields (a Parameter's prior, ref and fd) are included without listing them here.
+    The value is left out: it is what a sample sets, not what the Variable declares, and two trees
+    that met at different points still declare the same parameter.
+    """
+    if type(one) is not type(other):
+        return False
+
+    def equal(left, right):
+        if isinstance(left, dict) and isinstance(right, dict):
+            return left.keys() == right.keys() and all(equal(left[key], right[key]) for key in left)
+        if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+            return len(left) == len(right) and all(equal(*pair) for pair in zip(left, right))
+        if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+            return np.array_equal(np.asarray(left), np.asarray(right))
+        return left == right
+
+    states = [dict(variable.__getstate__()) for variable in (one, other)]
+    for state in states:
+        state.pop('value')
+    return equal(*states)
+
+
+def _trace_graph(root: Calculator) -> _CompileContext:
     """Traverse root and all reachable Calculators; return the compilation context.
 
     All nodes were created in __init__ at construction, so this only discovers node
@@ -2031,10 +2284,19 @@ def build_graph(root: Calculator) -> _CompileContext:
 
     ctx = _trace(root)
 
-    # Auto-share: if the same Variable name appears as distinct objects across nodes,
-    # unify them (first-seen wins) so callers don't need to call share_params manually.
+    # Same-named Variables appearing as distinct objects are unified -- but only when they
+    # agree.  Two calculators built independently and then combined routinely declare the same
+    # parameter (two cosmologies in one likelihood, each with its own `h`), and unifying those is
+    # the convenience that makes one sampled `h` feed both; measured across the suite, every
+    # occurrence is of that kind.
+    #
+    # When they disagree, merging would silently discard one of two answers, and which one
+    # survived was first-seen-by-traversal: a prior narrowed on an emulator's `h` came back as the
+    # template's (0.1, 10.0) instead of the (0.66, 0.69) that had been set.  So that case raises
+    # and says what differs, and `share_params` is there to make the choice explicit.
     canonical = {}
     needs_sharing = False
+    disagreeing = {}
     for node in ctx.node_order:
         for dep in ctx.node_deps.get(id(node), []):
             if not isinstance(dep, Variable):
@@ -2042,14 +2304,30 @@ def build_graph(root: Calculator) -> _CompileContext:
             if dep.name not in canonical:
                 canonical[dep.name] = dep
             elif dep is not canonical[dep.name]:
-                needs_sharing = True
+                if _variables_agree(dep, canonical[dep.name]):
+                    needs_sharing = True
+                else:
+                    disagreeing.setdefault(dep.name, []).append(type(node).__name__)
+    if disagreeing:
+        detail = '; '.join(f'{name!r} (differing copies, one of them owned by {sorted(set(owners))})'
+                           for name, owners in sorted(disagreeing.items()))
+        raise ValueError(
+            f'{type(root).__name__} graph has same-named Variables that are distinct objects and '
+            f'do not agree: {detail}. Merging them would silently drop one prior, value or '
+            f'`fixed` flag in favour of the other. Pass the same instance to both, make them '
+            f'agree, or call `share_params` to choose explicitly.')
 
     if needs_sharing:
-        for name, canon_var in canonical.items():
-            replace(root, lambda node, _c=canon_var: isinstance(node, Variable) and node.name == _c.name and node is not _c, canon_var)
+        _bind_variables(root, canonical.values())
         ctx = _trace(root)
 
     return ctx
+
+
+def _bind_variables(root, variables):
+    """Rewire every Variable in *root*'s tree to the same-named one in *variables*."""
+    for variable in variables:
+        replace(root, lambda node, _v=variable: isinstance(node, Variable) and node.name == _v.name and node is not _v, variable)
 
 
 def get_params(node_or_graph, level=None) -> VariableCollection:
@@ -2072,8 +2350,8 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
     """
     if isinstance(node_or_graph, CompiledGraph):
         return node_or_graph.params
-    ctx = build_graph(node_or_graph)
-    nodes_in_scope = set(id(n) for n in _iter_calculators(node_or_graph, maxlevel=level))
+    ctx = _trace_graph(node_or_graph)
+    nodes_in_scope = set(id(n) for n in _iter_nodes(node_or_graph, level=level))
     result = VariableCollection()
     seen_ids = set()
     for node in ctx.node_order:
@@ -2088,14 +2366,11 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
     return result
 
 
-# backward-compat alias
-params = get_params
-
 
 def build(root: Calculator, output: Callable=None, input: Callable=None) -> CompiledGraph:
     """Trace root's dependency graph and return a CompiledGraph.
 
-    Phase 1 (build_graph): discovers deps by scanning the constructed nodes' public attributes.
+    Phase 1 (_trace_graph): discovers deps by scanning the constructed nodes' public attributes.
     Phase 2: runs __post_init__ on each node in dependency order (non-node setup).
     Phase 3: runs __call__ on each node in topological order; raises if __call__ introduces a new Calculator
     not declared at construction; prunes nodes not activated during __call__.
@@ -2119,23 +2394,87 @@ def build(root: Calculator, output: Callable=None, input: Callable=None) -> Comp
     To get derived parameter values on a call, pass ``return_derived=True`` to the
     compiled graph's ``__call__``, e.g. ``val, derived = pipe(params, return_derived=True)``.
     """
-    ctx = _run_compile_phases(root)
+    ctx = _build_graph(root)
     return CompiledGraph(root, ctx, output=output, input=input)
 
 
-def _run_compile_phases(root: Calculator) -> '_CompileContext':
-    """Run build_graph + __post_init__ + __call__ for *root* and return the populated context.
+def _invalidate_owners(node, reason):
+    """Mark every graph built over *node* invalid, with *reason* and the caller's line.
 
-    Separated from :func:`compile` so that :class:`Posterior` can build the context once and
-    then create multiple :class:`CompiledGraph` instances (with different ``output`` functions)
-    without re-running ``__post_init__`` on each.  Re-running ``__post_init__`` is harmful
-    because downstream callers (e.g. template nodes) invoke ``cosmo.add_requirements`` there,
-    and repeated calls concatenate duplicate k/z grid entries that silently mis-align the
-    ``tree_flatten`` leaf shapes across graphs.
+    The graphs are not at fault, so they are not touched further: each simply refuses the next
+    time it is called, and says what invalidated it.  Reporting there rather than raising here is
+    deliberate -- almost every reconfiguration is legitimate (a constructor sizing the child it
+    was handed, an emulator being swapped in), and forbidding those to catch the rare accident
+    costs more than it saves.
+    """
+    owners = node._owners
+    if not owners:
+        return
+    import traceback
+    frames = [frame for frame in traceback.extract_stack()[:-2] if 'desilike/base.py' not in frame.filename]
+    where = f' at {os.path.basename(frames[-1].filename)}:{frames[-1].lineno}' if frames else ''
+    for graph in list(owners):
+        graph._invalid = f'{reason}{where}'
+    owners.clear()
+
+
+def _take_ownership(graph, nodes, context_id):
+    """Give *graph* ownership of *nodes*, invalidating whoever held them for another build.
+
+    Views over one context own their nodes together: `Posterior` builds several `CompiledGraph`
+    over one `_CompileContext`, and one must not invalidate the next.
+    """
+    for node in nodes:
+        owners = node._owners
+        if owners is None:
+            owners = node._owners = weakref.WeakSet()
+        for other in list(owners):
+            if other._context_id != context_id:
+                other._invalid = f'superseded by a later build over {type(node).__name__}'
+                owners.discard(other)
+        owners.add(graph)
+
+
+def _build_graph(root: Calculator) -> '_CompileContext':
+    """Run _trace_graph + ``__post_init__`` + ``__call__`` for *root*; return the populated context.
+
+    Separated from :func:`build` so that :class:`Posterior` can build the context once and
+    create several :class:`CompiledGraph` views over it: views share one build, and one claim.
+
+    A build does **not** restart the tree from its declaration.  Doing so -- re-running every
+    ``__init__`` and binding the Variables back by name, which is what would let a rebuild clear
+    the requirement registry other calculators wrote (see `_init_graph`, still used by
+    :func:`copy`) -- was implemented and reverted: rebinding by name hands the new graph the
+    *old* Parameter objects, and a derived one still holds the tracer its last traced call left
+    on it, which then escapes into the next eager call (`UnexpectedTracerError`, measured across
+    the profiler suite).  Re-init at build needs derived values to be reset, or threaded rather
+    than stored on the node, first.
     """
     outer_ctx = getattr(_compile_context, 'ctx', None)
-    ctx = build_graph(root)
+    # The flag stays set for this whole call, not just the reconstruct: a `__post_init__` may
+    # build a graph of its own over these nodes (`_get_fiducial(fiducial, cosmo)` does), and that
+    # a nested build must not restart the tree again -- it would clear the requirements the outer
+    # calculators have just registered, and the cosmology would then be asked for a quantity it
+    # was never told to compute (measured: `KeyError: ('params.A_s', ())` from every COMET
+    # theory). One build restarts the tree once, at its start.
+    init_graph = _compile_context.init_graph
+    if not init_graph:
+        inputs = get_params(root)
+        _compile_context.init_graph = True
+        _init_graph(root, bind=inputs)
+    ctx = _trace_graph(root)
     _compile_context.ctx = ctx
+    # This build claims every node it is about to configure. `__post_init__` writes setup onto
+    # the node objects, and those objects are shared with any graph built over them before: a
+    # second build over the same nodes reconfigures them under the first graph's feet. Measured:
+    # deploying an emulator beside the theory it came from left the theory's own graph answering
+    # every cosmological parameter with a zero response, silently. Claiming makes the older
+    # graph refuse to run instead (see `CompiledGraph.__call__`); `copy()` is how to keep two.
+    # Before the loop, and on the unpruned order: a `__post_init__` that raises part-way has
+    # still reconfigured the nodes before it, so the graphs built over them are already wrong.
+    # (Ownership itself is taken when the CompiledGraph is created, which is after this returns.)
+    for node in ctx.node_order:
+        _invalidate_owners(node, 'superseded by a later build')
     try:
         # Run __post_init__ (deferred non-node setup) in dependency order — node_order is
         # post-order DFS, so a node's deps run before it (e.g. a template's __post_init__
@@ -2166,11 +2505,10 @@ def _run_compile_phases(root: Calculator) -> '_CompileContext':
             ctx.node_deps[nid] = [d for d in ctx.node_deps[nid] if not isinstance(d, Calculator) or id(d) in ctx.call_activated]
     finally:
         _compile_context.ctx = outer_ctx
+        _compile_context.init_graph = init_graph
     return ctx
 
 
-#: Legacy name for :func:`build`, kept because it is what most of the codebase still calls.
-compile = build
 
 
 def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, fd_transform=False, jit=False):
@@ -2385,7 +2723,7 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
     eps_ov = _resolve_per_param(fd_eps, fd_names_sel)
 
     def _fd_spec(name, k):
-        """Return ``(offsets, coeffs, eps, prior_limits, transform, nodes)`` for the order-*k* stencil of FD param *name*."""
+        """Return the :class:`FDSpec` for the order-*k* stencil of FD param *name*."""
         param_obj = graph.params[name]
         fd = param_obj.fd
         # fd_transform=True honors param.fd.transform (derivatives then w.r.t. the
@@ -2403,7 +2741,7 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
                 lo, hi = float(fwd_map(lo)), float(fwd_map(hi))
             n_nodes = max(max_fd_order.get(name, k), k) + 1
             nodes = chebyshev_lobatto_nodes(n_nodes, limits=(lo, hi))
-            return None, None, None, None, transform, nodes
+            return FDSpec(None, None, None, None, transform, nodes)
         eps = eps_ov.get(name, fd.eps)
         if eps is None and getattr(param_obj, 'ref', None) is not None:
             eps = param_obj.ref.std()
@@ -2412,7 +2750,7 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
         acc = acc_ov.get(name, fd.acc)
         offsets, coeffs = _fd_stencil(k, acc)
         prior_limits = param_obj.prior.limits if param_obj.prior is not None else None
-        return offsets, coeffs, eps, prior_limits, transform, None
+        return FDSpec(offsets, coeffs, eps, prior_limits, transform, None)
 
     # ── shared evaluation core ─────────────────────────────────────────────────
     # _return_derived is a one-element mutable box shared between _eval and
@@ -2441,12 +2779,13 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
         fn = _eval
         for name, k in order_dict.items():
             if name in jax_set and k > 0:
+                # one `jax.jacfwd` pass per order: nesting k times gives the k-th derivative
                 for _ in range(k):
-                    fn = _jacfwd_wrap(fn, name)
+                    def fn(p_dict, _fn=fn, _name=name):
+                        return jax.jacfwd(lambda value: _fn({**p_dict, _name: value}))(p_dict[_name])
         for name, k in order_dict.items():
             if name in fd_set and k > 0:
-                offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, k)
-                fn = _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=prior_limits, transform=transform, nodes=nodes)
+                fn = _fd_wrap(fn, name, _fd_spec(name, k), k)
         return fn
 
     # ── build the derivative function chain(s) once ────────────────────────────
@@ -2512,19 +2851,16 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
 
         if total_order == 1:
             for name in fd_names_sel:
-                offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, 1)
-                fd_chains[name] = _fd_direct_wrap(_eval, name, offsets, coeffs, eps, 1, prior_limits=prior_limits, transform=transform, nodes=nodes)
+                fd_chains[name] = _fd_wrap(_eval, name, _fd_spec(name, 1), 1)
         else:
             for name in fd_names_sel:
                 if jax_names_sel:
-                    offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name, 1)
-                    cross_chains[name] = _fd_direct_wrap(jacfwd_inner, name, offsets, coeffs, eps, 1, prior_limits=prior_limits, transform=transform, nodes=nodes)
+                    cross_chains[name] = _fd_wrap(jacfwd_inner, name, _fd_spec(name, 1), 1)
             for idx_p, name_p in enumerate(fd_names_sel):
                 for name_q in fd_names_sel[idx_p:]:
                     if name_p == name_q and not graph.params[name_p].shape:
                         # Scalar diagonal: direct order-2 stencil (fewer evaluations).
-                        offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name_p, 2)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 2, prior_limits=prior_limits, transform=transform, nodes=nodes)
+                        fdfd_chains[(name_p, name_q)] = _fd_wrap(_eval, name_p, _fd_spec(name_p, 2), 2)
                     elif name_p == name_q:
                         # Array diagonal: nested order-1 stencils give the full
                         # cross-element block.  The inner stencil gets no prior
@@ -2532,21 +2868,19 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
                         # inner reach, so all nested points stay in bounds and the
                         # inner base is never shifted (a shift there would distort
                         # the outer stencil grid).
-                        offsets, coeffs, eps, prior_limits, transform, nodes = _fd_spec(name_p, 1)
-                        inner = _fd_direct_wrap(_eval, name_p, offsets, coeffs, eps, 1, prior_limits=None, transform=transform, nodes=nodes)
-                        eps_below, eps_above, _ = _fd_parse_eps(eps)
-                        margin = (len(offsets) // 2) * max(eps_below, eps_above)
+                        spec = _fd_spec(name_p, 1)
+                        inner = _fd_wrap(_eval, name_p, spec, 1, prior_limits=None)
+                        eps_below, eps_above, _ = _fd_parse_eps(spec.eps)
+                        margin = (len(spec.offsets) // 2) * max(eps_below, eps_above)
                         outer_limits = None
-                        if prior_limits is not None:
-                            lo, hi = prior_limits
+                        if spec.prior_limits is not None:
+                            lo, hi = spec.prior_limits
                             outer_limits = (lo + margin if np.isfinite(lo) else lo,
                                             hi - margin if np.isfinite(hi) else hi)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets, coeffs, eps, 1, prior_limits=outer_limits, transform=transform, nodes=nodes)
+                        fdfd_chains[(name_p, name_q)] = _fd_wrap(inner, name_p, spec, 1, prior_limits=outer_limits)
                     else:
-                        offsets_q, coeffs_q, eps_q, limits_q, transform_q, nodes_q = _fd_spec(name_q, 1)
-                        offsets_p, coeffs_p, eps_p, limits_p, transform_p, nodes_p = _fd_spec(name_p, 1)
-                        inner = _fd_direct_wrap(_eval, name_q, offsets_q, coeffs_q, eps_q, 1, prior_limits=limits_q, transform=transform_q, nodes=nodes_q)
-                        fdfd_chains[(name_p, name_q)] = _fd_direct_wrap(inner, name_p, offsets_p, coeffs_p, eps_p, 1, prior_limits=limits_p, transform=transform_p, nodes=nodes_p)
+                        inner = _fd_wrap(_eval, name_q, _fd_spec(name_q, 1), 1)
+                        fdfd_chains[(name_p, name_q)] = _fd_wrap(inner, name_p, _fd_spec(name_p, 1), 1)
 
         def _run(p0):
             entries = {}  # ordered name tuple (n1,) or (n1, n2) -> derivative entry, axes in tuple order
@@ -2588,11 +2922,10 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
     # ── returned callable ──────────────────────────────────────────────────────
     def _derivative(params=None, return_derived=False, **kwargs):
         # Use current param values as defaults (supports in-place mutation after
-        # compile).  After the call, restore only *input* param values so that
+        # build).  After the call, restore only *input* param values so that
         # FD mutations from pure_callback do not corrupt subsequent default calls.
         all_saved = {p.name: p._value for p in graph.params}
-        input_saved = {n: v for n, v in all_saved.items()
-                       if not graph.params[n].derived}
+
         p0 = dict(all_saved)
         # Same hole as the graph's own __call__: an unknown name would be added to p0 and never
         # read again, leaving the parameter at its default.
@@ -2606,9 +2939,12 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
         try:
             return _run(p0)
         finally:
+            # Every param, not just the inputs, and whether or not this was traced: a stencil
+            # steps the parameter it differentiates (and a traced one leaves tracers), so a
+            # derivative has to leave the point it was asked about. Without this a bare
+            # `graph()` afterwards would evaluate at the last stencil node instead of at p0.
             for p in graph.params:
-                if p.name in input_saved:
-                    p._value = input_saved[p.name]
+                p._value = all_saved[p.name]
 
     return _derivative
 
@@ -2696,7 +3032,7 @@ def pmap(fn, backend='mpi_and_jax', mpicomm=None):
         out = eval_batch(jnp.arange(1000.))   # out['sq'].shape == (1000,), out['sum'].shape == (1000,)
 
         # Vectorise a compiled likelihood over a batch of parameter dicts:
-        pipe = compile(my_likelihood)
+        pipe = build(my_likelihood)
         logpdf = pmap(pipe)({'omega_m': jnp.linspace(0.2, 0.4, 1000)})
     """
     _VALID_BACKENDS = ('jax', 'mpi', 'mpi_and_jax')

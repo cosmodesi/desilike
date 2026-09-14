@@ -5,6 +5,7 @@ import os
 import numpy as np
 import jax.numpy as jnp
 
+from desilike.parameter import Variable
 from .base import BaseSNLikelihood
 
 
@@ -26,7 +27,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
         # Add statistical error (diagonal) on top of the systematics covariance.
         self.covariance = self.covariance + np.diag(self.light_curve_params['dmb'] ** 2)
         flatdata = self.light_curve_params['mb'] - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + self.light_curve_params['zcmb']))
-        self.flatdata = jnp.asarray(flatdata)
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(flatdata))
         self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
 
     def __post_init__(self, *args, **kwargs):

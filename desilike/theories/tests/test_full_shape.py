@@ -43,9 +43,9 @@ def _compile(theory):
     catches tracer-incompatible code (e.g. stray ``np.*`` calls on traced
     values) that only surfaces under tracing.
     """
-    from desilike.base import compile, params
-    pipe = compile(theory)
-    defaults = {par.name: par._value for par in params(theory)}
+    from desilike.base import build, get_params
+    pipe = build(theory)
+    defaults = {par.name: par._value for par in get_params(theory)}
     pipe_jit = {}  # lazy cache, built on first _jit=True call
 
     def run(_jit=False, **overrides):
@@ -65,9 +65,9 @@ def _fd_box(calculator, width=3.):
     the emulated region comparable.  NOT the `ref` box: these parameters have none, and the
     prior is far too wide to evaluate.
     """
-    from desilike.base import compile
+    from desilike.base import build
     limits = {}
-    for param in compile(calculator).params:
+    for param in build(calculator).params:
         # VARIED only.  A fixed parameter does not move, so emulating over it buys nothing and
         # costs an axis -- 11 axes instead of 5 for a FOLPS pt -- and it is how the box came to
         # ask for a negative neutrino mass: m_ncdm is fixed, with a leftover fd step.
@@ -91,7 +91,7 @@ def _fd_box(calculator, width=3.):
 
 def _emulate(theory, inner_pt=None):
     """Emulate ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
-    from desilike import compile
+    from desilike import build
     from desilike.base import replace
     from desilike.emulators import Emulator, Space
     if inner_pt is None:
@@ -99,7 +99,7 @@ def _emulate(theory, inner_pt=None):
     emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
     emu.train(budget=1, verbose=False)
     replace(theory, inner_pt, emu.to_calculator())
-    return compile(theory)
+    return build(theory)
 
 
 def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
@@ -187,7 +187,8 @@ class TestKaiserPoles:
 
     def test_emulated(self):
         """KaiserPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
+        from desilike.base import copy
         from desilike.theories.galaxy_clustering import (
             KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, KaiserTracerCorrelation2Poles,
             BAOSpectrum2Template)
@@ -196,14 +197,20 @@ class TestKaiserPoles:
         ells = (0, 2)
         template = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')
 
-        pipe_exact = compile(KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template))
+        # `copy(template)` for the emulated arm: two graphs are kept alive here, the exact one and
+        # the emulated one, and a theory's constructor configures the template it is handed
+        # (`template.update(k=...)`), which would leave the exact graph reading a template that
+        # has been reconfigured under it. The copy shares the Parameters by name, so both arms
+        # are the same function of the same values.
+        pipe_exact = build(KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template))
         theory_emu = KaiserTracerSpectrum2Poles(k=k, ells=ells,
-                                                pt=KaiserPTSpectrum2Poles(k=k, ells=ells, template=template))
+                                                pt=KaiserPTSpectrum2Poles(k=k, ells=ells, template=copy(template)))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(KaiserTracerCorrelation2Poles(s=s, ells=ells, template=template))
-        theory_emu = KaiserTracerCorrelation2Poles(s=s, ells=ells, template=template)
+        template_s = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')
+        pipe_exact = build(KaiserTracerCorrelation2Poles(s=s, ells=ells, template=template_s))
+        theory_emu = KaiserTracerCorrelation2Poles(s=s, ells=ells, template=copy(template_s))
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
 
@@ -217,7 +224,7 @@ class TestTNSPoles:
         from desilike.theories.galaxy_clustering import (
             TNSPTSpectrum2Poles, BAOSpectrum2Template, ShapeFitSpectrum2Template,
         )
-        from desilike.base import params
+        from desilike.base import get_params
         k = np.linspace(0.02, 0.3, 60)
         for template in [BAOSpectrum2Template(), ShapeFitSpectrum2Template(), _direct_template()]:
             theory = TNSPTSpectrum2Poles(k=k, template=template)
@@ -226,10 +233,10 @@ class TestTNSPoles:
             _check(result, 'TNSPTSpectrum2Poles')
             assert result.shape == (len(theory.ells), len(k))
 
-        # Parameter sensitivity on the (cheap default) template, reusing one compile.
+        # Parameter sensitivity on the (cheap default) template, reusing one build.
         theory = TNSPTSpectrum2Poles(k=k)
         run = _compile(theory)
-        param = list(params(theory).select(fixed=False))[0]
+        param = list(get_params(theory).select(fixed=False))[0]
         lo, hi = (float(v) for v in np.asarray(param.ref.sample(jax.random.key(0), shape=2)))
         run(**{param.name: lo})
         r0 = np.asarray(theory.table['pk_dd'])
@@ -262,19 +269,19 @@ class TestTNSPoles:
 
     def test_emulated(self):
         """TNSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering import (
             TNSPTSpectrum2Poles, TNSTracerSpectrum2Poles, TNSTracerCorrelation2Poles,
         )
         k = np.linspace(0.02, 0.3, 20)
         ells = (0, 2)
 
-        pipe_exact = compile(TNSTracerSpectrum2Poles(k=k, ells=ells))
+        pipe_exact = build(TNSTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = TNSTracerSpectrum2Poles(k=k, ells=ells, pt=TNSPTSpectrum2Poles(k=k, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(TNSTracerCorrelation2Poles(s=s, ells=ells))
+        pipe_exact = build(TNSTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = TNSTracerCorrelation2Poles(s=s, ells=ells)
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
@@ -341,7 +348,7 @@ class TestLPTVelocileptors:
 
     def test_emulated(self):
         """LPTVelocileptorsPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering import (
             LPTVelocileptorsPTSpectrum2Poles,
             LPTVelocileptorsTracerSpectrum2Poles, LPTVelocileptorsTracerCorrelation2Poles,
@@ -349,13 +356,13 @@ class TestLPTVelocileptors:
         k = np.linspace(0.02, 0.3, 20)
         ells = (0, 2)
 
-        pipe_exact = compile(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
+        pipe_exact = build(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = LPTVelocileptorsTracerSpectrum2Poles(
             k=k, ells=ells, pt=LPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
+        pipe_exact = build(LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
@@ -407,13 +414,13 @@ class TestREPTVelocileptors:
         jax.jit(pipe) re-runs REPT on every call regardless of which parameter changed
         -- this test therefore exercises the eager (non-jit) path specifically.
         """
-        from desilike.base import compile, params
+        from desilike.base import build, get_params
         from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerSpectrum2Poles, FixedSpectrum2Template
 
         k = np.linspace(0.02, 0.3, 60)
         theory = REPTVelocileptorsTracerSpectrum2Poles(k=k, template=FixedSpectrum2Template())
-        pipe = compile(theory)
-        defaults = {p.name: p._value for p in params(theory)}
+        pipe = build(theory)
+        defaults = {p.name: p._value for p in get_params(theory)}
 
         base = np.asarray(pipe(defaults))  # first call: also runs REPT
         _check(base, 'REPTVelocileptorsTracer (FixedSpectrum2Template, eager, first call)')
@@ -447,7 +454,7 @@ class TestREPTVelocileptors:
 
     def test_emulated(self):
         """REPTVelocileptorsPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering import (
             REPTVelocileptorsPTSpectrum2Poles,
             REPTVelocileptorsTracerSpectrum2Poles, REPTVelocileptorsTracerCorrelation2Poles,
@@ -455,13 +462,13 @@ class TestREPTVelocileptors:
         k = np.linspace(0.02, 0.3, 20)
         ells = (0, 2)
 
-        pipe_exact = compile(REPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
+        pipe_exact = build(REPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = REPTVelocileptorsTracerSpectrum2Poles(
             k=k, ells=ells, pt=REPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
+        pipe_exact = build(REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
@@ -473,6 +480,13 @@ class TestPyBird:
     @pytest.fixture(autouse=True)
     def skip_if_missing(self):
         pytest.importorskip('pybird')
+        # The installed pybird imports `numpy.trapz`, removed in numpy 2 (it is `trapezoid`
+        # now), so every one of these dies in pybird's own import.  Nothing on the desilike
+        # side can fix that; skip until pybird is rebuilt against numpy 2.
+        try:
+            import pybird.module  # noqa: F401
+        except ImportError as exc:
+            pytest.skip(f'installed pybird is not numpy 2 compatible: {exc}')
 
     def test_matter_spectrum(self):
         """PyBirdPTSpectrum2Poles: runs without error."""
@@ -512,7 +526,7 @@ class TestPyBird:
 
     def test_emulated(self):
         """PyBirdPTSpectrum2Poles / PyBirdPTCorrelation2Poles emulated in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering import (
             PyBirdPTSpectrum2Poles, PyBirdTracerSpectrum2Poles,
             PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
@@ -520,12 +534,12 @@ class TestPyBird:
         k = np.linspace(0.02, 0.3, 20)
         ells = (0, 2)
 
-        pipe_exact = compile(PyBirdTracerSpectrum2Poles(k=k, ells=ells))
+        pipe_exact = build(PyBirdTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = PyBirdTracerSpectrum2Poles(k=k, ells=ells, pt=PyBirdPTSpectrum2Poles(k=k, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(PyBirdTracerCorrelation2Poles(s=s, ells=ells))
+        pipe_exact = build(PyBirdTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = PyBirdTracerCorrelation2Poles(s=s, ells=ells, pt=PyBirdPTCorrelation2Poles(s=s, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
@@ -665,7 +679,7 @@ class TestFOLPS:
 
     def test_emulated(self):
         """FOLPSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering import (
             FOLPSPTSpectrum2Poles,
             FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
@@ -673,12 +687,12 @@ class TestFOLPS:
         k = np.linspace(0.02, 0.3, 20)
         ells = (0, 2)
 
-        pipe_exact = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells))
+        pipe_exact = build(FOLPSTracerSpectrum2Poles(k=k, ells=ells))
         theory_emu = FOLPSTracerSpectrum2Poles(k=k, ells=ells, pt=FOLPSPTSpectrum2Poles(k=k, ells=ells))
         _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
-        pipe_exact = compile(FOLPSTracerCorrelation2Poles(s=s, ells=ells))
+        pipe_exact = build(FOLPSTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = FOLPSTracerCorrelation2Poles(s=s, ells=ells)
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
 
@@ -825,7 +839,7 @@ class TestCOMET:
     def test_out_of_training_range(self):
         """Parameters outside comet's training ranges yield NaN poles (both the PT-split and
         pt=False direct paths) instead of narrowed priors: the priors are left untouched, and
-        a compile-time warning flags the effective prior truncation."""
+        a build-time warning flags the effective prior truncation."""
         import warnings as _warnings
         from desilike.base import get_params
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
@@ -1010,7 +1024,7 @@ class TestCOMET:
                                    err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
 
         # The physical bases expose FOLPSD's names, so the two theories share them.
-        from desilike.base import params as get_params
+        from desilike.base import get_params as get_params
         cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
                        'Omega_k', 'w0_fld', 'wa_fld'}
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
@@ -1324,7 +1338,7 @@ class TestGeoFPTAX:
     
     def test_emulated(self):
         """GeoFPTAXPTSpectrum2Poles emulated as pt= in bispectrum."""
-        from desilike import compile
+        from desilike import build
         from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template, ShapeFitSpectrum2Template
         try:
             from desilike.theories.galaxy_clustering.full_shape import (
@@ -1341,7 +1355,7 @@ class TestGeoFPTAX:
         ells = ((0, 0, 0), (2, 0, 2))
         
         # 1. Exact pipeline (using the default internal 1-loop computation)
-        pipe_exact = compile(GeoFPTAXTracerSpectrum3Poles(k=k_2d, ells=ells))
+        pipe_exact = build(GeoFPTAXTracerSpectrum3Poles(k=k_2d, ells=ells))
         
         # 2. Emulated pipeline: replace the internal PT with an emulator
         # Note: This requires GeoFPTAXTracerSpectrum3Poles to accept a `pt` argument,
@@ -1362,13 +1376,13 @@ class TestGeoFPTAX:
         """GeoFPTAXPTSpectrum2Poles emulated directly (bypassing the bispectrum tracer).
         This avoids the large amplitudes and non-linear bias expansion of the bispectrum,
         which can easily cause a 1st-order Taylor emulator to exceed tight tolerances."""
-        from desilike import compile
+        from desilike import build
         from desilike.emulators import Emulator, Space
         from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXPTSpectrum2Poles
         
         k = np.linspace(0.02, 0.2, 20)
         theory = GeoFPTAXPTSpectrum2Poles(k=k)
-        pipe_exact = compile(theory)
+        pipe_exact = build(theory)
         
         # Emulate the PT directly. Ported from the legacy `TaylorEmulator`, which this branch's
         # emulator refactor replaced: the box now comes from a `Space` rather than from an
@@ -1376,7 +1390,7 @@ class TestGeoFPTAX:
         # steps the old expansion used, so this stays the test it was.
         emu = Emulator(theory, Space(bounds=_fd_box(theory)))
         emu.train(budget=1, verbose=False)
-        pipe_emu = compile(emu.to_calculator())
+        pipe_emu = build(emu.to_calculator())
         
         # 1. Check center (exact match)
         center = {p.name: p.value for p in pipe_exact.params}
@@ -1400,7 +1414,7 @@ class TestGeoFPTAX:
         
 def test_jit():
 
-    from desilike import compile, get_params
+    from desilike import build, get_params
     from desilike.theories import CosmoprimoCosmology
     from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum2Poles
     k = np.linspace(0.02, 0.3, 20)
@@ -1408,7 +1422,7 @@ def test_jit():
     for engine in ['camb', 'eisenstein_hu']:
         cosmo = CosmoprimoCosmology(engine=engine)
         template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
-        pipe = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
+        pipe = build(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
 
         pipe_jit = jax.jit(pipe)
         for i in range(3):
@@ -1421,7 +1435,7 @@ def test_jit():
 
 def test_compile_input():
     """
-    Demonstrates ``compile(root, input=fn)``: feed pre-computed cosmological results
+    Demonstrates ``build(root, input=fn)``: feed pre-computed cosmological results
     from an external pipeline into a theory pipeline via the ``input`` callable.
 
     Design
@@ -1441,7 +1455,7 @@ def test_compile_input():
         cosmo_leaves = pipe_ext(cosmo_params)          # run external cosmo
         poles = pipe(cosmo_leaves, bias_params)        # inject + theory params
     """
-    from desilike.base import compile, get_params
+    from desilike.base import build, get_params
     from desilike.theories import PrimordialCosmology, CosmoprimoCosmology
     from desilike.theories.galaxy_clustering import DirectSpectrum2Template, KaiserTracerSpectrum2Poles
 
@@ -1458,33 +1472,39 @@ def test_compile_input():
     template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
     theory = KaiserTracerSpectrum2Poles(k=k, template=template)
 
-    # Register on cosmo_ext the requirements that the template registered on cosmo.
-    # Conversion: cosmo._requirements format  →  add_requirements dict format.
-    ext_reqs = {}
-    for (method_key, static_items), spec in cosmo._requirements.items():
-        if method_key not in ext_reqs:
-            ext_reqs[method_key] = []
-        for z_val in spec['z']:
-            kw = dict(static_items)
-            kw['z'] = float(z_val)
-            if spec['k'] is not None:
-                kw['k'] = spec['k']
-            ext_reqs[method_key].append(kw)
-    cosmo_ext.add_requirements(ext_reqs)
-
-    # Compile cosmo_ext: output is the flat list of JAX leaves
-    # [param_marker, results_0, results_1, ...].
-    pipe_ext = compile(cosmo_ext, output=lambda: cosmo_ext.tree_flatten()[0])
-    # Capture aux (engine + ordered_specs) after compile so __post_init__ has run.
-    _, cosmo_ext_aux = cosmo_ext.tree_flatten()
-
     # input callable: pure side-effect — injects pre-computed cosmo results into
     # the proxy.  The parameter dict is passed separately as the second arg to pipe.
+    # `cosmo_ext_aux` is bound below, before this is ever called.
     def input_fn(cosmo_leaves):
         proxy = PrimordialCosmology.tree_unflatten(cosmo_ext_aux, cosmo_leaves)
         cosmo._results = proxy._results
 
-    pipe = compile(theory, input=input_fn)
+    # Compile the theory FIRST: the template registers what it needs from the cosmology in its
+    # `__post_init__`, which runs at build, so before this `cosmo._requirements` holds nothing
+    # of what the theory reads -- and cosmo_ext would then be asked for none of it, leaving the
+    # proxy to fill the spectra with its zero placeholders and the poles to come out NaN.
+    pipe = build(theory, input=input_fn)
+
+    # Register on cosmo_ext the requirements that the template registered on cosmo.
+    # Conversion: cosmo._requirements format  →  add_requirements dict format.  A spec carries a
+    # coordinate only when it was registered with one (`params.*` has neither z nor k).
+    ext_reqs = {}
+    for (method_key, static_items), spec in cosmo._requirements.items():
+        entries = ext_reqs.setdefault(method_key, [])
+        base = dict(static_items)
+        if 'k' in spec:
+            base['k'] = spec['k']
+        if 'z' in spec:
+            entries.extend({**base, 'z': float(z_val)} for z_val in spec['z'])
+        else:
+            entries.append(base)
+    cosmo_ext.update(requirements=ext_reqs)
+
+    # Compile cosmo_ext: output is the flat list of JAX leaves
+    # [param_marker, results_0, results_1, ...].
+    pipe_ext = build(cosmo_ext, output=lambda: cosmo_ext.tree_flatten()[0])
+    # Capture aux (engine + ordered_specs) after build so __post_init__ has run.
+    _, cosmo_ext_aux = cosmo_ext.tree_flatten()
 
     # Separate the compiled params into cosmo vs bias sets.
     ext_param_names = {p.name for p in pipe_ext.params}
@@ -1508,7 +1528,7 @@ def test_compile_input():
     cosmo_full = CosmoprimoCosmology(engine='eisenstein_hu')
     template_full = DirectSpectrum2Template(cosmo=cosmo_full, z=1.)
     theory_full = KaiserTracerSpectrum2Poles(k=k, template=template_full)
-    pipe_full = compile(theory_full)
+    pipe_full = build(theory_full)
     ref = np.asarray(pipe_full(all_defaults))
     np.testing.assert_allclose(np.asarray(poles), ref, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(poles_jit), ref, rtol=1e-5)

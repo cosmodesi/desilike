@@ -4,7 +4,7 @@ from jax import numpy as jnp
 
 import desilike.profilers as profilers
 from desilike.samples import Profiles
-from desilike.base import compile, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
+from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter
 
 
@@ -49,7 +49,7 @@ def likelihood():
                   ref=dict(dist='norm', loc=MU_X, scale=SX))
     y = Parameter('y', value=MU_Y, prior=dict(dist='uniform', limits=[-1, 1]),
                   ref=dict(dist='norm', loc=MU_Y, scale=SY))
-    return compile(Posterior(Likelihood(x, y), Prior(x, y)))
+    return build(Posterior(Likelihood(x, y), Prior(x, y)))
 
 
 def make_profiler(key, likelihood, rng=42, **kwargs):
@@ -84,7 +84,7 @@ def make_vec_likelihood():
             self.flattheory = jnp.concatenate([self.v, jnp.array([self.z])])
             return super().__call__()
 
-    return compile(Posterior(VecGaussian(v_param, z_param), Prior(z_param)))
+    return build(Posterior(VecGaussian(v_param, z_param), Prior(z_param)))
 
 
 @pytest.fixture
@@ -126,7 +126,7 @@ def test_solved(likelihood, key):
     x = Parameter('x', value=MU_X, prior=dict(dist='uniform', limits=[-1, 1]),
                   ref=dict(dist='norm', loc=MU_X, scale=SX))
     y = Parameter('y', value=MU_Y, derived='best')
-    posterior = compile(Posterior(Likelihood(x, y), Prior(x, y)))
+    posterior = build(Posterior(Likelihood(x, y), Prior(x, y)))
     p = make_profiler(key, posterior)
     profiles = p.maximize(niterations=3)
     assert abs(float(profiles.best['x'][profiles.argmax]) - MU_X) < 0.01
@@ -438,6 +438,6 @@ class TestIO:
 
 def test_profiler_does_not_recompile_a_compiled_graph(likelihood):
     """A CompiledGraph is stored as-is.  Recompiling would re-run the whole pipeline just to
-    construct the profiler, and `compile` is not free -- it executes every node."""
+    construct the profiler, and `build` is not free -- it executes every node."""
     profiler = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
     assert profiler.likelihood is likelihood

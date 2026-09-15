@@ -1544,6 +1544,61 @@ def test_sum_likelihood():
     assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
+@pytest.mark.parametrize('n_non_gaussian', [1, 2, 3])
+def test_marginalization_with_non_gaussian_components(n_non_gaussian):
+    """A non-Gaussian arm must contribute itself, not the whole likelihood.
+
+    Two conditions together, and only together: a solved parameter, which is what routes a fit
+    through ``Posterior._marg_loglik`` at all, and an arm that is not a ``GaussianLikelihood``.
+    ``_marg_loglik`` builds one pipe per non-Gaussian component as a view over the shared context,
+    and a view spans that context in its RETURN VALUE too -- so without an explicit ``output`` each
+    such pipe returned the whole likelihood and the total came out
+    ``n_non_gaussian * logL + (the Gaussian parts, correctly)``.
+
+    No test of Gaussian components alone can see it, which is how it survived: it was found on a
+    real fit, where a full shape (six solved bias parameters) joined to CMB-SPA (three non-Gaussian
+    arms -- plik-lite, ACT DR6, SPT-3G) made every posterior width sqrt(3) too small. Parametrized
+    over the count because the error scales with it, so a single non-Gaussian arm would let a
+    two-fold version through.
+    """
+    sigma_d, sigma_alpha, sigma_B = 0.1, 2.0, 1.5
+    A_val, alpha_0 = 1.0, 0.0
+    B_vals = [0.3 * (i + 1) for i in range(n_non_gaussian)]
+
+    class _Quadratic(Likelihood):
+        """Not a GaussianLikelihood: no flatdata and no precision, just a log-density in B."""
+
+        def __init__(self, B, scale):
+            self.B = B
+            self._scale = float(scale)
+
+        def __call__(self):
+            self.logpdf = -0.5 * (self.B.value / self._scale) ** 2
+            return self.logpdf
+
+    def make(n):
+        """A fresh tree per build: a build reconfigures the nodes it is given."""
+        A = Parameter('A', value=A_val)
+        alpha = Parameter('alpha', value=alpha_0, derived='marg',
+                          prior=dict(dist='norm', loc=0., scale=sigma_alpha))
+        arms = [_LinearTheory(A=A, alpha=alpha, data=DATA,
+                              covariance=np.eye(len(K)) * sigma_d ** 2)]
+        arms += [_Quadratic(B=Parameter(f'B{i}', value=B_vals[i]), scale=sigma_B)
+                 for i in range(n)]
+        likelihood = arms[0] if len(arms) == 1 else SumLikelihood(*arms)
+        return build(Posterior(likelihood, Prior()))
+
+    params = {'A': A_val, 'alpha': alpha_0}
+    marginalised = float(make(0)(params))
+    got = float(make(n_non_gaussian)({**params, **{f'B{i}': B_vals[i] for i in range(n_non_gaussian)}}))
+
+    # Each non-Gaussian arm contributes its own log-density, once.
+    expected = marginalised + sum(-0.5 * (B / sigma_B) ** 2 for B in B_vals)
+    assert abs(got - expected) < 1e-6, (
+        f'{n_non_gaussian} non-Gaussian component(s): got {got:.8f}, expected {expected:.8f}; '
+        f'ratio to the marginalised Gaussian part alone {got / marginalised:.4f}')
+
+
 # ── derived params ────────────────────────────────────────────────────────────
 
 def test_derived_param_export():

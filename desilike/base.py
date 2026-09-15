@@ -692,7 +692,16 @@ class Posterior(Calculator):
                 # A view over the one context rather than a fresh build, which would reconfigure
                 # `ng`'s nodes under `self._likelihood`. A view's `.params` span the whole context,
                 # so the dependence check reads `ng`'s own transitive parameters instead.
-                ng_pipe = CompiledGraph(ng, _likelihood_ctx)
+                #
+                # `output` is what makes it `ng`'s value and not the context root's. A view spans
+                # the context in its RETURN VALUE too, so without this each non-Gaussian component
+                # contributed the whole likelihood: with n of them `_marg_loglik` returned
+                # n * logL + (the Gaussian parts, correctly), i.e. exactly n+1 times the CMB
+                # information. Measured on LRG1 P+B x CMB-SPA, whose three non-Gaussian arms
+                # (plik-lite, ACT DR6, SPT-3G) made every posterior width sqrt(3) too small.
+                # It bites only when solved params put a fit on this path AND an arm is
+                # non-Gaussian, which is why full-shape-only and CMB-only fits were both right.
+                ng_pipe = CompiledGraph(ng, _likelihood_ctx, output=lambda ng=ng: ng.logpdf)
                 bad = alpha_names_set & _transitive_param_names(ng, self._likelihood)
                 if bad:
                     raise ValueError(

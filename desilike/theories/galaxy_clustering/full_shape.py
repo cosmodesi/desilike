@@ -21,6 +21,7 @@ import os
 import warnings
 
 import itertools
+from contextlib import contextmanager
 
 import numpy as np
 from scipy import constants
@@ -1353,6 +1354,24 @@ class REPTVelocileptorsTracerCorrelation2Poles(Calculator):
         return obj
 
 
+@contextmanager
+def _pybird_jax_contraction():
+    """Temporarily use JAX for Bird's bias contraction, keeping the PT backend unchanged."""
+    import pybird.bird as bird_module
+
+    # Old PyBird uses np.*; new PyBird imports array/einsum/sum directly.
+    # These module bindings are process-global: do not run concurrent threaded contractions.
+    replacements = dict(np=jnp, array=jnp.array, einsum=jnp.einsum, sum=jnp.sum)
+    original = {name: getattr(bird_module, name) for name in replacements if hasattr(bird_module, name)}
+    try:
+        for name in original:
+            setattr(bird_module, name, replacements[name])
+        yield
+    finally:
+        for name, value in original.items():
+            setattr(bird_module, name, value)
+
+
 class PyBirdPTSpectrum2Poles(Calculator):
     r"""
     PyBird matter power spectrum multipoles (non-JAX).
@@ -1366,7 +1385,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
     template : DirectSpectrum2Template, default=None
     ells : tuple of int, default=(0, 2, 4)
     km, kr : float, default=0.7, 0.25
-    accboost, fftaccboost : int, default=1
+    accboost : int, default=1
+    fftaccboost : int, default=2
     fftbias : float, default=-1.6
     with_nnlo_counterterm : bool, default=False
     with_stoch : bool, default=True
@@ -1382,7 +1402,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
         installer.pip('git+https://github.com/pierrexyz/pybird')
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                 accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                 accboost=1, fftaccboost=2, fftbias=-1.6, with_nnlo_counterterm=False,
                  with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if k is None:
@@ -1396,7 +1416,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
             self.template.update(with_now='peakaverage')
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                      accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                      accboost=1, fftaccboost=2, fftbias=-1.6, with_nnlo_counterterm=False,
                       with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
         # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
         self._with_stoch = bool(with_stoch)
@@ -1413,14 +1433,15 @@ class PyBirdPTSpectrum2Poles(Calculator):
         if self.k[0] * 0.8 < 1e-3:
             import warnings
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
-        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3,
+        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.25,
                           km=min(self.km), kr=min(self.kr), nd=1e-4, eft_basis=eft,
                           halohalo=True, with_cf=False, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        self._nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
-        self._resum = Resum(co=self._co)
+        self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
+        # NOTE: theory prediction is sensitive to the chosen value of LambdaIR, better to check with the author
+        self._resum = Resum(LambdaIR=0.1 if (with_resum == 'full') else 1.0, NFFT=192, co=self._co)
         self._nnlo = None
         if with_nnlo_counterterm:
             from pybird.nnlo import NNLO_counterterm
@@ -1652,11 +1673,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if isinstance(self.b1, tuple):  # cross-spectrum of two tracers
             self.poles = self._fullps_cross(bird, self._build_params(0), self._build_params(1))
         else:
-            import pybird.bird as bird_module
-            bird_module.np = jnp
             self._pt = bird
-            bird.setreducePslb(self._build_params(), what='full')
-            bird_module.np = np
+            with _pybird_jax_contraction():
+                bird.setreducePslb(self._build_params(), what='full')
             self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
         return self.poles
 
@@ -1853,12 +1872,10 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     _build_params = PyBirdTracerSpectrum2Poles._build_params
 
     def __call__(self):
-        import pybird.bird as bird_module
-        bird_module.np = jnp
         self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
         self._pt.co.nd = self._nbar
-        self._pt.setreduceCflb(self._build_params(), what='full')
-        bird_module.np = np
+        with _pybird_jax_contraction():
+            self._pt.setreduceCflb(self._build_params(), what='full')
         self.poles = self._pt.fullCf
         return self.poles
 

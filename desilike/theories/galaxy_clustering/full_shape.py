@@ -3256,6 +3256,18 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                     out[name] = interpolators[name]
         return out
 
+    def _nan_tables(self, exc):
+        """Tables of NaN with the shapes of the last successful call: the pt's answer to a model
+        it cannot compute, which the likelihood turns into logL = -inf (see :meth:`__call__`)."""
+        shapes = self._fkpt_table_shapes
+        warnings.warn(f'fkptjax pt refused this model ({exc}); returning NaN tables so the point '
+                      f'is rejected', RuntimeWarning)
+        nan = lambda shape: np.full(shape, np.nan)
+        table_w = tuple(nan(shape) for shape in shapes[0])
+        table_now = tuple(nan(shape) for shape in shapes[1])
+        kernel_constants = tuple(nan(shape) for shape in shapes[2]) if shapes[2] is not None else None
+        return table_w, table_now, kernel_constants
+
     def __call__(self):
         from fkptjax.pipelines import make_table_state
 
@@ -3267,29 +3279,46 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # are the concrete ones inside this callback
         Om = getattr(self, 'cosmo', self.template.cosmo)['Omega_m']
         xnow = -3.912023
-        mg_kwargs = self._mg_kwargs()
-        if self._is_binning:
-            mg_kwargs.update(self._binning_kwargs)
+        # Everything the tables need from the cosmology, and the tables themselves, can fail at
+        # a model the sampler proposes but the prior vetoes: the traced posterior evaluates the
+        # likelihood regardless (desilike's Posterior short-circuits on the prior only in eager
+        # mode), and an exception inside this pure_callback takes the whole MPI run down. So two
+        # failure modes become NaN tables -- desilike maps a NaN logL to -inf and the point is
+        # rejected: the EFT functions h1/h3/h5 not finite on the eta grid (`_mg_kwargs` raises
+        # ValueError: the engine-level emulator outside its region, 2026-09-12), and fkptjax's
+        # ODE solver refusing the growth history (RuntimeError, below). Only after a successful
+        # first call, which fixes the table shapes; any other exception still surfaces.
+        refused = None
+        try:
+            mg_kwargs = self._mg_kwargs()
+            if self._is_binning:
+                mg_kwargs.update(self._binning_kwargs)
 
-        neutrino_correction = self._get_neutrino_correction(
-            self.template.cosmo,
-            xnow=xnow,
-        )
-        if self._growth_source == 'template':
-            # self.template.fk / .f0 are set by the template's own __call__ as
-            # sqrt(P_theta/P_delta) on self.template.k and at k0 = 1e-3 respectively.
-            # Passing f0 explicitly matters: fkptjax would otherwise re-estimate it by
-            # averaging f(k) below f0_kmax, a different definition that would drift
-            # from the template's value.
-            for _attr in ('fk', 'f0'):
-                if getattr(self.template, _attr, None) is None:
-                    raise ValueError(
-                        f"growth_source='template' needs template.{_attr}, which "
-                        f"{type(self.template).__name__} did not set")
-            mg_kwargs['fk'] = self.template.fk
-            mg_kwargs['f0'] = self.template.f0
+            neutrino_correction = self._get_neutrino_correction(
+                self.template.cosmo,
+                xnow=xnow,
+            )
+            if self._growth_source == 'template':
+                # self.template.fk / .f0 are set by the template's own __call__ as
+                # sqrt(P_theta/P_delta) on self.template.k and at k0 = 1e-3 respectively.
+                # Passing f0 explicitly matters: fkptjax would otherwise re-estimate it by
+                # averaging f(k) below f0_kmax, a different definition that would drift
+                # from the template's value.
+                for _attr in ('fk', 'f0'):
+                    if getattr(self.template, _attr, None) is None:
+                        raise ValueError(
+                            f"growth_source='template' needs template.{_attr}, which "
+                            f"{type(self.template).__name__} did not set")
+                mg_kwargs['fk'] = self.template.fk
+                mg_kwargs['f0'] = self.template.f0
 
-        if self._use_binning_jax:
+        except ValueError as exc:
+            if getattr(self, '_fkpt_table_shapes', None) is None:
+                raise
+            refused = exc
+        if refused is not None:
+            table_w, table_now, kernel_constants = self._nan_tables(refused)
+        elif self._use_binning_jax:
             from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
             if self._growth_source == 'template':
                 # Fail loudly on an fkptjax that predates the external-f(k) feature:
@@ -3325,18 +3354,43 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                         f"growth_source='template' needs an fkptjax whose "
                         f"Kfuncs_to_tables accepts {_missing}; the installed one "
                         f"does not. Update fkptjax or use growth_source='ode'.")
-            table_w, table_now, kernel_constants = Kfuncs_to_tables(
-                k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
-                z=float(self.template.z), Om=Om,
-                kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
-                nquadSteps=300, NQ=10, NR=10,
-                xnow=xnow, ode_method='RKQS', f0_kmax=1e-3,
-                beyond_eds=self._beyond_eds, model=self._model, mg_variant=self._mg_variant,
-                use_numba=self._use_numba,
-                neutrino_correction=neutrino_correction,
-                return_kernel_constants=True,
-                **mg_kwargs,
-            )
+            try:
+                # A non-finite linear P(k) or growth template (the Boltzmann engine failed for this
+                # point but returned NaN instead of raising -- seen with the class engine on the
+                # plain-LCDM control chain, 2026-09-13) must not reach fkptjax's eager builder: its
+                # adaptive Runge-Kutta cannot terminate on a NaN abscissa and grinds through all
+                # maxnsteps NaN steps (~1.7 h per point), stalling the whole MPI chain. Raising
+                # RuntimeError here routes the point through the same NaN-table rejection as a
+                # 'stepsize underflow' below (fkptjax.odeint now guards this too).
+                _template_inputs = [self.template.pk_dd, self.template.pknow_dd]
+                _template_inputs += [mg_kwargs[name] for name in ('fk', 'f0') if mg_kwargs.get(name) is not None]
+                if not all(np.all(np.isfinite(np.asarray(value, dtype=float))) for value in _template_inputs):
+                    raise RuntimeError('non-finite linear P(k) / growth template: the Boltzmann engine failed for this point')
+                table_w, table_now, kernel_constants = Kfuncs_to_tables(
+                    k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
+                    z=float(self.template.z), Om=Om,
+                    kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
+                    nquadSteps=300, NQ=10, NR=10,
+                    xnow=xnow, ode_method='RKQS', f0_kmax=1e-3,
+                    beyond_eds=self._beyond_eds, model=self._model, mg_variant=self._mg_variant,
+                    use_numba=self._use_numba,
+                    neutrino_correction=neutrino_correction,
+                    return_kernel_constants=True,
+                    **mg_kwargs,
+                )
+            except RuntimeError as exc:
+                # fkptjax's eager builder integrates the growth and the beyond-EdS kernel ODEs
+                # with an adaptive Runge-Kutta that RAISES ('stepsize underflow in rkqs') on a
+                # model whose growth is pathological -- large EFT coefficients on a w0 > 0
+                # background, the corner the emulator training cuts as outliers. See the note
+                # above `refused`: a rejected point, not a dead run.
+                if getattr(self, '_fkpt_table_shapes', None) is None:
+                    raise
+                table_w, table_now, kernel_constants = self._nan_tables(exc)
+            else:
+                self._fkpt_table_shapes = (tuple(np.shape(t) for t in table_w),
+                                           tuple(np.shape(t) for t in table_now),
+                                           None if kernel_constants is None else tuple(np.shape(c) for c in kernel_constants))
         self._table_w = table_w
         self._table_now = table_now
         self._kernel_constants = kernel_constants
@@ -5845,6 +5899,366 @@ class FKPTEmulator(FOLPSDEmulator):
                       f0_entries=(table_w[-1], table_now[-1]))
         self._layout_cache = layout
         return layout
+
+
+class FKPTShapeEmulator(CalculatorEmulator):
+    r"""The fkpt pt with its amplitude handled exactly and its linear spectrum fitted as a shape.
+
+    The generic :class:`~desilike.emulators.CalculatorEmulator` fits every leaf of the pt's pytree
+    as it comes, over every varied parameter.  For the EFT-of-dark-energy box that is what the MLP
+    emulator has to do -- the routed :class:`FKPTEmulator` cannot be used there, because it would
+    freeze ``w0``/``wa`` and route them through GR background scalars while, for
+    :math:`\alpha_i = c_i \Omega_\mathrm{de}(a)`, they change the kernels themselves -- and it is
+    measured to be the wrong thing to fit (`refactor_proposal.md`, 2026-09-11, LRG1).  Splicing
+    the exact value of every other output into the emulated pipeline, the ``dchi2`` between the
+    emulated and the exact likelihood at the posterior (median 11.6) was made of the two EASIEST
+    outputs: the linear spectrum ``pk_lin [w]`` (16.4 on its own, at a 3.5e-3 fit error) and the
+    scalar ``sigma8`` (10.1, at 3.8e-4), against 3.0 for all 50 one-loop columns together.  The
+    two enter with opposite signs and partly cancel by luck, since they are two fits of one
+    physical amplitude.  And ``dchi2`` is LINEAR in the theory error (the exact theory does not
+    sit at the chi2 minimum, so the cross term with the data residual dominates), so a factor
+    on an output's error is the same factor on its contribution.
+
+    This class changes WHAT is fitted, in four ways, and costs no new node evaluation: cosmoprimo
+    applies :meth:`transform` after the nodes are collected, so the checkpoint of a generic
+    training is reused as it stands -- including the amplitude, see the first point.
+
+    1. **The amplitude is exact** (``logA``, or ``A_s``).  Every leaf is homogeneous in
+       :math:`A_s` -- ``pk_l`` and the :math:`\sigma^2` scalars as :math:`A_s`, the loop columns as
+       :math:`A_s^2`, ``sigma8`` as :math:`A_s^{1/2}`, the growth ``f``/``f0``/``f_k``, the AP
+       quantities and the beyond-EdS kernel constants not at all: measured on the exact pt at
+       ``logA`` and ``logA + 0.2`` over three deliberately awkward EFT-of-DE points (large
+       ``m_ncdm`` with ``c_B``, ``c_M``, ``wa`` at their edges, ``c_M = 1.16``, a typical draw),
+       every one of the 76 leaves follows its power to 1.1e-7 -- ODE and quadrature tolerance.
+       Unlike ``w0``/``wa``, nothing in the EFT sector depends on :math:`A_s`: the growth ODE,
+       :math:`\mu(k, \eta)`, the kernel constants and the neutrino transfer ratio are all set by
+       the background and the shape parameters.  So the amplitude is divided out at fit time
+       and put back at prediction, exactly, and it is unbounded.  It is NOT pinned at the nodes:
+       :meth:`select_node_params` keeps it sampled, so that a node set drawn over the full box --
+       and its checkpoint -- is reused, the fit seeing the same nodes projected onto one fewer
+       parameter.  (``logA`` spans [2, 3.7] on that box, a factor 5.5 in amplitude that every
+       network used to have to learn.)
+    2. **One amplitude degree of freedom for** ``pk_lin`` **and** ``sigma8``.  The no-wiggle
+       linear spectrum is fitted as the SHAPE :math:`S(k) = P_\mathrm{nw}(k) / \sigma_8^2` and
+       ``sigma8`` (at the reference amplitude) once; the spectra are rebuilt as
+       :math:`\sigma_8^2 S`.  The physical-basis bias parameters divide by
+       :math:`A = \sigma_8 / \sigma_8^\mathrm{fid}`, so the tree-level term is
+       :math:`(b_{1}^\mathrm{p} \sigma_8^\mathrm{fid} + f \mu^2 \sigma_8)^2 S`: the ``sigma8``
+       error cancels exactly in the :math:`b_1^2` term, which is most of the monopole, and
+       survives only in the RSD terms -- the measured sensitivities (17 per 0.1% for ``sigma8``,
+       9 for ``pk_lin``, opposite signs) say the net is about 1 per 0.1%, i.e. the 10.1 becomes
+       ~0.4 at the current ``sigma8`` fit error.
+    3. **The wiggles are fitted on their own.**  The wiggly spectrum is fitted as
+       :math:`W(k) = P_\mathrm{w} / P_\mathrm{nw} - 1`, an O(0.1) oscillation, in place of a second
+       spectrum spanning four decades in k.  Two independent networks each good to 0.3% gave a
+       wiggle part good only to 5% (the error on the difference of two fits does not cancel, and
+       the difference is 8% of the spectrum), which is 8% of the BAO feature that constrains
+       :math:`\alpha_\parallel, \alpha_\perp`.  The cost is that :math:`P_\mathrm{nw}`'s error now
+       reaches :math:`P_\mathrm{w}` in full, where IR resummation used to suppress it by
+       :math:`(1 - D)`; point 1 is what pays for that.
+    4. **Nothing is fitted that is a function of something else fitted, or constant.**  The AP
+       grid ``(jac, kap, muap)`` is rebuilt from ``(qpar, qper)`` through :func:`_ap_k_mu` (three
+       arrays, one of them ``(n_k, n_mu)``, that used to be three networks); ``fsigma8`` is
+       :math:`f \sigma_8`; the ``f0`` leaf and the trailing ``f0`` of the no-wiggle table are the
+       wiggle table's; the no-wiggle table's ``f_k / f_0`` row is the wiggle table's; the two k
+       rows, the zero pads and ``sigma8_fid`` are constants of the emulator.  76 networks become
+       62, and none of the removed ones was cheap: the AP arrays alone were 4% of the state.
+       Every one of these identities is CHECKED at every node while transforming, and a node
+       that breaks one raises rather than being fitted around -- a pt that stops satisfying
+       them (another template, say) should fail here, not predict wrongly.  The seven networks
+       the ablation found to never enter chi2 through the power spectrum -- ``f``, ``fsigma8``,
+       ``f0`` and the four kernel constants -- are handled by the same identities except ``f``
+       and the kernel constants, which are kept: ``f`` is what ``fsigma8`` is rebuilt from, and
+       the kernel constants are read by the bispectrum path.
+
+    The transformed outputs are named by what they are (``'sigma8'``, ``'shape_nw'``,
+    ``'wiggle'``, ``'table_w.13'``, ...), and those are the names ``Emulator.train(per_output=...)``
+    takes.  The CHILDREN keep the generic pytree names (``'0'``, ``'1'``, ... -- see
+    :meth:`set_children_leafnames`), because a checkpoint written by the generic emulator keys its
+    outputs by those, and :meth:`transform` receives exactly what the checkpoint holds.
+
+    Two things this class does not do.  It does not divide :math:`\sigma_8` out of the loop
+    columns (the routed emulators do): that would feed the ``sigma8`` network's error into every
+    loop term at degree 2, and after point 1 the loops vary only with the growth, which is the
+    physics they must learn anyway.  And it keeps every other parameter on the grid -- ``w0``,
+    ``wa``, ``h``, the EFT coefficients: this is the generic expansion with one exact direction,
+    not the routed emulator.
+
+    What is fitted, in the words of the log::
+
+        qpar, qper, sigma8, f                      degree 0, 0, 1/2, 0 in A_s
+        shape_nw, wiggle, fk_norm                  amplitude-free ratios
+        table_w.3 ... table_w.25                   loop columns, degree 2
+        table_w.28 (sigma2w), table_w.29 (f0)      degree 1, 0
+        table_now.3 ... table_now.25               loop columns, degree 2
+        table_now.28, .29, .30 (sigma^2 scalars)   degree 1
+        kernel_constants.0 ... 3                   degree 0
+        derived.<name>                             degree from _DERIVED_AMPLITUDE_DEGREES
+
+    Parameters
+    ----------
+    calculator : FKPTJAXPTSpectrum2Poles
+        Emulated through its pytree state.  The amplitude must be one of the space's parameters.
+    space : Space
+        Where accuracy is required, the amplitude included: it is exact and unbounded, but the
+        nodes sample it (point 1), so its range is where the nodes fall.
+    """
+    #: Amplitude degree of a DERIVED parameter carried through the emulator, by name.  A derived
+    #: parameter is fitted like a leaf and must be scaled like one; a name absent from both lists
+    #: raises at fit time rather than being guessed -- ``logA`` itself would be additive, not
+    #: multiplicative, and a wrong power here is invisible in every chi2 and wrong in every chain
+    #: summary.
+    _DERIVED_AMPLITUDE_DEGREES = {
+        0.: ('H0', 'h', 'Omega_m', 'Omega_b', 'Omega_cdm', 'Omega_ncdm', 'Omega_Lambda',
+             'Omega_de', 'Omega_fld', 'Omega_k', 'omega_m', 'omega_b', 'omega_cdm', 'omega_ncdm',
+             'm_ncdm', 'N_eff', 'N_ur', 'n_s', 'tau_reio', 'w0_fld', 'wa_fld', 'rs_drag', 'rs_star',
+             'z_drag', 'z_star', 'theta_MC_100', 'theta_star', 'age', 'YHe', 'f', 'f0',
+             'mu0', 'gamma_0', 'gamma_a', 'c_B', 'c_M', 'c_K', 'c_T', 'M2_ini'),
+        0.5: ('sigma8', 'sigma8_m', 'sigma8_cb', 'sigma8_z', 'sigma12', 'S8', 'fsigma8'),
+        1.: ('A_s',),
+    }
+    #: Loop columns of an fkpt table (``Kfuncs_to_tables``' layout: k, pk_l, f_k / f_0, then the
+    #: 23 one-loop integrals, two zero pads, the sigma^2 scalars, f0).
+    _LOOP_COLUMNS = range(3, 26)
+    _PAD_COLUMNS = (26, 27)
+    #: What the no-wiggle spectrum is divided by before it is fitted: ``'sigma8'`` (the shape
+    #: :math:`P_\mathrm{nw} / \sigma_8^2`, point 2 of the class docstring) or ``'amplitude'``
+    #: (:math:`P_\mathrm{nw} / A_s`, see :class:`FKPTAmplitudeEmulator`).
+    _shape_divisor = 'sigma8'
+
+    # ── the hooks ─────────────────────────────────────────────────────────────
+    def select_params(self, names):
+        """Everything but the amplitude, which :meth:`transform` handles exactly."""
+        from desilike.theories.primordial_cosmology import find_conflicts
+
+        # by QUANTITY, like the routed emulators do for h: whatever this pipeline calls the
+        # primordial amplitude.  cosmoprimo's conflict group also holds `sigma8`, which is not an
+        # exact rescaling of the leaves at fixed shape parameters (it fixes the amplitude through
+        # the shape), so only the two primordial forms are taken.
+        found = find_conflicts('logA', names)
+        if not found:
+            raise ValueError(f'{type(self).__name__} handles the primordial amplitude exactly, and '
+                             f'none of the space parameters {list(names)} is one (logA or A_s). '
+                             f'Vary it, or use the generic CalculatorEmulator.')
+        if len(found) > 1 or found[0] not in ('logA', 'A_s'):
+            raise ValueError(f'the amplitude must be `logA` or `A_s`; the space has {found}')
+        self._amplitude = found[0]
+        return [name for name in names if name != self._amplitude]
+
+    def select_node_params(self, names):
+        """The amplitude stays sampled at the nodes -- see point 1 of the class docstring: the
+        fit sees the nodes projected onto the other parameters, and a checkpoint of the generic
+        training is reused as it stands."""
+        return [self._amplitude]
+
+    def _amplitude_ratio(self, params, xnp=np):
+        r""":math:`A_s / A_s^\mathrm{ref}` at ``params``.  The reference is the centre of the
+        training box, latched at construction; only ratios ever matter."""
+        value = params[self._amplitude]
+        if self._amplitude == 'logA':
+            return xnp.exp(value - self._amplitude_ref)
+        return value / self._amplitude_ref
+
+    def __init__(self, calculator, space, **options):
+        # `select_params` runs inside the base constructor and sets `_amplitude`; the reference
+        # value needs the training space, which exists once it returns.
+        self._constants = {}
+        self._layout_cache = None
+        CalculatorEmulator.__init__(self, calculator, space, **options)
+        self._amplitude_ref = float(self.training.center[self._amplitude])
+
+    # ── the layout ────────────────────────────────────────────────────────────
+    def _layout(self):
+        """Which child is which, from the pytree order the pt flattens in and the table layout of
+        fkptjax's ``Kfuncs_to_tables``; and, for each fitted output, its name and amplitude degree.
+
+        Positional, because both orders are: ``FKPTJAXPTSpectrum2Poles.tree_flatten`` emits ten
+        scalars, the wiggle table, the no-wiggle table, then the kernel constants, and the aux
+        carries the two table lengths.
+        """
+        if self._layout_cache is not None:
+            return self._layout_cache
+        names = list(self.children_leafnames)
+        n_w, n_now = int(self.aux['n_table_w']), int(self.aux['n_table_now'])
+        n_kernels = 4 if self.aux.get('has_kernel_constants', False) else 0
+        expected = 10 + n_w + n_now + n_kernels
+        if len(names) != expected:
+            raise RuntimeError(f'{type(self).__name__} expects {expected} children (10 scalars, '
+                               f'{n_w} + {n_now} table columns, {n_kernels} kernel constants); '
+                               f'the pt flattens to {len(names)}')
+        if n_w < 30 or n_now < 32:
+            raise RuntimeError(f'fkpt tables of {n_w} and {n_now} columns are not the layout this '
+                               f'emulator routes (30 wiggle, 32 no-wiggle columns)')
+        scalars = dict(zip(('jac', 'kap', 'muap', 'qpar', 'qper', 'sigma8', 'fsigma8',
+                            'sigma8_fid', 'f', 'f0'), names[:10]))
+        table_w = names[10:10 + n_w]
+        table_now = names[10 + n_w:10 + n_w + n_now]
+        kernels = names[10 + n_w + n_now:]
+
+        # the fitted outputs: {output name: (child name, amplitude degree)} for the leaves fitted
+        # as they are (up to the amplitude); the composite ones are handled by name
+        fitted = {'qpar': (scalars['qpar'], 0.), 'qper': (scalars['qper'], 0.),
+                  'sigma8': (scalars['sigma8'], 0.5), 'f': (scalars['f'], 0.),
+                  'fk_norm': (table_w[2], 0.)}
+        for column in self._LOOP_COLUMNS:
+            fitted[f'table_w.{column}'] = (table_w[column], 2.)
+            fitted[f'table_now.{column}'] = (table_now[column], 2.)
+        for column in range(28, n_w - 1):           # sigma2w
+            fitted[f'table_w.{column}'] = (table_w[column], 1.)
+        fitted[f'table_w.{n_w - 1}'] = (table_w[n_w - 1], 0.)   # f0
+        for column in range(28, n_now - 1):         # sigma2w_NW, sigma2_NW, delta_sigma2_NW
+            fitted[f'table_now.{column}'] = (table_now[column], 1.)
+        for index, name in enumerate(kernels):
+            fitted[f'kernel_constants.{index}'] = (name, 0.)
+        layout = {
+            'scalars': scalars,
+            'pk_w': table_w[1], 'pk_now': table_now[1],
+            'fitted': fitted,
+            # constants of the emulator: identical at every node, latched at fit time
+            'constants': [table_w[0], table_now[0], scalars['sigma8_fid']]
+                         + [table_w[column] for column in self._PAD_COLUMNS]
+                         + [table_now[column] for column in self._PAD_COLUMNS],
+            # exact duplicates: {child: the child it equals}
+            'duplicates': {table_now[2]: table_w[2],
+                           scalars['f0']: table_w[n_w - 1],
+                           table_now[n_now - 1]: table_w[n_w - 1]},
+        }
+        self._layout_cache = layout
+        return layout
+
+    def _derived_degree(self, name):
+        basename = name[len(DERIVED):]
+        for degree, known in self._DERIVED_AMPLITUDE_DEGREES.items():
+            if basename in known:
+                return degree
+        raise ValueError(f'the derived parameter {basename!r} is carried through the emulator and '
+                         f'must be rescaled by the amplitude like every other output, but its '
+                         f'power of A_s is not declared: add it to '
+                         f'{type(self).__name__}._DERIVED_AMPLITUDE_DEGREES')
+
+    # ── fit time ──────────────────────────────────────────────────────────────
+    def _check_identity(self, what, actual, expected, rtol):
+        """Raise if a fit-time identity fails at a node.  Skipped where either side is not
+        finite: a failed node is dropped by the finite mask downstream, not diagnosed here."""
+        actual, expected = np.asarray(actual), np.asarray(expected)
+        if not (np.isfinite(actual).all() and np.isfinite(expected).all()):
+            return
+        if actual.shape != expected.shape or not np.allclose(actual, expected, rtol=rtol, atol=0.):
+            worst = float(np.max(np.abs(actual - expected) / np.maximum(np.abs(expected), 1e-300)))
+            raise ValueError(f'{type(self).__name__}: {what} does not hold at this node (worst '
+                             f'relative difference {worst:.3g}); this pt is not laid out the way '
+                             f'this emulator assumes, and fitting it would predict a different '
+                             f'model from the exact one')
+
+    def transform(self, values, params):
+        """Physical leaves at one node -> the 62 outputs to fit (see the class docstring)."""
+        layout = self._layout()
+        scalars, fitted = layout['scalars'], layout['fitted']
+        amplitude = self._amplitude_ratio(params)
+        out = {}
+        # derived parameters, rescaled by their own declared degree
+        for name, value in values.items():
+            if name.startswith(DERIVED):
+                degree = self._derived_degree(name)
+                out[name] = np.asarray(value) / amplitude**degree if degree else np.asarray(value)
+
+        # the constants: latched the first time, checked every time after
+        for name in layout['constants']:
+            value = np.asarray(values[name])
+            if name in self._constants:
+                self._check_identity(f'the constant child {name!r} is constant', value,
+                                     self._constants[name], rtol=1e-10)
+            elif np.isfinite(value).all():
+                self._constants[name] = value
+        # the identities the dropped children are rebuilt from
+        for name, source in layout['duplicates'].items():
+            self._check_identity(f'child {name!r} equals child {source!r}', values[name],
+                                 values[source], rtol=1e-10)
+        sigma8, growth = np.asarray(values[scalars['sigma8']]), np.asarray(values[scalars['f']])
+        self._check_identity('fsigma8 = f * sigma8', values[scalars['fsigma8']], growth * sigma8,
+                             rtol=1e-8)
+        qpar, qper = np.asarray(values[scalars['qpar']]), np.asarray(values[scalars['qper']])
+        jac, kap, muap = _ap_k_mu(np.asarray(self.aux['k'])[:, None], np.asarray(self.aux['mu']),
+                                  qpar, qper)
+        for name, rebuilt in (('jac', jac), ('kap', kap), ('muap', muap)):
+            self._check_identity(f'the AP grid {name!r} follows from (qpar, qper) on the aux k, '
+                                 f'mu grid', values[scalars[name]], rebuilt, rtol=1e-8)
+
+        # the linear spectrum: shape and wiggle, the amplitude carried by sigma8 alone
+        pk_w, pk_now = np.asarray(values[layout['pk_w']]), np.asarray(values[layout['pk_now']])
+        with np.errstate(divide='ignore', invalid='ignore'):
+            out['shape_nw'] = pk_now / (sigma8**2 if self._shape_divisor == 'sigma8' else amplitude)
+            out['wiggle'] = pk_w / pk_now - 1.
+        # everything fitted as it is, up to its power of the amplitude
+        for name, (child, degree) in fitted.items():
+            value = np.asarray(values[child])
+            out[name] = value / amplitude**degree if degree else value
+        return out
+
+    # ── prediction ────────────────────────────────────────────────────────────
+    def inverse_transform(self, values, params):
+        """The 62 fitted outputs at ``params`` -> every leaf of the pt.  jax throughout: this
+        runs inside the likelihood's trace."""
+        layout = self._layout()
+        scalars, fitted = layout['scalars'], layout['fitted']
+        amplitude = self._amplitude_ratio(params, xnp=jnp)
+        out = {}
+        for name, value in values.items():
+            if name.startswith(DERIVED):
+                degree = self._derived_degree(name)
+                out[name] = value * amplitude**degree if degree else value
+        for name, (child, degree) in fitted.items():
+            out[child] = values[name] * amplitude**degree if degree else values[name]
+        for name, value in self._constants.items():
+            out[name] = jnp.asarray(value)
+        sigma8 = out[scalars['sigma8']]
+        growth = out[scalars['f']]
+        out[scalars['fsigma8']] = growth * sigma8
+        pk_now = values['shape_nw'] * (sigma8**2 if self._shape_divisor == 'sigma8' else amplitude)
+        out[layout['pk_now']] = pk_now
+        out[layout['pk_w']] = pk_now * (1. + values['wiggle'])
+        for name, source in layout['duplicates'].items():
+            out[name] = out[source]
+        jac, kap, muap = _ap_k_mu(jnp.asarray(self.aux['k'])[:, None], jnp.asarray(self.aux['mu']),
+                                  out[scalars['qpar']], out[scalars['qper']])
+        out[scalars['jac']], out[scalars['kap']], out[scalars['muap']] = jac, kap, muap
+        return out
+
+    # ── state ─────────────────────────────────────────────────────────────────
+    def __getstate__(self):
+        state = super().__getstate__()
+        state['amplitude'] = self._amplitude
+        state['amplitude_ref'] = self._amplitude_ref
+        # the constants are part of what the emulator predicts, and a loaded emulator has no
+        # node to latch them from
+        state['constants'] = {name: np.asarray(value) for name, value in self._constants.items()}
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._amplitude = str(state['amplitude'])
+        self._amplitude_ref = float(state['amplitude_ref'])
+        self._constants = {name: np.asarray(value) for name, value in state['constants'].items()}
+        self._layout_cache = None
+
+
+class FKPTAmplitudeEmulator(FKPTShapeEmulator):
+    r""":class:`FKPTShapeEmulator` with the no-wiggle spectrum fitted as :math:`P_\mathrm{nw} / A_s`.
+
+    Point 2 of the parent's docstring divides the no-wiggle spectrum by the fitted
+    :math:`\sigma_8^2` so that one amplitude degree of freedom serves ``pk_lin`` and ``sigma8``
+    and the ``sigma8`` error cancels in the :math:`b_1^2` term.  That is a gain for a network,
+    whose error on each output is what it is; for a polynomial regression it is a loss: the
+    ratio of two smooth functions is a harder polynomial target than either, and measured on the
+    same 8736 nodes of the EFT-of-dark-energy ref box (degree 4, held-out, 2026-09-14) the shape
+    :math:`P_\mathrm{nw} / \sigma_8^2` fitted to 1.65e-2 where :math:`P_\mathrm{nw} / A_s` fitted
+    to 5.5e-3 -- three times better, with ``sigma8`` itself at 5.7e-3.  So this class keeps the
+    amplitude exact (point 1), the wiggles as a ratio (point 3) and the identities (point 4), and
+    fits the no-wiggle spectrum divided by the exact amplitude alone.  Same nodes, same
+    checkpoint, same 62 outputs under the same names; the two are distinguished by
+    :attr:`_shape_divisor`, which the saved state's class name carries.
+    """
+    _shape_divisor = 'amplitude'
 
 
 class GeoFPTAXPTSpectrum2Poles(Calculator):

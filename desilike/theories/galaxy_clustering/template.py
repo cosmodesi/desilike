@@ -557,13 +557,13 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
                 Parameter('df', value=1., prior=dict(limits=[0., 10.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta f'),
                 Parameter('dm', value=0., prior=dict(limits=[-0.5, 0.5]),
                           ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta m'),
                 Parameter('dn', value=0., fixed=True, prior=dict(limits=[-0.5, 0.5]),
-                          ref=dict(dist='norm', loc=0., scale=0.05), fd_eps=0.01, latex=r'\delta n'),
+                          ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta n'),
                 Parameter('dA', value=1., fixed=True, prior=dict(limits=[0., 2.]),
-                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta A_{p}'),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta A_{p}'),
             ], tracers=None)
 
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
@@ -660,13 +660,13 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
 
     def tree_flatten(self):
         return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
-                 self.sigma8, self.fsigma8, self.sigma8_fid, self.dA], {'k': self.k})
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
-         obj.sigma8, obj.fsigma8, obj.sigma8_fid, obj.dA) = children
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 

@@ -92,6 +92,45 @@ class TestCosmoprimoCosmology:
         np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag,
                                     cosmo.get('thermodynamics.rs_drag'))
 
+    @pytest.mark.parametrize('engine', ['wallish2018', 'peakaverage', 'hinton2017'])
+    def test_the_bao_filter_is_built_at_the_fiducial_and_held(self, engine):
+        """A `fourier.pk_now` filter is built once, on the fiducial, and called at every point
+        after, so the peak finding is paid once for a whole chain.
+
+        What that buys, and what is tested here, is that the answer at a point does not depend on
+        which points came before it -- true of `hinton2017`, whose preparation reads the input
+        spectrum, only because the spectrum it is built on is the fiducial's rather than the
+        first point's.
+        """
+        from desilike.base import build
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        k = np.geomspace(1e-3, 0.5, 60)
+        cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI', requirements={
+            'fourier.pk_now': [{'of': 'delta_cb', 'engine': engine, 'z': [0.5, 1.1], 'k': k}]})
+        build(cosmo)
+        spec_key = [key for key in cosmo._requirements if key[0] == 'fourier.pk_now'][0]
+
+        def run(point, restart=False):
+            for param in cosmo.params:
+                if param.basename in point:
+                    param.update(value=point[param.basename])
+            if restart:
+                cosmo._bao_filters = {}
+            cosmo()
+            return np.asarray(cosmo._results[spec_key]), cosmo._bao_filters[spec_key]
+
+        low, high = {'h': 0.66, 'omega_cdm': 0.118}, {'h': 0.72, 'omega_cdm': 0.126}
+        _, first = run(low, restart=True)
+        after_low, second = run(high)
+        # one filter for the requirement, whatever the engine and however many points it sees
+        assert second is first
+        _, third = run(high, restart=True)             # a run that starts at the other point
+        after_restart, fourth = run(high)
+        assert fourth is third and third is not first
+        # and the answer is the same either way: what the filter holds is the fiducial, not a point
+        np.testing.assert_allclose(after_low, after_restart, rtol=0., atol=0.)
+
     def test_external_engine_invalid_input_raises_eager_nans_under_jit(self):
         """External engines (camb, class) run through pure_callback with concrete values, so
         cosmoprimo's usual 'raise outside jax tracing, NaN inside' fallback (exception_or_nan)
@@ -859,3 +898,111 @@ def test_a_derived_leaf_keeps_its_own_redshift():
             np.testing.assert_allclose(predicted[leaf], exact[leaf], rtol=1e-3)
     # the requirement itself keeps the merged grid it was registered on
     assert np.shape(predicted['fourier.sigma8_z|of=delta_cb,delta_cb']) == (2,)
+
+
+class TestEmulatedEngine:
+    """A cosmology driven by a trained cosmoprimo emulator, rather than by a Boltzmann code.
+
+    The other direction from the emulators above: there, desilike emulates its own calculator and
+    the grids come from whatever the consumers registered; here the emulation happened in
+    cosmoprimo, on grids fixed when it was trained, and desilike is only asked to read the
+    sections back. Both paths are kept -- this one is checked against the engine it was trained
+    on, and against the calculator-level emulators, rather than replacing them.
+    """
+
+    #: What a full-shape, BAO or supernova likelihood asks a cosmology for.
+    REQUIREMENTS = {
+        'fourier.pk': [{'of': 'delta_cb', 'z': [0.5, 1.1], 'k': np.geomspace(1e-3, 0.5, 40)},
+                       {'of': 'theta_cb', 'z': [0.5, 1.1], 'k': np.geomspace(1e-3, 0.5, 40)}],
+        'fourier.sigma8_z': [{'of': 'delta_cb', 'z': [0.5, 1.1]}],
+        'background.efunc': [{'z': [0.5, 1.1]}],
+        'background.comoving_transverse_distance': [{'z': [0.5, 1.1]}],
+        'thermodynamics.rs_drag': None,
+        'params.Omega_m': None,
+    }
+
+    @pytest.fixture(scope='class')
+    def emulator_path(self, tmp_path_factory):
+        from cosmoprimo.emulators import Space as CosmoprimoSpace, emulate
+        from cosmoprimo.fiducial import DESI
+
+        path = str(tmp_path_factory.mktemp('emulated_engine') / 'cosmology.h5')
+        # the pipeline's own fiducial: everything the emulator does not vary is pinned to the
+        # cosmology it was trained on, so training from another one is a silent offset
+        emulate(DESI(engine='eisenstein_hu'),
+                CosmoprimoSpace(bounds={'h': (0.64, 0.72), 'omega_cdm': (0.11, 0.13)}),
+                budget=1, section={'fourier': dict(k=np.geomspace(1e-3, 0.5, 40),
+                                                   z=np.array([0., 0.5, 1.1, 2.]),
+                                                   of=('delta_cb', 'theta_cb')),
+                                   'background': dict(z=np.array([0., 0.5, 1.1, 2.]),
+                                                      of=('efunc', 'comoving_radial_distance',
+                                                          'comoving_transverse_distance')),
+                                   'thermodynamics': dict(of=('rs_drag',))}).write(path)
+        return path
+
+    def _cosmology(self, engine, fiducial='DESI', requirements=None):
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial,
+                                    requirements=requirements or self.REQUIREMENTS)
+        for param in cosmo.params:
+            param.update(fixed=param.basename not in ('h', 'omega_cdm'))
+        return cosmo
+
+    def _run(self, cosmo, **params):
+        from desilike.base import build
+
+        return build(cosmo, output=lambda: cosmo)(params)
+
+    def test_a_saved_emulator_is_a_jax_native_engine(self, emulator_path):
+        """Not an external one: a path that `cosmoprimo.cosmology.get_engine` resolves to an
+        emulator is traceable, and classing it as external would wrap it in a pure_callback with
+        finite-difference derivatives -- slower than the emulator it wraps, and no longer
+        differentiable through."""
+        assert not self._cosmology(emulator_path)._is_external
+
+    def test_every_requirement_matches_the_engine_it_was_trained_on(self, emulator_path):
+        emulated = self._run(self._cosmology(emulator_path), h=0.673, omega_cdm=0.1201)
+        exact = self._run(self._cosmology('eisenstein_hu'), h=0.673, omega_cdm=0.1201)
+        for method_key, kwargs_list in self.REQUIREMENTS.items():
+            for kwargs in (kwargs_list or [{}]):
+                got = np.asarray(emulated.get(method_key, **kwargs), dtype='f8')
+                want = np.asarray(exact.get(method_key, **kwargs), dtype='f8')
+                assert np.allclose(got, want, rtol=2e-2), method_key
+
+    def test_pk_now_is_filtered_from_the_emulated_spectrum(self, emulator_path):
+        """The one requirement that is not a plain section read. Building the filter here instead
+        would hand it a fiducial that can only answer for what was emulated (measured:
+        `'delta_m' was not emulated`, out of the filter's own reference spectrum)."""
+        k, z = np.geomspace(1e-3, 0.5, 40), [0.5, 1.1]
+        requirements = dict(self.REQUIREMENTS)
+        requirements['fourier.pk_now'] = [{'of': 'delta_cb', 'engine': 'peakaverage', 'z': z, 'k': k}]
+        state = self._run(self._cosmology(emulator_path, requirements=requirements),
+                          h=0.673, omega_cdm=0.1201)
+        pk_now = state.get('fourier.pk_now', of='delta_cb', engine='peakaverage', z=z, k=k)
+        pk = state.get('fourier.pk', of='delta_cb', z=z, k=k)
+        assert np.all(np.isfinite(pk_now))
+        assert np.allclose(pk_now, pk, rtol=0.2)      # the same spectrum, wiggles removed
+        assert np.max(np.abs(pk_now / pk - 1.)) > 1e-4
+
+    def test_it_runs_under_jit_and_grad(self, emulator_path):
+        cosmo = self._cosmology(emulator_path)
+
+        def summary(h):
+            state = self._run(cosmo, h=h, omega_cdm=0.1201)
+            return (state.get('fourier.pk', of='delta_cb', z=0.5, k=1e-3)
+                    + state.get('thermodynamics.rs_drag'))
+
+        assert np.allclose(jax.jit(summary)(0.673), summary(0.673), rtol=1e-10)
+        assert np.isfinite(jax.grad(summary)(0.673))
+
+    def test_a_fiducial_the_emulator_cannot_answer_for_is_refused(self, emulator_path):
+        """Everything outside the emulator's space was held at its training fiducial, so a
+        different value there is not interpolated, not extrapolated and not reported -- it is
+        ignored. Measured before the guard: 3% in every spectrum, with nothing saying why."""
+        from cosmoprimo.emulators import CoverageError
+        from cosmoprimo.fiducial import DESI
+
+        with pytest.raises(CoverageError, match='n_s'):
+            self._run(self._cosmology(emulator_path, fiducial=DESI(n_s=0.94)),
+                      h=0.673, omega_cdm=0.1201)

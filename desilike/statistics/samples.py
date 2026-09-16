@@ -77,7 +77,7 @@ class FlagAccessor:
         return [key for key in self.samples.keys if key.startswith('flag_')]
 
     def __repr__(self):
-        return str({key: value for key, value in self._samples.items()
+        return str({key: value for key, value in self.samples.items()
                     if key in self.keys})
 
 
@@ -109,7 +109,7 @@ class ParameterAccessor:
             key.startswith('flag_') or key in SPECIAL_KEYS)]
 
     def __repr__(self):
-        return str({key: value for key, value in self._samples.items()
+        return str({key: value for key, value in self.samples.items()
                     if key in self.keys})
 
 

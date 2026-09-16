@@ -2,23 +2,23 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from desilike import samplers, Samples
+from desilike import sampling, Samples
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
 SAMPLER_CLS = dict(
-    dynesty=samplers.DynestySampler,
-    emcee=samplers.EmceeSampler,
-    grid=samplers.GridSampler,
-    hmc=samplers.HMCSampler,
-    importance=samplers.ImportanceSampler,
-    mclmc=samplers.MCLMCSampler,
-    mhmcmc=samplers.MetropolisHastingsSampler,
-    nautilus=samplers.NautilusSampler,
-    nuts=samplers.NoUTurnSampler,
-    pocomc=samplers.PocoMCSampler,
-    qmc=samplers.QMCSampler,
-    zeus=samplers.ZeusSampler)
+    dynesty=sampling.DynestySampler,
+    emcee=sampling.EmceeSampler,
+    grid=sampling.GridSampler,
+    hmc=sampling.HMCSampler,
+    importance=sampling.ImportanceSampler,
+    mclmc=sampling.MCLMCSampler,
+    mhmcmc=sampling.MetropolisHastingsSampler,
+    nautilus=sampling.NautilusSampler,
+    nuts=sampling.NoUTurnSampler,
+    pocomc=sampling.PocoMCSampler,
+    qmc=sampling.QMCSampler,
+    zeus=sampling.ZeusSampler)
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
     emcee=dict(n_walkers=4),
@@ -90,7 +90,7 @@ def likelihood():
 @pytest.mark.mpi
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_accuracy(likelihood, key):
-    # Test that all samplers work with a simple two-dimensional likelihood and
+    # Test that all sampling work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
     rng = 42 if key != 'zeus' else None  # zeus does not support seeds
@@ -120,11 +120,11 @@ def test_importance_combine(likelihood):
     weight /= 2
     log_weight = np.log(np.outer(weight, weight).flatten())
 
-    sampler = samplers.GridSampler(likelihood)
+    sampler = sampling.GridSampler(likelihood)
     results = sampler.run(grid=x)
     results['log_weight'] += log_weight
 
-    sampler = samplers.ImportanceSampler(likelihood)
+    sampler = sampling.ImportanceSampler(likelihood)
     results = sampler.run(samples=results, resample=False)
 
     cov = np.linalg.inv(2 * likelihood.precision +
@@ -215,7 +215,7 @@ def test_continue_chain(likelihood, key):
 def test_metropolis_hastings_fast(likelihood):
     # Test we can pass fast parameters to the Metropolis-Hastings sampler.
 
-    sampler = samplers.MetropolisHastingsSampler(
+    sampler = sampling.MetropolisHastingsSampler(
         likelihood, rng=42, fast=['a'], f_fast=1)
     sampler.run(max_steps=100)
 

@@ -52,12 +52,13 @@ def likelihood():
 
 
 @pytest.mark.mpi
-@pytest.mark.parametrize('posterior', [True, False])
+@pytest.mark.parametrize('profile_posterior', [True, False])
 @pytest.mark.parametrize('key', OPTIMIZE.keys())
-def test_accuracy(likelihood, posterior, key):
+def test_accuracy(likelihood, profile_posterior, key):
     # Test that the profiler returns the correct result.
 
-    profiler = Profiler(likelihood, rng=42, posterior=posterior)
+    profiler = Profiler(likelihood, rng=42,
+                        profile_posterior=profile_posterior)
     profiler.add_optimize_all()
     profiler.add_single_sample(dict(a=0.35))
     profiler.add_manual_grid(dict(a=np.linspace(-1, +1, 3)))
@@ -66,12 +67,12 @@ def test_accuracy(likelihood, posterior, key):
     samples = profiler.run(
         optimize=OPTIMIZE[key], optimize_kwargs=OPTIMIZE_KWARGS[key])
 
-    if posterior:
+    if profile_posterior:
         key = 'log_posterior'
     else:
         key = 'log_likelihood'
 
-    if posterior:
+    if profile_posterior:
         # Correct normalization such that the log posterior of the best fit
         # is 0.
         samples[key] -= likelihood(dict(
@@ -79,13 +80,14 @@ def test_accuracy(likelihood, posterior, key):
 
     # Check the maximum likelihood/posterior has been found.
     assert np.isclose(np.amax(samples[key]), 0, rtol=0, atol=1e-6)
-    mean = dict(zip(['a', 'b'], MEAN_POSTERIOR if posterior else
+    mean = dict(zip(['a', 'b'], MEAN_POSTERIOR if profile_posterior else
                     MEAN_LIKELIHOOD))
     for param in ['a', 'b']:
         assert np.isclose(samples[np.argmax(samples[key])][param], mean[param],
                           rtol=0, atol=1e-6)
 
-    sd = dict(zip(['a', 'b'], SD_POSTERIOR if posterior else SD_LIKELIHOOD))
+    sd = dict(zip(['a', 'b'], SD_POSTERIOR if profile_posterior else
+                  SD_LIKELIHOOD))
     use = (~samples.get_flag('optimize', 'a') &
            samples.get_flag('optimize', 'b'))
     assert np.sum(use) == 4
@@ -94,26 +96,27 @@ def test_accuracy(likelihood, posterior, key):
         samples[key][use], rtol=0, atol=1e-6)
 
     # Check the interpolation works.
-    interp = samples.profile_interpolator('a', posterior=posterior)
+    interp = samples.profile_interpolator('a', posterior=profile_posterior)
     assert len(interp.x) == 5  # 1 (global) + 1 (single) + 3 (grid)
     a = np.linspace(-1, +1, 100)
     assert np.allclose(-0.5 * ((a - mean['a'])**2 / sd['a']**2), interp(a),
                        rtol=0, atol=1e-6)
 
     for threshold, sigma in zip([-0.5, -2, -4.5], [1, 2, 3]):
-        bounds = samples.interval('a', threshold, posterior=posterior)
+        bounds = samples.interval('a', threshold, posterior=profile_posterior)
         assert len(bounds) == 1
         assert np.isclose(bounds[0][0], mean['a'] - sigma * sd['a'], rtol=0,
                           atol=1e-6)
         assert np.isclose(bounds[0][1], mean['a'] + sigma * sd['a'], rtol=0,
                           atol=1e-6)
 
-    interp = samples.profile_interpolator(['a', 'b'], posterior=posterior)
+    interp = samples.profile_interpolator(['a', 'b'],
+                                          posterior=profile_posterior)
     np.random.seed(42)
     ab = np.column_stack((np.random.uniform(-1, +1, 100),
                           np.random.uniform(-1, +1, 100)))
-    mean = MEAN_POSTERIOR if posterior else MEAN_LIKELIHOOD
-    cov = COV_POSTERIOR if posterior else COV_LIKELIHOOD
+    mean = MEAN_POSTERIOR if profile_posterior else MEAN_LIKELIHOOD
+    cov = COV_POSTERIOR if profile_posterior else COV_LIKELIHOOD
     assert np.allclose(-0.5 * np.einsum('...i,...i', np.einsum(
         'ij,jk', ab - mean, np.linalg.inv(cov)), ab - mean), interp(ab),
         rtol=0, atol=1e-6)

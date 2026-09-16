@@ -25,7 +25,7 @@ class Profiler(BaseClass):
         ----------
         likelihood : BaseLikelihood
             Likelihood to profile.
-        posterior : bool, optional
+        profile_posterior : bool, optional
             If ``True``, profile the posterior. Otherwise, profile the
             likelihood. Default is ``True``.
         rng : numpy.random.Generator, int or None, optional

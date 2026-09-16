@@ -21,6 +21,7 @@ import os
 import warnings
 
 import itertools
+import contextlib
 
 import numpy as np
 from scipy import constants
@@ -37,6 +38,30 @@ from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
 from ...emulators.api import CalculatorEmulator, DERIVED
 from ._multitracer import propose_params_multitracer, assign_params
+
+
+@contextlib.contextmanager
+def _pybird_jax():
+    """Assemble pybird's biased spectra on JAX arrays.
+
+    pybird takes its array library from ``pybird.module`` at import time, and numpy is what
+    desilike wants for all of it but this step: the PT tables are built once, per instance,
+    while the bias assembly sees traced parameters and would raise
+    TracerArrayConversionError on ``array(...)``.  pybird's own switch
+    (``pybird.config.set_jax_enabled``) is global and would put the table construction --
+    FFTLog, resummation -- in JAX too, which costs minutes per build.  These are the three
+    array functions ``setBias``, ``setreducePslb`` and ``setreduceCflb`` call.
+    """
+    import pybird.bird as bird_module
+    names = ('array', 'einsum', 'zeros_like')
+    saved = {name: getattr(bird_module, name) for name in names}
+    for name in names:
+        setattr(bird_module, name, getattr(jnp, name))
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(bird_module, name, value)
 
 
 def _import_folps():
@@ -1419,7 +1444,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        self._nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
+        self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
         self._resum = Resum(co=self._co)
         self._nnlo = None
         if with_nnlo_counterterm:
@@ -1649,12 +1674,10 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if isinstance(self.b1, tuple):  # cross-spectrum of two tracers
             self.poles = self._fullps_cross(bird, self._build_params(0), self._build_params(1))
         else:
-            import pybird.bird as bird_module
-            bird_module.np = jnp
             self._pt = bird
             bird.co.nbar = self._nbar
-            bird.setreducePslb(self._build_params(), what='full')
-            bird_module.np = np
+            with _pybird_jax():
+                bird.setreducePslb(self._build_params(), what='full')
             self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
         return self.poles
 
@@ -1715,12 +1738,16 @@ class PyBirdPTCorrelation2Poles(Calculator):
         from pybird.resum import Resum
         from pybird.projection import Projection
         eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
-        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=min(self.km), kr=min(self.kr), nd=1e-4,
+        # Nl=3, whatever was asked for: pybird's IR resummation in configuration space
+        # (`Resum.Ps2Cf`) contracts a damping window hardcoded to the three multipoles
+        # (0, 2, 4) against co.Nl, so it only runs at Nl = 3 -- pybird's own default of 2
+        # included.  Compute all three and keep the ones wanted, in the tracer below.
+        self._co = Common(Nl=3, kmin=1e-3, kmax=0.25, km=min(self.km), kr=min(self.kr), nd=1e-4,
                           eft_basis=eft, halohalo=True, with_cf=True, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        self._nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
+        self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
         self._resum = Resum(co=self._co)
         self._nnlo = None
         if with_nnlo_counterterm:
@@ -1751,7 +1778,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
         # Expose both Cf and Ps loop arrays: setreduceCflb ends with a call to
         # setreducePslb (NNLO bookkeeping), which needs the P-arrays even though
         # the tracer only reads fullCf.
-        _zc = jnp.zeros((len(self.ells), 1, len(self.s)))
+        _zc = jnp.zeros((self._co.Nl, 1, len(self.s)))
         C11l = jnp.asarray(self._pt.C11l)
         Cloopl = jnp.asarray(self._pt.Cloopl)
         Cctl = jnp.asarray(self._pt.Cctl)
@@ -1760,7 +1787,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
         P11l = jnp.asarray(self._pt.P11l)
         Ploopl = jnp.asarray(self._pt.Ploopl)
         Pctl = jnp.asarray(self._pt.Pctl)
-        _zp = jnp.zeros((len(self.ells), 1, P11l.shape[-1]))
+        _zp = jnp.zeros((self._co.Nl, 1, P11l.shape[-1]))
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _zp
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _zp
         return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol],
@@ -1851,13 +1878,12 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     _build_params = PyBirdTracerSpectrum2Poles._build_params
 
     def __call__(self):
-        import pybird.bird as bird_module
-        bird_module.np = jnp
         self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
         self._pt.co.nbar = self._nbar
-        self._pt.setreduceCflb(self._build_params(), what='full')
-        bird_module.np = np
-        self.poles = self._pt.fullCf
+        with _pybird_jax():
+            self._pt.setreduceCflb(self._build_params(), what='full')
+        # pybird always computed (0, 2, 4) here -- see the Nl=3 note in PyBirdPTCorrelation2Poles.
+        self.poles = self._pt.fullCf[:len(self.ells)]
         return self.poles
 
     def tree_flatten(self):

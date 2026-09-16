@@ -1,6 +1,5 @@
 """Module implementing the samples."""
 
-import re
 from pathlib import Path
 
 try:
@@ -14,8 +13,7 @@ from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
 
-SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior',
-                'flag_.*']
+SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior']
 FLAGS = ['optimize']
 
 
@@ -52,6 +50,69 @@ def _sort_into_grid(x, y):
     return x_grid, y
 
 
+class FlagAccessor:
+    def __init__(self, samples):
+        self.samples = samples
+
+    def _check_valid_flag(self, flag, param):
+        """Check if the flag and/or parameter is valid."""
+        if flag not in FLAGS:
+            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
+            raise ValueError(msg)
+        if param not in self.samples.parameters:
+            msg = (f"Unknown parameter '{param}'. Known parameters are "
+                   f"{self.samples.parameters}.")
+            raise ValueError(msg)
+
+    def __getitem__(self, key):
+        flag, param = key
+        return self.samples[f'flag_{flag}_{param}']
+
+    def __setitem__(self, key, value):
+        flag, param = key
+        self.samples[f'flag_{flag}_{param}'] = value
+
+    @property
+    def keys(self):
+        return [key for key in self._samples.keys if key.startswith('flag_')]
+
+    def __repr__(self):
+        return str({key: value for key, value in self._samples.items()
+                    if key in self.keys})
+
+
+class ParameterAccessor:
+    def __init__(self, samples):
+        self.samples = samples
+
+    def _check_valid_param(self, flag, param):
+        """Check if the flag and/or parameter is valid."""
+        if flag not in FLAGS:
+            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
+            raise ValueError(msg)
+        if param not in self.samples.parameters:
+            msg = (f"Unknown parameter '{param}'. Known parameters are "
+                   f"{self.samples.parameters}.")
+            raise ValueError(msg)
+
+    def __getitem__(self, key):
+        flag, param = key
+        return self.samples[f'flag_{flag}_{param}']
+
+    def __setitem__(self, key, value):
+        flag, param = key
+        self.samples[f'flag_{flag}_{param}'] = value
+
+    @property
+    def keys(self):
+        return [key for key in self._samples.keys if not (
+            key.startswith('flag_') or key in SPECIAL_KEYS)]
+
+    def __repr__(self):
+        return str({key: value for key, value in self._samples.items()
+                    if key in self.keys})
+
+
 class Samples(BaseClass):
     """Class for storing samples of parameters."""
 
@@ -85,18 +146,12 @@ class Samples(BaseClass):
         return list(self.data.keys())
 
     @property
-    def params(self):
-        """Return the parameters of the sample as a list of strings."""
-        params = []
-        for key in self.keys:
-            match = False
-            for special_key in SPECIAL_KEYS:
-                if re.fullmatch(special_key, key):
-                    match = True
-                    break
-            if not match:
-                params.append(key)
-        return params
+    def flags(self):
+        return FlagAccessor(self)
+
+    @property
+    def parameters(self):
+        return ParameterAccessor(self)
 
     def __setitem__(self, key, value):
         """Manipulate the samples.
@@ -323,14 +378,14 @@ class Samples(BaseClass):
         else:
             return np.ones(self.n_samples) / self.n_samples
 
-    def mean(self, params=None, return_as_dict=False):
+    def mean(self, parameters=None, return_as_dict=False):
         """Compute the mean of the sample.
 
         Parameters
         ----------
-        params : list or None, optional
-            Keys to compute the mean for. If ``None``, all keys are used.
-            Default is ``None``.
+        parameters : list of str or None, optional
+            Parameters to compute the mean for. If ``None``, all paramters are
+            used. Default is ``None``.
         return_as_dict : bool, optional
             If ``True``, return a dictionary. Otherwise, return a numpy
             array. Default is ``False``.
@@ -341,23 +396,23 @@ class Samples(BaseClass):
             Means of the samples.
 
         """
-        if params is None:
-            params = self.params
+        if parameters is None:
+            parameters = self.parameters.keys
 
         means = [np.average(self[key], weights=self.weight, axis=0) for key in
-                 params]
+                 parameters]
 
         if return_as_dict:
-            return dict(zip(params, means))
+            return dict(zip(parameters, means))
         else:
             return means
 
-    def covariance(self, params=None):
+    def covariance(self, parameters=None):
         """Compute the covariance of the sample.
 
         Parameters
         ----------
-        params : list or None, optional
+        parameters : list or None, optional
             Keys to compute the covariance for. If ``None``, all keys are used.
             Default is ``None``.
 
@@ -368,11 +423,11 @@ class Samples(BaseClass):
             or ``self.keys`` if ``keys`` is ``None``.
 
         """
-        if params is None:
-            params = self.params
+        if parameters is None:
+            parameters = self.parameters.keys
 
         m = np.column_stack([
-            self[key].reshape(self.n_samples, -1) for key in params])
+            self[key].reshape(self.n_samples, -1) for key in parameters])
 
         return np.cov(m, aweights=self.weight, rowvar=False)
 
@@ -403,68 +458,6 @@ class Samples(BaseClass):
         for sample in samples[1:]:
             combined.append(sample)
         return combined
-
-    def _check_valid_flag(self, flag, param):
-        """Check if the flag and/or parameter is valid."""
-        if flag not in FLAGS:
-            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
-            raise ValueError(msg)
-        if param not in self.params:
-            msg = (f"Unknown parameter '{param}'. Known parameters are "
-                   f"{self.params}.")
-            raise ValueError(msg)
-
-    def get_flag(self, flag, param):
-        """Get the value of the status flag for all samples.
-
-        Parameters
-        ----------
-        flag : str
-            Status flag.
-        param : str or None, optional
-            The parameter to which the flag applies.
-
-        Returns
-        -------
-        value : numpy.ndarray
-            Boolean array contain the status flag for each sample.
-
-        Raises
-        ------
-        ValueError
-            If the status is not known, the parameter does not exist for this
-            sample, or the flag has not been set for this specific combination
-            of status and parameter.
-
-        """
-        self._check_valid_flag(flag, param)
-        if f'flag_{flag}_{param}' in self.keys:
-            return self[f'flag_{flag}_{param}']
-        else:
-            msg = f"Flag '{flag}' not set for parameter '{param}'."
-            raise ValueError(msg)
-
-    def set_flag(self, flag, param, value):
-        """Get the value of the status flag for all samples.
-
-        Parameters
-        ----------
-        flag : str
-            Status flag.
-        param : str or None, optional
-            The parameter to which the flag applies.
-        value : numpy.ndarray
-            Boolean array contain the status flag for each sample.
-
-        Raises
-        ------
-        ValueError
-            If the status is not known or the parameter does not exist for
-            this sample.
-
-        """
-        self._check_valid_flag(flag, param)
-        self[f'flag_{flag}_{param}'] = value
 
     def tabulate(self, keys=None, use_latex=False, **kwargs):
         """Use the `tabulate` package to print the table.
@@ -511,12 +504,12 @@ class Samples(BaseClass):
         data = {latex.get(key, key): self.data[key] for key in keys}
         return tabulate.tabulate(data, headers='keys', **kwargs)
 
-    def getdist(self, params=None):
+    def getdist(self, parameters=None):
         """Convert the sample into a ``getdist.MCSamples`` instance.
 
         Parameters
         ----------
-        params : array-like or None, optional
+        parameters : array-like or None, optional
             List of parameters to convert. If ``None``, all parameters are
             included. Default is ``None``.
 
@@ -537,20 +530,21 @@ class Samples(BaseClass):
             msg = "The `getdist` package is required for `Samples.getdist`."
             raise ImportError(msg)
 
-        if params is None:
-            params = self.params
+        if parameters is None:
+            parameters = self.parameters.keys
 
         return MCSamples(
-            samples=np.column_stack([self[key] for key in params]),
-            weights=self.weight, names=params, labels=[
-                self.latex.get(key, key).replace('$', '') for key in params])
+            samples=np.column_stack([self[key] for key in parameters]),
+            weights=self.weight, names=parameters, labels=[
+                self.latex.get(key, key).replace('$', '') for key in
+                parameters])
 
-    def profile_interpolator(self, params, posterior=True):
+    def profile_interpolator(self, parameters, posterior=True):
         """Get a cubic profile interpolator.
 
         Parameters
         ----------
-        params : str or list
+        parameters : str or list
             Parameter(s) for which to compute the interpolator.
         posterior : bool, optional
             If ``True``, get a profile for the (log) posterior. If ``False``, a
@@ -569,22 +563,22 @@ class Samples(BaseClass):
 
         """
         use = np.ones(len(self), dtype=bool)
-        params = np.atleast_1d(params)
-        for param in self.params:
+        parameters = np.atleast_1d(parameters)
+        for param in self.parameters:
             # In case only one parameter is requested, use even the case
             # where the parameter itself is optimized. In all other cases, the
             # grid will not be regular, so don't.
-            if param in params and len(params) > 1:
-                use = use & ~self.get_flag('optimize', param)
-            elif param not in params:
+            if param in parameters and len(parameters) > 1:
+                use = use & ~self.flags['optimize', param]
+            elif param not in parameters:
                 try:
-                    use = use & self.get_flag('optimize', param)
+                    use = use & self.flags['optimize', param]
                 except ValueError:
                     # Flag may not be set because the user added the parameter
                     # later. Ignore.
                     pass
 
-        x = np.column_stack([self[param][use] for param in params])
+        x = np.column_stack([self[param][use] for param in parameters])
         y = self['log_posterior' if posterior else 'log_likelihood'][use]
 
         # Remove duplicates by only choosing the one with the highest

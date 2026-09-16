@@ -95,7 +95,7 @@ class Profiler(BaseClass):
         # placeholder for optimized parameters since np.nan is not treated
         # as equal if present in arrays.
         x = np.column_stack([np.where(
-            self.samples.get_flag('optimize', param), 1j,
+            self.samples.flags['optimize', param], 1j,
             self.samples[param]) for param in self.params])
         self.samples = self.samples[np.unique(x, axis=0, return_index=True)[1]]
 
@@ -104,7 +104,7 @@ class Profiler(BaseClass):
         for i in range(len(self.samples)):
             self.fixed_params.append({})
             for param in self.params:
-                if not self.samples.get_flag('optimize', param)[i]:
+                if not self.samples.flags['optimize', param][i]:
                     self.fixed_params[i][param] = self.samples[i][param]
 
     def add_single_sample(self, param_dict):
@@ -131,9 +131,9 @@ class Profiler(BaseClass):
         for param in self.params:
             if param not in param_dict:
                 samples[param] = [np.nan, ]
-                samples.set_flag('optimize', param, True)
+                samples.flags['optimize', param] = True
             else:
-                samples.set_flag('optimize', param, False)
+                samples.flags['optimize', param] = False
 
         self._add_samples(samples)
 
@@ -176,9 +176,9 @@ class Profiler(BaseClass):
         for param in self.params:
             if param not in samples.params:
                 samples[param] = np.nan
-                samples.set_flag('optimize', param, True)
+                samples.flags['optimize', param] = True
             else:
-                samples.set_flag('optimize', param, False)
+                samples.flags['optimize', param] = False
 
         self._add_samples(samples)
 

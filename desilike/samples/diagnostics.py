@@ -7,6 +7,7 @@ import logging
 import warnings
 
 import numpy as np
+from scipy.linalg import eigvalsh
 
 from .samples import _vals, _normalise_params
 
@@ -234,17 +235,16 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     V = Wn + (nchains + 1.0) / nchains * B
 
     if method == 'eigen':
-        # Normalise by std for numerical stability
+        # Normalise by std for numerical stability, then solve the symmetric
+        # generalized eigenproblem V x = lambda W x directly.  inv(W) @ V is
+        # not symmetric in general and therefore cannot be passed to eigvalsh.
         stddev  = np.sqrt(np.diag(V).real)
         V_norm  = V / stddev[:, None] / stddev[None, :]
         Wn1_norm = Wn1 / stddev[:, None] / stddev[None, :]
-        invWn1  = _inv(Wn1_norm, check_valid=check_valid)
-        if invWn1 is None:
-            raise ValueError('Cannot compute inverse of within-chain covariance')
         try:
-            toret = np.linalg.eigvalsh(invWn1.dot(V_norm))
+            toret = eigvalsh(V_norm, Wn1_norm)
         except np.linalg.LinAlgError as exc:
-            raise ValueError('Eigenvalue decomposition failed') from exc
+            raise ValueError('Generalized eigenvalue decomposition failed') from exc
     else:
         toret = np.diag(V) / np.diag(Wn1)
 

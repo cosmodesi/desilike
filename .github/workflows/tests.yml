@@ -47,16 +47,17 @@ jobs:
           brew install libomp
         fi
         python -m pip install torch --index-url https://download.pytorch.org/whl/cpu  # prevent pocoMC from pulling CUDA libraries
-        # TODO: Explicitly caching pyclass and cosmoprimo shouldn't be necessary once they're on PyPI.
+        # TODO: Explicitly caching pyclass shouldn't be necessary once it's on PyPI.
+        # Only pyclass: it compiles CLASS, which is what the cache is worth paying for.  A
+        # cached wheel is never rebuilt (the cache restore-key matches across pyproject.toml
+        # changes), so anything cached here is pinned to the commit it was first built from --
+        # cosmoprimo was, and `.[tests]` then found the stale version already satisfied.
         mkdir -p wheelhouse
         if ! ls wheelhouse/pyclass-*.whl > /dev/null 2>&1; then
             pip wheel -w wheelhouse git+https://github.com/adematti/pyclass
         fi
-        if ! ls wheelhouse/cosmoprimo-*.whl > /dev/null 2>&1; then
-            pip wheel -w wheelhouse git+https://github.com/cosmodesi/cosmoprimo
-        fi
-        python -m pip install --no-index --find-links=wheelhouse pyclass cosmoprimo
-        python -m pip install .[tests]
+        python -m pip install --no-index --find-links=wheelhouse pyclass
+        python -m pip install .[tests]  # brings in cosmoprimo and lsstypes, from git, every run
         python -m pip install ipython  # TODO: temporary fix for https://github.com/AnswerDotAI/fastprogress/issues/117
     - name: Lint with ruff
       run: |

@@ -44,7 +44,7 @@ def test_samples_save(suffix, tmp_path):
     samples = statistics.Samples(
         a=np.linspace(0, 1, 10), b=np.arange(20).reshape(10, 2),
         latex=dict(a=r'$\lambda$'))
-    samples.set_flag('optimize', 'a', [True] * 5 + [False] * 5)
+    samples.flags['optimize', 'a'] = [True] * 5 + [False] * 5
 
     if suffix == '.npy':
         with pytest.raises(ValueError):

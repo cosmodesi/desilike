@@ -174,7 +174,7 @@ class Profiler(BaseClass):
 
         samples = Samples(**samples)
         for param in self.params:
-            if param not in samples.params:
+            if param not in samples.parameters.keys:
                 samples[param] = np.nan
                 samples.flags['optimize', param] = True
             else:

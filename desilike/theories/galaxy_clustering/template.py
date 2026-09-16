@@ -527,8 +527,8 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
     qpar, qper : float
         AP distortion ratios, derived from the sampled apmode parameters.
     sigma8, fsigma8, sigma8_fid : float
-        sigma8 stays at its fiducial value (no amplitude-rescaling parameter); fsigma8
-        tracks the df-scaled growth rate.
+        sigma8 is scaled by sqrt(sigma8_sq_ratio) where sigma8_sq_ratio = dA * exp((dm+dn)/a * tanh(a*ln(r_d_fid/8)));
+        fsigma8 = fsigma8_fid * df * sqrt(sigma8_sq_ratio / dA), ensuring fsigma8/sigma8 = f_fid * df / sqrt(dA).
     """
 
     #: ``df`` scales f, f0 and fk alike, so the fk / f0 shape the loop tables are invariant
@@ -556,13 +556,13 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         """
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
-                Parameter('df', value=1., prior=dict(limits=[0., 20.]),
+                Parameter('df', value=1., prior=dict(limits=[0., 10.]),
                           ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta f'),
                 Parameter('dm', value=0., prior=dict(limits=[-0.5, 0.5]),
                           ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta m'),
                 Parameter('dn', value=0., fixed=True, prior=dict(limits=[-0.5, 0.5]),
                           ref=dict(dist='norm', loc=0., scale=0.05), fd=dict(eps=0.01), latex=r'\delta n'),
-                Parameter('dA', value=1., fixed=True, prior=dict(limits=[0., 20.]),
+                Parameter('dA', value=1., fixed=True, prior=dict(limits=[0., 2.]),
                           ref=dict(dist='norm', loc=1., scale=0.05), fd=dict(eps=0.02), latex=r'\delta A_{p}'),
             ], tracers=None)
 
@@ -638,15 +638,16 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         dn = self.dn.value
         df = self.df.value
         dA = self.dA.value
+        sqrt_dA = jnp.sqrt(dA)
         factor = dA * jnp.exp(dm / self._a * jnp.tanh(self._a * jnp.log(self.k / self._kp))
                          + dn * jnp.log(self.k / self._kp))
         self.pk_dd = self._pk_dd_fid * factor
         self.pknow_dd = self._pknow_dd_fid * factor
         if self._only_now:
             self.pk_dd = self.pknow_dd
-        self.f = self._f_fid * df
-        self.f0 = self._f0_fid * df
-        self.fk = self._fk_fid * df
+        self.f = self._f_fid * df / sqrt_dA
+        self.f0 = self._f0_fid * df / sqrt_dA
+        self.fk = self._fk_fid * df / sqrt_dA
         qpar, qper = self._qpar_qper()
         self.qpar = qpar
         self.qper = qper
@@ -659,13 +660,13 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
 
     def tree_flatten(self):
         return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
-                 self.sigma8, self.fsigma8, self.sigma8_fid, self.dA], {'k': self.k})
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
-         obj.sigma8, obj.fsigma8, obj.sigma8_fid, obj.dA) = children
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 
@@ -1515,7 +1516,7 @@ class ShapeFitTheory(BAOTheory):
 
         dm = m - m_{\rm fid}, \quad dn = n_s - n_{s,\rm fid}, \quad
         df = \frac{f \sqrt{A_p}}{(f \sqrt{A_p})_{\rm fid}}
-        dA = \frac{A_p}{A_p)_{\rm fid}}
+        dA = \frac{A_p}{(A_p)_{\rm fid}}
 
     with :math:`f = \sigma_{8,\theta_{cb}} / \sigma_{8,\delta_{cb}}` the growth rate.
 

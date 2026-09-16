@@ -12,7 +12,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 classifiers = ["License :: OSI Approved :: BSD License"]
 dynamic = ["version", "description"]
-requires-python = ">= 3.10"
+requires-python = ">= 3.11"
 dependencies = [
     "numpy>=1.18.0",
     "scipy",
@@ -31,12 +31,13 @@ tests = [
     "folps @ git+https://github.com/cosmodesi/FolpsD",
     "velocileptors @ git+https://github.com/sfschen/velocileptors.git",
     "pybird-lss @ git+https://github.com/pierrexyz/pybird.git",
+    "camb",
+    "fitsio",
     "dynesty",
     "nautilus-sampler",
     "pocomc",
     "zeus-mcmc",
     "h5py",
-    "pyclass @ git+https://github.com/adematti/pyclass",
     "jax",
     "interpax",
     "blackjax"]
@@ -51,6 +52,10 @@ Home = "https://desilike.readthedocs.io/en/latest/"
 
 [tool.pytest.ini_options]
 testpaths = ["desilike"]
+# The `download` tests fetch hundreds of MB of released data over the network, so they are
+# deselected by default; run them with `pytest -m download`.
+markers = ["download: needs network, and downloads hundreds of MB of released data"]
+addopts = "-m 'not download'"
 
 [tool.flit]
 sdist.exclude = ["doc", ".gitignore", ".github", ".readthedocs.yaml"]

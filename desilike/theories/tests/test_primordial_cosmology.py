@@ -207,12 +207,27 @@ class TestCosmoprimoCosmology:
         assert jit_out is None  # __call__ returns None; no crash is the point of this test
 
 
+@pytest.fixture
+def jaxace():
+    """The ACE emulators run on jaxace, which is not on PyPI (it ships with the Zenodo artifacts)."""
+    return pytest.importorskip('jaxace')
+
+
+@pytest.fixture
+def ace_emulator_dir():
+    """The trained ACE emulators, fetched next to the repository rather than packaged."""
+    base = TestACECosmology.emulator_base_dir
+    if not base.is_dir():
+        pytest.skip(f'no ACE emulators at {base}')
+    return base
+
+
 class TestACECosmology:
 
     import desilike as _desilike
     emulator_base_dir = Path(_desilike.__file__).parent.parent.parent / 'ace-emulators'
 
-    def test_ace(self):
+    def test_ace(self, jaxace, ace_emulator_dir):
         from desilike.base import build, get_params
         from desilike.parameter import Parameter, VariableCollection
         from desilike.theories.primordial_cosmology import ACECosmology
@@ -230,7 +245,7 @@ class TestACECosmology:
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': 0.1}]})
         build(cosmo)()
 
-    def test_section_proxy(self):
+    def test_section_proxy(self, jaxace, ace_emulator_dir):
         """cosmo.get_fourier().pk(...)/get_background().comoving_transverse_distance(...) match
         the equivalent flat cosmo.get(...) calls exactly, for a second PrimordialCosmology subclass."""
         from desilike.base import build, get_params
@@ -253,7 +268,7 @@ class TestACECosmology:
         np.testing.assert_allclose(cosmo.get_background().comoving_transverse_distance(z=0.1),
                                     cosmo.get('background.comoving_transverse_distance', z=0.1))
 
-    def test_packaged(self):
+    def test_packaged(self, jaxace):
         """engine='ace' serves DirectSpectrum2Template's and the CMB likelihoods' requirements
         from the packaged jaxace / jaxmapse / jaxcapse trained emulators, matching cosmoprimo
         (class for pk / sigma8_z / rs_drag, camb for the Cl) at the DESI fiducial."""
@@ -402,7 +417,7 @@ class TestACECosmology:
         cl_tt_fiducial = np.asarray(cosmo.get_harmonic().lensed_cl(ellmax=ellmax)['tt'])
         assert not np.allclose(cl_tt[2:], cl_tt_fiducial[2:], rtol=1e-4, atol=0.)
 
-    def test_packaged_out_of_range(self):
+    def test_packaged_out_of_range(self, jaxace):
         """Parameters outside the packaged emulators' training ranges yield NaN results
         (eager and jit) instead of a non-finite crash in downstream spline solves, and a
         warning flags priors wider than the training range at build time."""
@@ -446,7 +461,7 @@ class TestACECosmology:
         assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
         assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
 
-    def test_training_ranges_accepts_a_cosmology(self):
+    def test_training_ranges_accepts_a_cosmology(self, jaxace):
         """A cosmology can be handed over directly, so no caller has to branch on how far it got.
 
         Before a build nothing is loaded, so the answer comes from the engine spec the instance
@@ -516,7 +531,7 @@ class TestACECosmology:
         ACECosmology.truncate_priors(params, engine='does_not_exist')
         assert params['h'].prior.limits == (0.1, 10.)
 
-    def test_packaged_direct_template(self):
+    def test_packaged_direct_template(self, jaxace):
         """DirectSpectrum2Template(cosmo=ACECosmology(engine='ace')) compiles and runs as pure
         JAX: qpar = qper = 1 and f consistent between fk, f0 and fsigma8 / sigma8 at the
         fiducial, with finite gradients with respect to cosmological parameters."""
@@ -541,7 +556,7 @@ class TestACECosmology:
         grad = jax.grad(lambda p: jax.numpy.sum(pipe(p)))(defaults)
         assert np.isfinite(float(grad['logA'])) and float(grad['logA']) > 0.
 
-    def test_fiducial_from_calculator(self):
+    def test_fiducial_from_calculator(self, jaxace, ace_emulator_dir):
         """_get_fiducial(name, calculator=cosmo) re-runs cosmo's own pipeline at the named
         fiducial's parameter values (cosmoprimo-recognized ones only, e.g. h, omega_cdm, ...),
         keeps cosmo's own extra/nuisance params (mu1, Sigma1, ...) unchanged, and returns an

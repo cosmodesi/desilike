@@ -98,6 +98,7 @@ def test_tt_only_excludes_polarization(tmp_path):
     assert not hasattr(like, 'calEE')
 
 
+@pytest.mark.download
 def test_camspec_npipe_lite_install(tmp_path, monkeypatch):
     """Install CamspecNPIPELiteLikelihood to a temporary directory and run it.
 
@@ -118,6 +119,7 @@ def test_camspec_npipe_lite_install(tmp_path, monkeypatch):
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
 
 
+@pytest.mark.download
 def test_act_dr6_spt_lensing_install(tmp_path, monkeypatch):
     """Install ACTDR6SPTLensingLikelihood and run the actplanck_baseline variant.
 
@@ -126,6 +128,9 @@ def test_act_dr6_spt_lensing_install(tmp_path, monkeypatch):
     (install with ``pip install .`` from the spt_act_likelihood repository).
     """
     from desilike.install import Installer
+
+    # Not on PyPI: `pip install .` from the spt_act_likelihood repository.
+    pytest.importorskip('act_dr6_spt_lenslike')
 
     monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
     monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))

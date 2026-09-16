@@ -1,234 +1,133 @@
-import os
-import sys
+"""Nautilus importance nested sampling kernel."""
+
+import logging
 
 import numpy as np
 
-from desilike.samples import Chain
-from .base import BasePosteriorSampler, load_source, Samples, batch_iterate
+try:
+    import nautilus as _nautilus
+    NAUTILUS_INSTALLED = True
+except ModuleNotFoundError:
+    NAUTILUS_INSTALLED = False
+
+from .base import PopulationKernel, update_kwargs
 
 
-class FakePool(object):
+class Nautilus(PopulationKernel):
+    """Importance nested sampler via ``nautilus``.
 
-    def __init__(self, size=1):
-        self.size = size
+    Requires two MPI pools: one for likelihood evaluations and one for
+    internal sampler tasks.  The secondary pool is created lazily on the
+    first :meth:`run` call.
 
-    def map(self, func, values):
-        return func(values)
+    .. rubric:: References
+    - https://github.com/johannesulf/nautilus
+    - https://doi.org/10.1093/mnras/stad2441
+    """
 
+    logger = logging.getLogger('Nautilus')
 
-class NautilusSampler(BasePosteriorSampler):
+    # No kernel-level default: how many rows a posterior evaluation can carry is a property of
+    # the likelihood, not of nautilus, so it is passed in rather than guessed here. Given one,
+    # `run` sizes `n_batch` so that each rank's share is exactly that many rows.
+    _batch_size = None
 
-    check = None
-
-    def __init__(self, *args, nlive=2000, n_update=None, enlarge_per_dim=1.1, n_points_min=None,
-                 split_threshold=100, n_networks=4, neural_network_kwargs=None, n_like_new_bound=None, **kwargs):
+    def __init__(self, **kwargs):
         """
-        Initialize nautilus sampler.
-
-        Note
-        ----
-        nautilus requires state to be saved as hdf5, so requires h5py.
-
         Parameters
         ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
-
-        nlive : int, default=2000
-            Number of "live" points. New bounds are constructed so that
-            they encompass the live points.
-
-        n_update : int, default=None
-            The maximum number of additions to the live set before a new bound
-            is created. If ``None``, use ``nlive``.
-
-        enlarge_per_dim : float, default=1.1
-            Along each dimension, outer ellipsoidal bounds are enlarged by this
-            factor.
-
-        n_points_min : int, default=None
-            The minimum number of points each ellipsoid should have.
-            Effectively, ellipsoids with less than twice that number will not
-            be split further. If ``None``, uses ``npoints_min = ndim + 50``.
-
-        split_threshold: float, default=100
-            Threshold used for splitting the multi-ellipsoidal bound used for
-            sampling. If the volume of the bound prior enlarging is larger than
-            ``split_threshold`` times the target volume, the multi-ellipsiodal
-            bound is split further, if possible.
-
-        n_networks : int, default=4
-            Number of networks used in the estimator.
-
-        neural_network_kwargs : dict, default=None
-            Non-default keyword arguments passed to the constructor of
-            MLPRegressor.
-
-        n_like_new_bound : int, default=None
-            The maximum number of likelihood calls before a new bounds is
-            created. If None, use 10 times ``nlive``.
-
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        **kwargs
+            Extra keyword arguments forwarded to ``nautilus.Sampler``. ``n_batch`` is derived
+            from the pool in :meth:`run` unless given here.
         """
-        self.attrs = dict(n_live=int(nlive), n_update=n_update,
-                          enlarge_per_dim=enlarge_per_dim, n_points_min=n_points_min,
-                          split_threshold=split_threshold, n_networks=n_networks, neural_network_kwargs=neural_network_kwargs or {},
-                          n_like_new_bound=n_like_new_bound)
-        super(NautilusSampler, self).__init__(*args, **kwargs)
-        if self.save_fn is None:
-            raise ValueError('save_fn must be provided to save nautilus state')
-        self.state_fn = [os.path.splitext(fn)[0] + '.nautilus.state.h5' for fn in self.save_fn]
+        self._kwargs = kwargs
+        self._sampler = None
+        self._pool_sampler = None
+        self._initialized = False
 
-    def loglikelihood(self, values):
-        return self.logposterior(values) - self.logprior(values)
-
-    def prior_transform(self, values):
-        values = np.asarray(values)
-        toret = np.empty_like(values)
-        for iparam, (value, param) in enumerate(zip(values.T, self.varied_params)):
-            try:
-                toret[..., iparam] = param.prior.ppf(value)
-            except AttributeError as exc:
-                raise AttributeError('{} has no attribute ppf (maybe infinite prior?). Choose proper prior for nested sampling'.format(param.prior)) from exc
-        return toret
-
-    def _prepare(self):
-        self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
-        self.chains = [None] * len(self.chains)  # avoid chains to be concatenated
-
-    def run(self, *args, **kwargs):
-        """
-        Run sampling. Sampling can be interrupted anytime, and resumed by providing
-        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
-
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
-
-        Parameters
-        ----------
-        min_iterations : int, default=100
-            Minimum number of iterations to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
-
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations to run.
-
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        f_live : float, default=0.01
-            Maximum fraction of the evidence contained in the live set before
-            building the initial shells terminates.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, with:
-
-            - n_shell : Minimum number of points in each shell. The algorithm will sample
-            from the shells until this is reached. Default is 100.
-
-            - n_eff : Minimum effective sample size (ESS).
-            The algorithm will sample from the shells until this is reached. Default is 10000.
-
-        """
-        return super(NautilusSampler, self).run(*args, **kwargs)
-
-    def _run_one(self, start, min_iterations=0, max_iterations=sys.maxsize, check_every=300, check=None, **kwargs):
-
-        import nautilus
-        if check is not None and not isinstance(check, bool): kwargs.update(check)
-        n_eff = kwargs.get('n_eff', 10000)
-        n_shell = kwargs.get('n_shell', 100)
-
-        #from desilike.utils import TaskManager as MPIPool
-        #pool = (FakePool(size=self.mpicomm.size), MPIPool(mpicomm=self.mpicomm))  # yields bugs, _check_same_input fails
-        pool = (FakePool(size=self.mpicomm.size), None)
-
-        def write_derived(sampler):
-            if self.mpicomm.rank == 0:
-                samples, logw, logl = sampler.posterior(return_as_dict=True, equal_weight=False, return_blobs=False)
-                chain = [samples[..., iparam] for iparam, param in enumerate(self.varied_params)]
-                chain.append(logw)
-                chain.append(np.exp(logw))
-                chain = Chain(chain, params=self.varied_params + ['logweight', 'aweight'])
-                if self.resume_derived is not None:
-                    if self.derived is not None:
-                        self.derived = [Samples.concatenate([resume_derived, derived], intersection=True) for resume_derived, derived in zip(self.resume_derived, self.derived)]
-                    else:
-                        self.derived = self.resume_derived
-                chain = self._set_derived(chain)
-                self.resume_chain = chain = self._set_derived(chain)
-                self.resume_chain.save(self.save_fn[self._ichain])
-
-        def wrapper(write_bak):
-
-            def write(sampler, *args, **kwargs):
-                self.mpicomm.Barrier()
-                if self.mpicomm.rank == 0:
-                    write_bak(sampler, *args, **kwargs)
-                write_derived(sampler)
-                self.mpicomm.Barrier()
-
-            return write
-
-        methods_bak = {name: getattr(nautilus.Sampler, name) for name in ['write', 'write_shell_update', 'write_shell_information_update']}
-        for name, method in methods_bak.items():
-            setattr(nautilus.Sampler, name, wrapper(method))
-
-        os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
-
-        self.resume_derived, self.resume_chain = None, None
-        seed = self.rng.randint(0, high=0xffffffff)
-        if self.resume:
-            self.sampler = nautilus.Sampler(self.prior_transform, self.loglikelihood, n_dim=len(self.varied_params), pool=pool, pass_dict=False,
-                                            filepath=self.state_fn[self._ichain], seed=seed, **self.attrs)
-            source = load_source(self.save_fn[self._ichain])[0]
-            self.resume_derived = [source] * 2
-
-        elif not hasattr(self, 'sampler'):
-            self.sampler = nautilus.Sampler(self.prior_transform, self.loglikelihood, n_dim=len(self.varied_params), pool=pool, pass_dict=False,
-                                            filepath=self.state_fn[self._ichain], resume=False, seed=seed, **self.attrs)
-
-        def _run_one_batch(niterations):
-            n_shell_current, n_eff_current = 0, 0
-            if self.sampler.shell_n.size:
-                n_shell_current = np.min(self.sampler.shell_n)
-                n_eff_current = self.sampler.effective_sample_size()
-            self.sampler.run(**{**kwargs, 'n_shell': n_shell_current + niterations,
-                                          'n_eff': n_eff_current + niterations})
-            write_derived(self.sampler)
-            self.resume_derived = self.derived
-            self.derived = None
-            return not (np.any(self.sampler.shell_n < n_shell) or self.sampler.effective_sample_size() < n_eff)
-
-        batch_iterate(_run_one_batch, min_iterations=min_iterations, max_iterations=max_iterations, check_every=check_every)
-
-        for name, method in methods_bak.items():
-            setattr(nautilus.Sampler, name, method)
-        self.derived = self.resume_derived
-        return self.resume_chain
+    def reset_state(self):
+        self._sampler = None
+        self._initialized = False
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/johannesulf/nautilus')
+    def install(cls, installer):
+        installer.pip('nautilus-sampler')
+
+    def init(self, likelihood, prior, rng, **context):
+        _, self._likelihood_logpdf_with_derived = likelihood
+        self._prior_logpdf, self._prior_ppf, _, _ = prior
+        self._rng = rng
+        self._pool = context['pool']
+        self._ndim = context['ndim']
+        self._output_dir = context.get('output_dir')
+
+    def run(self, **kwargs):
+        if not NAUTILUS_INSTALLED:
+            raise ImportError("The 'nautilus-sampler' package is required but not installed.")
+
+        from desilike.samplers.pool import make_pool, wait_many
+
+        # Create the secondary pool on all MPI ranks (needed for wait_many on workers).
+        if self._pool_sampler is None:
+            self._pool_sampler = make_pool(self._pool.comm, batch_size=0)
+
+        if self._pool.main:
+            if not self._initialized:
+                if self._output_dir is not None:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)  # holds nautilus.h5
+                # One posterior evaluation per rank per iteration, as wide as the pool allows.
+                # nautilus hands the pool `n_batch` points and `MPIPool.map` gives rank r the
+                # slice tasks[r::size], so n_batch = batch_size * size makes each rank's share
+                # exactly one full chunk: a single jitted call, always the same shape.
+                #
+                # nautilus' own default is ceil(100 / size) * size, whose per-rank share shrinks
+                # as ranks are added -- 25 rows at 4 ranks, 1 at 128. That is both too wide to
+                # fit at small rank counts (25 stacked P+B evaluations asked for 71.5 GiB) and
+                # too narrow to amortise the jit at large ones.
+                batch_size = self._pool.batch_size
+                if batch_size and 'n_batch' not in self._kwargs:
+                    self._kwargs['n_batch'] = int(batch_size) * self._pool.size
+                    # n_batch also paces the algorithm: a new bound is placed once `n_update`
+                    # (default n_live) points have been added, and the test is only made between
+                    # batches. Past that, bounds land late -- nautilus' own docstring warns of
+                    # it -- so at large rank counts lower `batch_size` rather than let the
+                    # product run away.
+                    n_update = self._kwargs.get('n_update', self._kwargs.get('n_live', 2000))
+                    if self._kwargs['n_batch'] > n_update:
+                        self.logger.warning(
+                            f"n_batch = batch_size x nranks = {self._kwargs['n_batch']} exceeds "
+                            f'n_update = {n_update}: bounds will be placed later than intended. '
+                            f'Lower batch_size (or raise n_live / n_update).')
+                elif batch_size is None:
+                    # The silent path: the pool stacks every task a rank received into one
+                    # evaluation, and how many that is comes from nautilus' n_batch rather than
+                    # from anything the likelihood was sized for.
+                    self.logger.warning(
+                        'No batch_size given, so each rank stacks its whole share of n_batch = '
+                        f"{self._kwargs.get('n_batch', 'ceil(100 / nranks) x nranks')} into a "
+                        'single posterior evaluation. Pass batch_size to bound it.')
+                init_kwargs = update_kwargs(
+                    dict(**self._kwargs), 'nautilus',
+                    prior=self._prior_ppf, likelihood=self._likelihood_logpdf_with_derived,
+                    n_dim=self._ndim, pass_dict=False,
+                    filepath=None if self._output_dir is None else self._output_dir / 'nautilus.h5',
+                    pool=(self._pool, self._pool_sampler),
+                    seed=self._rng.integers(2**32))
+                self._sampler = _nautilus.Sampler(**init_kwargs)
+                self._pool.stop_wait()   # release workers from init-time pool.wait()
+                self._initialized = True
+
+            self._sampler.run(**kwargs)
+            samples, log_w, log_l, blobs = self._sampler.posterior(return_blobs=True)
+            blobs = blobs.reshape(len(samples), -1)
+            log_prior = np.array(list(self._pool.map(self._prior_logpdf, samples)))
+            self._pool.stop_wait()
+            self._pool_sampler.stop_wait()
+            self.logger.info('Finished sampling.')
+            return samples, blobs, dict(aweight=np.exp(log_w), logposterior=log_l + log_prior)
+        else:
+            if not self._initialized:
+                self._initialized = True
+                self._pool.wait()   # serve during nautilus.Sampler.__init__
+            wait_many([self._pool, self._pool_sampler])
+            return None

@@ -1,168 +1,131 @@
+"""Importance sampling kernel."""
+
 import logging
-import warnings
 
 import numpy as np
+from scipy.special import logsumexp
 
-from desilike.utils import BaseClass, is_path, TaskManager
-from desilike.samples import Chain, load_source
-from .base import BasePosteriorSampler
+from ..samples import diagnostics
+from .base import StaticKernel
 
 
-class ImportanceSampler(BaseClass):
+class Importance(StaticKernel):
+    """Reweight an existing sample under a new posterior via importance sampling.
 
-    name = 'importance'
+    Pass an :class:`~desilike.samples.MCSamples` object as the ``samples``
+    keyword argument to :meth:`~desilike.samplers.base.StaticSampler.run`:
 
-    def __init__(self, likelihood, chains, save_fn=None, mpicomm=None):
-        """
-        Importance sample input chains, adding the corresponding weight to :attr:`Chain.aweight`.
+    .. code-block:: python
 
-        Parameters
-        ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
+        sampler = Sampler(new_posterior, kernel=Importance())
+        new_samples = sampler.run(samples=old_samples)
 
-        chains : str, Path, Chain
-            Path to or chains to importance sample.
+    Importance sampling degrades quickly when the proposal (the distribution the
+    input samples were drawn from) does not cover the new posterior: the weight
+    variance grows as ``exp(sigma^2)`` with ``sigma`` the scatter of
+    ``log p_new - log p_old``. The returned samples therefore carry
+    ``attrs['ess']``, ``attrs['khat']`` and ``attrs['logevidence']``, and the
+    kernel warns when the diagnostics say the correction cannot be trusted. When
+    it does, bridge with :class:`~desilike.samplers.smc.SMC` instead: it is the
+    same correction split over a sequence of tempered intermediate distributions.
+    """
 
-        save_fn : str, Path, default=None
-            If not ``None``, save chains to this location.
+    logger = logging.getLogger('Importance')
 
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
-        """
-        if mpicomm is None:
-            mpicomm = likelihood.mpicomm
-        self.likelihood = likelihood
-        #self.pipeline = self.likelihood.runtime_info.pipeline
-        self.mpicomm = mpicomm
-        self.likelihood.solved_default = '.marg'
-        self.varied_params = self.likelihood.varied_params.deepcopy()
-        if self.mpicomm.rank == 0:
-            self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
-        if not self.varied_params:
-            raise ValueError('No parameters to be varied!')
-        if self.mpicomm.rank == 0:
-            self.input_chains = load_source(chains)
-        nchains = self.mpicomm.bcast(len(self.input_chains) if self.mpicomm.rank == 0 else None, root=0)
-        if self.mpicomm.rank != 0:
-            self.input_chains = [None] * nchains
-        self.save_fn = save_fn
-        if save_fn is not None:
-            if is_path(save_fn):
-                self.save_fn = [str(save_fn).replace('*', '{}').format(i) for i in range(self.nchains)]
-            else:
-                if len(save_fn) != self.nchains:
-                    raise ValueError('Provide {:d} chain file names'.format(self.nchains))
+    # Above this Pareto k-hat the weight variance is effectively infinite.
+    khat_threshold = 0.7
+    # Below this ESS fraction the correction is carried by too few samples.
+    ess_threshold = 0.1
 
-    @property
-    def mpicomm(self):
-        return self._mpicomm
-
-    @mpicomm.setter
-    def mpicomm(self, mpicomm):
-        self._mpicomm = mpicomm
-
-    @property
-    def nchains(self):
-        return len(self.input_chains)
-
-    def run(self, subtract_input=False):
-        r"""
-        Run importance sampling.
+    def get_samples(self, varied_params, samples=None, **kwargs):
+        """Extract parameter columns from the input samples.
 
         Parameters
         ----------
-        subtract_input : bool, default=False
-            If ``True``, :attr:`Chain.aweight` is divided by :math:`e^{\mathcal{L} - \mathcal{L}_\mathrm{max}}`,
-            with :math:`\mathcal{L}` the log-posterior.
+        varied_params : VariableCollection
+        samples : MCSamples
+            Input samples from the old posterior.
 
+        Returns
+        -------
+        numpy.ndarray, shape ``(n_samples, ndim)``
         """
-        if getattr(self, '_vlikelihood', None) is None:
-            self._set_vlikelihood()
+        if samples is None:
+            raise ValueError('Importance requires the input samples, as run(samples=...).')
+        missing = [param.name for param in varied_params if param.name not in samples]
+        if missing:
+            raise ValueError(f'Input samples are missing varied parameters {missing}.')
+        columns = [np.asarray(samples[key].value) for key in varied_params]
+        return np.column_stack([column.reshape(len(column), -1) for column in columns])
 
-        nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
-        chains = [None] * self.nchains
-        self.chains = [None] * self.nchains
-        mpicomm_bak = self.mpicomm
-        with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
-            worker_ranks = getattr(tm, 'self_worker_ranks', [])
-            for dest in self.mpicomm.allgather(worker_ranks[0] if worker_ranks else 0):
-                for ichain in range(self.nchains):
-                    chain = Chain.sendrecv(self.input_chains[ichain], source=0, dest=dest, mpicomm=self.mpicomm)
-                    if chain is not None: self.input_chains[ichain] = chain
+    def post_process(self, results, samples=None, combine=False, resample=False, **kwargs):
+        """Reweight ``results`` relative to the original ``samples``.
 
-            self.mpicomm = tm.mpicomm
-            for ichain in tm.iterate(range(self.nchains)):
-                if self.mpicomm.rank == 0:
-                    chain = self.input_chains[ichain].deepcopy()
-                    if subtract_input:
-                        logposterior = chain.logposterior
-                        max_logposterior = 0.
-                        mask = np.isfinite(logposterior)
-                        if mask.any(): max_logposterior = logposterior[mask].max()
-                        chain.aweight[...] /= np.exp(logposterior - max_logposterior)
-                    points = chain.to_dict(params=self.varied_params)
+        Parameters
+        ----------
+        results : MCSamples or None
+            Newly evaluated samples on the main rank; ``None`` on workers.
+        samples : MCSamples
+            Original samples, carrying the old log-posterior and, if they are
+            weighted, the weights under which they represent the old posterior.
+        combine : bool, optional
+            If ``False`` (default), the new posterior *replaces* the old one:
+            weights are ``old_weight * exp(new_log_post - old_log_post)``.
+            If ``True``, the new likelihood is *added* to the old posterior:
+            weights are ``old_weight * exp(new_log_post - new_log_prior)``.
+        resample : bool, optional
+            If ``True``, systematically resample to an equal-weight set of the
+            same size instead of returning weighted samples. Default is ``False``.
 
-                results = self._vlikelihood(points if self.mpicomm.rank == 0 else {})
+        Returns
+        -------
+        MCSamples or None
+        """
+        if results is None:
+            return None
+        if samples is None:
+            raise ValueError('Importance requires the input samples, as run(samples=...).')
+        if combine:
+            # The old posterior stays in the target, so it must not appear in the ratio:
+            # the input weights alone carry it, and the new likelihood multiplies on top.
+            log_w = results.logposterior - results.logprior
+        else:
+            log_w = results.logposterior - samples.logposterior
+        # The input samples represent the old distribution *with* their own weights; dropping
+        # them silently mis-weights any nested / population / previously-reweighted input.
+        log_weight = np.log(np.asarray(samples.weight, dtype='f8'))
+        log_ratio, log_w = log_w, log_w + log_weight
 
-                raise_error = None
-                if self.mpicomm.rank == 0:
-                    (logposterior, derived), errors = results
-                    for param in self.likelihood.all_params.select(fixed=True, derived=False):
-                        chain[param] = np.full(chain.shape, param.value, dtype='f8')
-                    chain.update(derived)
-                    if errors:
-                        for ipoint, error in errors.items():
-                            if isinstance(error[0], self.likelihood.catch_errors):
-                                self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]), {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
-                                for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
-                                    if param in chain:
-                                        chain[param][ipoint, ...] = -np.inf
-                            else:
-                                raise_error = error
-                            if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                                warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
-                    chains[ichain] = chain
-        self.mpicomm = mpicomm_bak
+        nsamples = log_w.size
+        # Two effective sample sizes, and they answer different questions: 'ess' is what the
+        # returned weighted samples are worth, while 'ess_correction' isolates the damage done
+        # by *this* reweighting (the input may already have been degenerate).  k-hat is only
+        # meaningful on the correction ratio: that is the factor whose tail can be heavy when
+        # the proposal fails to cover the new posterior.
+        ess = diagnostics.kish_ess(log_w)
+        ess_correction = diagnostics.kish_ess(log_ratio)
+        khat = diagnostics.pareto_khat(log_ratio)
+        # log(Z_new / Z_old); the input weight normalization cancels.
+        log_evidence = float(logsumexp(log_w) - logsumexp(log_weight))
 
-        for ichain, chain in enumerate(chains):
-            mpiroot_worker = self.mpicomm.rank if chains[ichain] is not None else None
-            for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                if mpiroot_worker is not None: break
-            assert mpiroot_worker is not None
-            if self.mpicomm.bcast(chain is not None, root=mpiroot_worker):
-                chains[ichain] = Chain.sendrecv(chain, source=mpiroot_worker, dest=0, mpicomm=self.mpicomm)
+        self.logger.info('Importance weights: ESS = %.1f / %d (%.3f), correction ESS = %.1f (%.3f), '
+                         'k-hat = %.2f, log(Z_new / Z_old) = %.3f', ess, nsamples, ess / nsamples,
+                         ess_correction, ess_correction / nsamples, khat, log_evidence)
+        if not (khat <= self.khat_threshold):
+            self.logger.warning('Pareto k-hat = %.2f > %.2f: the importance-weight variance is '
+                                'effectively infinite and the ESS above is optimistic. The old '
+                                'distribution does not cover the new posterior; bridge with SMC instead.',
+                                khat, self.khat_threshold)
+        if ess_correction / nsamples < self.ess_threshold:
+            self.logger.warning('Correction ESS fraction %.3f < %.2f: the reweighting rests on ~%d '
+                                'samples. Bridge with SMC instead.',
+                                ess_correction / nsamples, self.ess_threshold, int(ess_correction))
 
-        if self.mpicomm.rank == 0:
-            for ichain, chain in enumerate(chains):
-                self.chains[ichain] = chain
-                if chain is not None:
-                    for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
-                        mask = np.isnan(chain[param])
-                        chain[param][mask] = -np.inf
-                    logposterior = chain[self.likelihood._param_loglikelihood][()] + chain[self.likelihood._param_logprior][()]
-                    max_logposterior = 0.
-                    mask = np.isfinite(logposterior)
-                    if mask.any(): max_logposterior = logposterior[mask].max()
-                    chain.aweight[...] *= np.exp(logposterior - max_logposterior)
-                    self.log_info('Importance weight range {} - {}.'.format(chain.aweight.min(), chain.aweight.max()))
-                    for name in ['size', 'nvaried', 'ndof']:
-                        try:
-                            value = getattr(self.likelihood, name)
-                        except AttributeError:
-                            pass
-                        else:
-                            chain.attrs[name] = value
-            if self.save_fn is not None:
-                for ichain, chain in enumerate(self.chains):
-                    if chain is not None: chain.save(self.save_fn[ichain])
-        return self.chains
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        pass
-
-
-ImportanceSampler._set_vlikelihood = BasePosteriorSampler._set_vlikelihood
+        results.aweight = np.exp(log_w - logsumexp(log_w))
+        results.attrs.update(ess=ess, ess_correction=ess_correction, khat=khat,
+                             logevidence=log_evidence)
+        if resample:
+            index = diagnostics.systematic_resample(results.aweight, nsamples, self.rng)
+            results = results[index]
+            results.aweight = np.ones(nsamples)
+        return results

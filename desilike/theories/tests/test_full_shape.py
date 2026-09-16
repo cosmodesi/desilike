@@ -1,0 +1,1543 @@
+"""Tests for full-shape theories."""
+
+import numpy as np
+import jax
+import pytest
+
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _check(result, name=''):
+    arr = np.asarray(result)
+    assert arr.ndim == 2, f"{name}: expected 2-D result, got shape {arr.shape}"
+    assert arr.shape[0] > 0 and arr.shape[1] > 0, f"{name}: empty result"
+    assert np.isfinite(arr).all(), f"{name}: non-finite values"
+
+
+def _time(fn):
+    """Return the wall-clock time (seconds) to call *fn* once."""
+    import time
+    start = time.perf_counter()
+    fn()
+    return time.perf_counter() - start
+
+
+def _direct_template(**kw):
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template
+    return DirectSpectrum2Template(engine='eisenstein_hu', **kw)
+
+
+def _compile(theory):
+    """Compile *theory* **once** and return a reusable runner.
+
+    Calling ``run(**overrides)`` evaluates the pipeline at the theory's default
+    parameter values updated with *overrides*, reusing the same compiled
+    pipeline -- so a given theory instance is compiled a single time, and
+    several features (shape, finiteness, parameter sensitivity) can be checked
+    from a minimal number of evaluations. The return value is the pipeline
+    output; side-effect attributes (e.g. ``theory.table``) are populated too.
+
+    Passing ``_jit=True`` runs the same call through a ``jax.jit``-compiled
+    version of the pipeline instead (built lazily, once, on first use) -- this
+    catches tracer-incompatible code (e.g. stray ``np.*`` calls on traced
+    values) that only surfaces under tracing.
+    """
+    from desilike.base import build, get_params
+    pipe = build(theory)
+    defaults = {par.name: par._value for par in get_params(theory)}
+    pipe_jit = {}  # lazy cache, built on first _jit=True call
+
+    def run(_jit=False, **overrides):
+        if _jit:
+            if 'pipe' not in pipe_jit:
+                pipe_jit['pipe'] = jax.jit(pipe)
+            return np.asarray(pipe_jit['pipe']({**defaults, **overrides}))
+        return np.asarray(pipe({**defaults, **overrides}))
+
+    return run
+
+
+def _fd_box(calculator, width=3.):
+    """A box `value +- width * fd.eps` per varied parameter.
+
+    The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
+    the emulated region comparable.  NOT the `ref` box: these parameters have none, and the
+    prior is far too wide to evaluate.
+    """
+    from desilike.base import build
+    limits = {}
+    for param in build(calculator).params:
+        # VARIED only.  A fixed parameter does not move, so emulating over it buys nothing and
+        # costs an axis -- 11 axes instead of 5 for a FOLPS pt -- and it is how the box came to
+        # ask for a negative neutrino mass: m_ncdm is fixed, with a leftover fd step.
+        if param.derived or not getattr(param, 'varied', True):
+            continue
+        value = float(np.sum(np.atleast_1d(param.value)))
+        eps = getattr(getattr(param, 'fd', None), 'eps', None) or max(abs(value), 1.) * 0.02
+        low, high = value - width * eps, value + width * eps
+        # A varied parameter sitting AT a prior edge is still possible; skip it rather than clip.
+        # `differentiate` handles the same situation by shifting its stencil inside the prior and
+        # keeping the expansion centre put, which a Taylor expansion can do and a collocation grid
+        # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
+        # the node `_check` asserts the emulator is exact at.
+        bounds = getattr(getattr(param, 'prior', None), 'limits', None)
+        if bounds is not None and np.isfinite(bounds).all():
+            if low < float(bounds[0]) or high > float(bounds[1]):
+                continue
+        limits[param.name] = (low, high)
+    return limits
+
+
+def _emulate(theory, inner_pt=None):
+    """Emulate ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
+    from desilike import build
+    from desilike.base import replace
+    from desilike.emulators import Emulator, Space
+    if inner_pt is None:
+        inner_pt = theory.pt
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
+    emu.train(budget=1, verbose=False)
+    replace(theory, inner_pt, emu.to_calculator())
+    return build(theory)
+
+
+def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
+    """Center: exact match (atol=1e-8). Shifted by 5 %: relative error < tol."""
+    center = {p.name: p.value for p in pipe_exact.params}
+
+    def _call(pipe, values):
+        # The emulated pipeline may expose fewer parameters than the exact one: `_fd_box` skips
+        # any parameter sitting at a prior edge, and one so skipped is frozen inside the
+        # emulator.  A pipeline rejects a name it does not have, so each is given its own subset.
+        return np.asarray(pipe({name: value for name, value in values.items() if name in pipe.params}))
+
+    # rtol as well as atol: "exact at the centre" means to MACHINE precision, and an
+    # absolute-only tolerance says something different at every scale.
+    np.testing.assert_allclose(_call(pipe_emu, center), _call(pipe_exact, center),
+                               atol=1e-8, rtol=1e-10,
+                               err_msg='emulator mismatch at expansion center')
+    if shift_param in center:
+        shifted = {**center, shift_param: center[shift_param] * 1.05}
+        exact_s = _call(pipe_exact, shifted)
+        emu_s = _call(pipe_emu, shifted)
+        reldiff = float(np.max(np.abs(emu_s - exact_s) / (np.abs(exact_s) + 1e-30)))
+        assert reldiff < reldiff_tol, f'[{shift_param}+5%] max reldiff={reldiff:.3f} > {reldiff_tol}'
+
+
+def _check_sensitivity(run, baseline, name, rtol=1e-6, atol=1e-8, **params_overrides):
+    """Assert each param in *params_overrides* individually moves the output away from *baseline*.
+
+    Each param is tested independently: the pipeline is called with only that param shifted,
+    so a single failing param is reported cleanly. Also re-evaluates under ``jax.jit`` for each
+    and checks agreement with eager, catching tracer-incompatible code paths. *rtol*/*atol*
+    default to a tight bit-for-bit-ish bound; loosen for genuinely-compiled (non pure_callback)
+    pipelines chaining many GP/spline ops, where jit's XLA fusion can legitimately reorder
+    floating-point operations relative to eager dispatch (e.g. COMET, ~1e-6 ULP-level noise).
+    """
+    for param_name, value in params_overrides.items():
+        result = run(**{param_name: value})
+        assert not np.allclose(baseline, result), f"{name}: result invariant to {param_name}"
+        jit_result = run(_jit=True, **{param_name: value})
+        np.testing.assert_allclose(jit_result, result, rtol=rtol, atol=atol,
+                                   err_msg=f"{name}: jit result differs from eager for {param_name}")
+
+
+# ── Kaiser ────────────────────────────────────────────────────────────────────
+
+class TestKaiserPoles:
+
+    def test_spectrum_templates(self):
+        """KaiserPTSpectrum2Poles: all three templates produce correct shape and finite output."""
+        from desilike.theories.galaxy_clustering import (
+            KaiserPTSpectrum2Poles, BAOSpectrum2Template, ShapeFitSpectrum2Template,
+        )
+        k = np.linspace(0.02, 0.3, 60)
+        for template in [BAOSpectrum2Template(), ShapeFitSpectrum2Template(), _direct_template()]:
+            theory = KaiserPTSpectrum2Poles(k=k, template=template)
+            _compile(theory)()  # __call__ returns None; output is in table['pk_dd']
+            result = np.asarray(theory.table['pk_dd'])
+            _check(result, 'KaiserPTSpectrum2Poles')
+            assert result.shape == (len(theory.ells), len(k))
+
+    def test_tracer_spectrum(self):
+        """KaiserTracerSpectrum2Poles: shape, b1 sensitivity, and ells=(0,) edge case."""
+        from desilike.theories.galaxy_clustering import KaiserTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = KaiserTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()  # default params (b1 == 1.)
+        _check(base, 'KaiserTracerSpectrum2Poles')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'KaiserTracerSpectrum2Poles', b1=2.0)
+        _check_sensitivity(run, base, 'KaiserTracerSpectrum2Poles', logA=2.0)
+        # ells=(0,) edge case requires a fresh construction (different output shape)
+        assert _compile(KaiserTracerSpectrum2Poles(k=k, ells=(0,)))().shape[0] == 1
+
+    def test_tracer_correlation(self):
+        """KaiserTracerCorrelation2Poles: shape and b1 sensitivity."""
+        from desilike.theories.galaxy_clustering import KaiserTracerCorrelation2Poles
+        s = np.linspace(50., 150., 50)
+        theory = KaiserTracerCorrelation2Poles(s=s)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'KaiserTracerCorrelation2Poles')
+        assert base.shape == (len(theory.ells), len(s))
+        _check_sensitivity(run, base, 'KaiserTracerCorrelation2Poles', b1=2.0)
+
+    def test_emulated(self):
+        """KaiserPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
+        from desilike import build
+        from desilike.base import copy
+        from desilike.theories.galaxy_clustering import (
+            KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, KaiserTracerCorrelation2Poles,
+            BAOSpectrum2Template)
+
+        k = np.linspace(0.02, 0.2, 15)
+        ells = (0, 2)
+        template = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')
+
+        # `copy(template)` for the emulated arm: two graphs are kept alive here, the exact one and
+        # the emulated one, and a theory's constructor configures the template it is handed
+        # (`template.update(k=...)`), which would leave the exact graph reading a template that
+        # has been reconfigured under it. The copy shares the Parameters by name, so both arms
+        # are the same function of the same values.
+        pipe_exact = build(KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template))
+        theory_emu = KaiserTracerSpectrum2Poles(k=k, ells=ells,
+                                                pt=KaiserPTSpectrum2Poles(k=k, ells=ells, template=copy(template)))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        template_s = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')
+        pipe_exact = build(KaiserTracerCorrelation2Poles(s=s, ells=ells, template=template_s))
+        theory_emu = KaiserTracerCorrelation2Poles(s=s, ells=ells, template=copy(template_s))
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
+
+
+# ── TNS ───────────────────────────────────────────────────────────────────────
+
+class TestTNSPoles:
+
+    def test_spectrum_templates_and_param(self):
+        """TNSPTSpectrum2Poles: all three templates give correct shape/finite output,
+        and the first varied parameter changes the result."""
+        from desilike.theories.galaxy_clustering import (
+            TNSPTSpectrum2Poles, BAOSpectrum2Template, ShapeFitSpectrum2Template,
+        )
+        from desilike.base import get_params
+        k = np.linspace(0.02, 0.3, 60)
+        for template in [BAOSpectrum2Template(), ShapeFitSpectrum2Template(), _direct_template()]:
+            theory = TNSPTSpectrum2Poles(k=k, template=template)
+            _compile(theory)()  # __call__ returns None; output is in table['pk_dd']
+            result = np.asarray(theory.table['pk_dd'])
+            _check(result, 'TNSPTSpectrum2Poles')
+            assert result.shape == (len(theory.ells), len(k))
+
+        # Parameter sensitivity on the (cheap default) template, reusing one build.
+        theory = TNSPTSpectrum2Poles(k=k)
+        run = _compile(theory)
+        param = list(get_params(theory).select(fixed=False))[0]
+        lo, hi = (float(v) for v in np.asarray(param.ref.sample(jax.random.key(0), shape=2)))
+        run(**{param.name: lo})
+        r0 = np.asarray(theory.table['pk_dd'])
+        _check(r0, 'TNSPTSpectrum2Poles')
+        if not np.isclose(lo, hi):
+            run(**{param.name: hi})
+            r1 = np.asarray(theory.table['pk_dd'])
+            assert not np.allclose(r0, r1), f"result invariant to {param.name}"
+
+    def test_tracer_spectrum(self):
+        """TNSTracerSpectrum2Poles: shape, b1 sensitivity, and ells=(0, 2) edge case."""
+        from desilike.theories.galaxy_clustering import TNSTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = TNSTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'TNSTracerSpectrum2Poles')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'TNSTracerSpectrum2Poles', b1=2.0)
+        assert _compile(TNSTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_tracer_correlation(self):
+        """TNSTracerCorrelation2Poles: shape and finite values."""
+        from desilike.theories.galaxy_clustering import TNSTracerCorrelation2Poles
+        s = np.linspace(50., 150., 50)
+        theory = TNSTracerCorrelation2Poles(s=s)
+        result = _compile(theory)()
+        _check(result, 'TNSTracerCorrelation2Poles')
+        assert result.shape == (len(theory.ells), len(s))
+
+    def test_emulated(self):
+        """TNSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering import (
+            TNSPTSpectrum2Poles, TNSTracerSpectrum2Poles, TNSTracerCorrelation2Poles,
+        )
+        k = np.linspace(0.02, 0.3, 20)
+        ells = (0, 2)
+
+        pipe_exact = build(TNSTracerSpectrum2Poles(k=k, ells=ells))
+        theory_emu = TNSTracerSpectrum2Poles(k=k, ells=ells, pt=TNSPTSpectrum2Poles(k=k, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        pipe_exact = build(TNSTracerCorrelation2Poles(s=s, ells=ells))
+        theory_emu = TNSTracerCorrelation2Poles(s=s, ells=ells)
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
+
+
+# ── LPT velocileptors ─────────────────────────────────────────────────────────
+
+class TestLPTVelocileptors:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('velocileptors')
+
+    def test_matter_spectrum(self):
+        """LPTVelocileptorsPTSpectrum2Poles: table shape."""
+        from desilike.theories.galaxy_clustering import LPTVelocileptorsPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = LPTVelocileptorsPTSpectrum2Poles(k=k)
+        _compile(theory)()
+        assert np.asarray(theory.table).shape[0] == len(theory.ells)
+
+    def test_tracer_spectrum(self):
+        """LPTVelocileptorsTracerSpectrum2Poles: shape, parameter sensitivity and
+        ells=(0, 2) edge case in both physical and standard bases (b1 is the
+        user-facing parameter name in both; physical basis uses narrower priors)."""
+        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+
+        theory = LPTVelocileptorsTracerSpectrum2Poles(k=k)  # physical basis
+        run = _compile(theory)
+        base = run()
+        _check(base, 'LPTVelocileptorsTracer (physical)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'LPTVelocileptorsTracer (physical)', b1=2.0)
+
+        theory_std = LPTVelocileptorsTracerSpectrum2Poles(k=k, prior_basis='standard')
+        run_std = _compile(theory_std)
+        base_std = run_std()
+        _check(base_std, 'LPTVelocileptorsTracer (standard)')
+        _check_sensitivity(run_std, base_std, 'LPTVelocileptorsTracer (standard)', b1=2.0)
+
+        assert _compile(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_tracer_presets(self):
+        """LPTVelocileptorsTracerSpectrum2Poles: LRG/ELG/QSO fsat/sigv settings run."""
+        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerSpectrum2Poles
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        k = np.linspace(0.02, 0.3, 60)
+        for tracer in ['LRG', 'ELG', 'QSO']:
+            settings = get_physical_stochastic_settings(tracer)
+            theory = LPTVelocileptorsTracerSpectrum2Poles(k=k, **settings)
+            _check(_compile(theory)(), f'LPTVelocileptorsTracer tracer={tracer}')
+
+    def test_tracer_correlation(self):
+        """LPTVelocileptorsTracerCorrelation2Poles: shape in both bases."""
+        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelation2Poles
+        s = np.linspace(50., 150., 50)
+        theory = LPTVelocileptorsTracerCorrelation2Poles(s=s)
+        result = _compile(theory)()
+        _check(result, 'LPTVelocileptorsTracerCorrelation2Poles')
+        assert result.shape == (len(theory.ells), len(s))
+
+        theory_std = LPTVelocileptorsTracerCorrelation2Poles(s=s, prior_basis='standard')
+        _check(_compile(theory_std)(), 'LPTVelocileptorsTracerCorrelation2Poles (standard)')
+
+    def test_emulated(self):
+        """LPTVelocileptorsPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering import (
+            LPTVelocileptorsPTSpectrum2Poles,
+            LPTVelocileptorsTracerSpectrum2Poles, LPTVelocileptorsTracerCorrelation2Poles,
+        )
+        k = np.linspace(0.02, 0.3, 20)
+        ells = (0, 2)
+
+        pipe_exact = build(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
+        theory_emu = LPTVelocileptorsTracerSpectrum2Poles(
+            k=k, ells=ells, pt=LPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        pipe_exact = build(LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
+        theory_emu = LPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
+
+
+# ── REPT velocileptors ────────────────────────────────────────────────────────
+
+class TestREPTVelocileptors:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('velocileptors')
+
+    def test_matter_spectrum(self):
+        """REPTVelocileptorsPTSpectrum2Poles: table shape."""
+        from desilike.theories.galaxy_clustering import REPTVelocileptorsPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = REPTVelocileptorsPTSpectrum2Poles(k=k)
+        _compile(theory)()
+        assert np.asarray(theory.table).shape[0] == len(theory.ells)
+
+    def test_tracer_spectrum(self):
+        """REPTVelocileptorsTracerSpectrum2Poles: shape and parameter sensitivity
+        in both physical and standard bases."""
+        from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+
+        theory = REPTVelocileptorsTracerSpectrum2Poles(k=k)  # physical basis
+        run = _compile(theory)
+        base = run()
+        _check(base, 'REPTVelocileptorsTracer (physical)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'REPTVelocileptorsTracer (physical)', b1=2.0)
+
+        theory_std = REPTVelocileptorsTracerSpectrum2Poles(k=k, prior_basis='standard')
+        run_std = _compile(theory_std)
+        base_std = run_std()
+        _check(base_std, 'REPTVelocileptorsTracer (standard)')
+        _check_sensitivity(run_std, base_std, 'REPTVelocileptorsTracer (standard)', b1=2.0)
+
+    def test_fixed_template_recompute_caching(self):
+        """REPTVelocileptorsTracerSpectrum2Poles + FixedSpectrum2Template, eager: varying
+        only the bias parameter b1 must not re-run the external REPT PT calculator
+        (its own params and deps -- FixedSpectrum2Template has none free -- are
+        unchanged), only the cheap JAX bias-combination step in the Tracer.
+
+        Note this caching is an eager-only optimization (base.py's _run_graph skips a
+        node when its own params are unchanged and no dep was called): jax.jit traces
+        and re-embeds every node's pure_callback unconditionally, so a single
+        jax.jit(pipe) re-runs REPT on every call regardless of which parameter changed
+        -- this test therefore exercises the eager (non-jit) path specifically.
+        """
+        from desilike.base import build, get_params
+        from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerSpectrum2Poles, FixedSpectrum2Template
+
+        k = np.linspace(0.02, 0.3, 60)
+        theory = REPTVelocileptorsTracerSpectrum2Poles(k=k, template=FixedSpectrum2Template())
+        pipe = build(theory)
+        defaults = {p.name: p._value for p in get_params(theory)}
+
+        base = np.asarray(pipe(defaults))  # first call: also runs REPT
+        _check(base, 'REPTVelocileptorsTracer (FixedSpectrum2Template, eager, first call)')
+        first_call_time = _time(lambda: pipe(defaults))  # repeat default call: nothing changed at all
+
+        # First time a *different* b1 is seen, the (cheap) bias-combination JAX ops get
+        # dispatched for that code path; REPT itself must still be skipped. Treat this as
+        # a second warm-up call, then check several more b1 values are all fast.
+        _time(lambda: pipe({**defaults, 'b1': 2.0}))
+
+        times, results = [], []
+        for b1 in [1.6, 2.4, 3.2]:
+            results.append(np.asarray(pipe({**defaults, 'b1': b1})))
+            times.append(_time(lambda b1=b1: pipe({**defaults, 'b1': b1})))
+
+        assert not np.allclose(base, results[0]), 'result invariant to b1'
+        assert max(times) < 0.3 * first_call_time, (
+            f'varying only b1 took {times} (max {max(times):.3f}s), not much faster than '
+            f'a repeated default-params call at {first_call_time:.3f}s -- expected the '
+            f'external REPT PT calculator (unchanged params/deps) to be skipped, not re-run'
+        )
+
+    def test_tracer_correlation(self):
+        """REPTVelocileptorsTracerCorrelation2Poles: shape and finite values."""
+        from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerCorrelation2Poles
+        s = np.linspace(50., 150., 50)
+        theory = REPTVelocileptorsTracerCorrelation2Poles(s=s)
+        result = _compile(theory)()
+        _check(result, 'REPTVelocileptorsTracerCorrelation2Poles')
+        assert result.shape == (len(theory.ells), len(s))
+
+    def test_emulated(self):
+        """REPTVelocileptorsPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering import (
+            REPTVelocileptorsPTSpectrum2Poles,
+            REPTVelocileptorsTracerSpectrum2Poles, REPTVelocileptorsTracerCorrelation2Poles,
+        )
+        k = np.linspace(0.02, 0.3, 20)
+        ells = (0, 2)
+
+        pipe_exact = build(REPTVelocileptorsTracerSpectrum2Poles(k=k, ells=ells))
+        theory_emu = REPTVelocileptorsTracerSpectrum2Poles(
+            k=k, ells=ells, pt=REPTVelocileptorsPTSpectrum2Poles(k=k, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        pipe_exact = build(REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells))
+        theory_emu = REPTVelocileptorsTracerCorrelation2Poles(s=s, ells=ells)
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
+
+
+# ── PyBird ────────────────────────────────────────────────────────────────────
+
+class TestPyBird:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('pybird')
+        # The installed pybird imports `numpy.trapz`, removed in numpy 2 (it is `trapezoid`
+        # now), so every one of these dies in pybird's own import.  Nothing on the desilike
+        # side can fix that; skip until pybird is rebuilt against numpy 2.
+        try:
+            import pybird.module  # noqa: F401
+        except ImportError as exc:
+            pytest.skip(f'installed pybird is not numpy 2 compatible: {exc}')
+
+    def test_matter_spectrum(self):
+        """PyBirdPTSpectrum2Poles: runs without error."""
+        from desilike.theories.galaxy_clustering import PyBirdPTSpectrum2Poles
+        _compile(PyBirdPTSpectrum2Poles(k=np.linspace(0.02, 0.3, 60)))()
+
+    def test_tracer_spectrum(self):
+        """PyBirdTracerSpectrum2Poles: shape, b1 sensitivity (eftoflss),
+        plus westcoast/eastcoast bases run."""
+        from desilike.theories.galaxy_clustering import PyBirdTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = PyBirdTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'PyBirdTracerSpectrum2Poles')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'PyBirdTracerSpectrum2Poles', b1=2.0)
+
+        for eft_basis in ['westcoast', 'eastcoast']:
+            theory = PyBirdTracerSpectrum2Poles(k=k, eft_basis=eft_basis)
+            _check(_compile(theory)(), f'PyBirdTracerSpectrum2Poles ({eft_basis})')
+
+    def test_tracer_correlation(self):
+        """PyBirdTracerCorrelation2Poles: shape and b1 sensitivity."""
+        from desilike.theories.galaxy_clustering import (
+            PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
+        )
+        s = np.linspace(50., 150., 50)
+        _compile(PyBirdPTCorrelation2Poles(s=s))()  # smoke-test matter correlation
+
+        theory = PyBirdTracerCorrelation2Poles(s=s)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'PyBirdTracerCorrelation2Poles')
+        assert base.shape == (len(theory.ells), len(s))
+        _check_sensitivity(run, base, 'PyBirdTracerCorrelation2Poles', b1=2.0)
+
+    def test_emulated(self):
+        """PyBirdPTSpectrum2Poles / PyBirdPTCorrelation2Poles emulated in spectrum and correlation."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering import (
+            PyBirdPTSpectrum2Poles, PyBirdTracerSpectrum2Poles,
+            PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
+        )
+        k = np.linspace(0.02, 0.3, 20)
+        ells = (0, 2)
+
+        pipe_exact = build(PyBirdTracerSpectrum2Poles(k=k, ells=ells))
+        theory_emu = PyBirdTracerSpectrum2Poles(k=k, ells=ells, pt=PyBirdPTSpectrum2Poles(k=k, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        pipe_exact = build(PyBirdTracerCorrelation2Poles(s=s, ells=ells))
+        theory_emu = PyBirdTracerCorrelation2Poles(s=s, ells=ells, pt=PyBirdPTCorrelation2Poles(s=s, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+    
+
+# ── FOLPS ─────────────────────────────────────────────────────────────────────
+
+class TestFOLPS:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('folps')
+
+    def test_matter_spectrum(self):
+        """FOLPSPTSpectrum2Poles: table shape."""
+        from desilike.theories.galaxy_clustering import FOLPSPTSpectrum2Poles
+        theory = FOLPSPTSpectrum2Poles(k=np.linspace(0.02, 0.3, 60))
+        _compile(theory)()
+        assert np.asarray(theory.table[0]).shape[0] > 0
+
+    def test_tracer_spectrum(self):
+        """FOLPSTracerSpectrum2Poles: shape, parameter sensitivity and ells=(0, 2)
+        edge case across all four prior_basis options."""
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+
+        # Default physical_aap basis.
+        theory = FOLPSTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'FOLPSTracerSpectrum2Poles (physical_aap)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum2Poles (physical_aap)', b1=2.0)
+
+        # Standard basis (different priors, same parameter names).
+        theory_std = FOLPSTracerSpectrum2Poles(k=k, prior_basis='standard')
+        run_std = _compile(theory_std)
+        base_std = run_std()
+        _check(base_std, 'FOLPSTracerSpectrum2Poles (standard)')
+        _check_sensitivity(run_std, base_std, 'FOLPSTracerSpectrum2Poles (standard)', b1=2.0)
+
+        # Remaining physical variants.
+        for prior_basis in ['physical', 'tcm_chudaykin_aap']:
+            theory_pb = FOLPSTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            run_pb = _compile(theory_pb)
+            base_pb = run_pb()
+            _check(base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})')
+            _check_sensitivity(run_pb, base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})', b1=2.0)
+
+        # fsat / sigv passed directly (e.g. the output of get_physical_stochastic_settings).
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        settings = get_physical_stochastic_settings('LRG')
+        theory_lrg = FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap', **settings)
+        _check(_compile(theory_lrg)(), 'FOLPSTracerSpectrum2Poles (LRG fsat/sigv)')
+
+        assert _compile(FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_use_gtns(self):
+        """``use_GTNS`` controls the perturbative FoG term independently of ``damping_method``.
+
+        ``None`` (the default) must reproduce the ``damping_method``-driven behavior exactly --
+        GTNS kept for the legacy ``'loop+ctr'``, dropped for every ``'tree+...'`` method -- while
+        ``True`` / ``False`` override it.  In particular ``'tree+loop+ctr'`` with ``use_GTNS=True``
+        is the tree-damped, GTNS-kept convention (comet's ``VDG_infty`` structure), which no
+        ``damping_method`` alone can express.
+        """
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 40)
+        values = dict(b1=2.0, b2=0.5, bs=0.3, alpha0=2.0, sn0=0.5, X_FoG=4.0)
+
+        def poles(damping_method, use_GTNS=None, damping='vdg', **overrides):
+            theory = FOLPSTracerSpectrum2Poles(k=k, damping=damping, damping_method=damping_method,
+                                               use_GTNS=use_GTNS)
+            return np.asarray(_compile(theory)(**{**values, **overrides}))
+
+        for damping_method in ['loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn']:
+            implied = (damping_method == 'loop+ctr')
+            default = poles(damping_method)
+            np.testing.assert_allclose(poles(damping_method, use_GTNS=implied), default, rtol=1e-12, atol=0.,
+                                       err_msg=f'use_GTNS=None != use_GTNS={implied} for {damping_method!r}')
+            flipped = poles(damping_method, use_GTNS=not implied)
+            assert np.max(np.abs(flipped - default)) / np.max(np.abs(default)) > 1e-3, \
+                f'use_GTNS={not implied} did not change the model for {damping_method!r}'
+
+        # With W = 1 (damping='lor', X_FoG=0) the damping_method is inert, so use_GTNS is the
+        # only difference left between the two methods.
+        undamped = dict(damping='lor', X_FoG=0.)
+        np.testing.assert_allclose(poles('tree+loop+ctr', use_GTNS=True, **undamped),
+                                   poles('loop+ctr', **undamped), rtol=1e-12, atol=0.,
+                                   err_msg="W=1: 'tree+loop+ctr' + use_GTNS=True != 'loop+ctr'")
+
+        for bad in ['yes', 2]:
+            with pytest.raises(ValueError):
+                _compile(FOLPSTracerSpectrum2Poles(k=k, use_GTNS=bad))
+
+    def test_tracer_correlation(self):
+        """FOLPSTracerCorrelation2Poles: shape in both bases."""
+        from desilike.theories.galaxy_clustering import FOLPSTracerCorrelation2Poles
+        s = np.linspace(50., 150., 50)
+        theory = FOLPSTracerCorrelation2Poles(s=s)
+        result = _compile(theory)()
+        _check(result, 'FOLPSTracerCorrelation2Poles')
+        assert result.shape == (len(theory.ells), len(s))
+
+        theory_std = FOLPSTracerCorrelation2Poles(s=s, prior_basis='standard')
+        _check(_compile(theory_std)(), 'FOLPSTracerCorrelation2Poles (standard)')
+
+    def test_tracer_bispectrum(self):
+        """FOLPSTracerSpectrum3Poles: shape, parameter sensitivity and prior_basis variants."""
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum3Poles
+
+        k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)  # diagonal (k1, k2) pairs
+
+        # Default physical_aap basis.
+        theory = FOLPSTracerSpectrum3Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'FOLPSTracerSpectrum3Poles (physical_aap)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum3Poles (physical_aap)', b1=2.0)
+
+        # Standard basis (b1 defaults to 2.0; use 3.0 for sensitivity check).
+        theory_std = FOLPSTracerSpectrum3Poles(k=k, prior_basis='standard')
+        run_std = _compile(theory_std)
+        base_std = run_std()
+        _check(base_std, 'FOLPSTracerSpectrum3Poles (standard)')
+        _check_sensitivity(run_std, base_std, 'FOLPSTracerSpectrum3Poles (standard)', b1=3.0)
+
+        # Remaining physical variants.
+        for prior_basis in ['physical', 'tcm_chudaykin_aap']:
+            theory_pb = FOLPSTracerSpectrum3Poles(k=k, prior_basis=prior_basis)
+            _check(_compile(theory_pb)(), f'FOLPSTracerSpectrum3Poles ({prior_basis})')
+
+        # Custom ells subset.
+        theory_ells = FOLPSTracerSpectrum3Poles(k=k, ells=((0, 0, 0),))
+        assert _compile(theory_ells)().shape[0] == 1
+
+    def test_emulated(self):
+        """FOLPSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering import (
+            FOLPSPTSpectrum2Poles,
+            FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
+        )
+        k = np.linspace(0.02, 0.3, 20)
+        ells = (0, 2)
+
+        pipe_exact = build(FOLPSTracerSpectrum2Poles(k=k, ells=ells))
+        theory_emu = FOLPSTracerSpectrum2Poles(k=k, ells=ells, pt=FOLPSPTSpectrum2Poles(k=k, ells=ells))
+        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+
+        s = np.linspace(50., 150., 10)
+        pipe_exact = build(FOLPSTracerCorrelation2Poles(s=s, ells=ells))
+        theory_emu = FOLPSTracerCorrelation2Poles(s=s, ells=ells)
+        _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1')
+
+
+# ── JAXEffort ────────────────────────────────────────────────────────────────
+
+class TestJAXEffort:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('jaxeffort')
+
+    def test_tracer_spectrum_standard(self):
+        """JAXEffortTracerSpectrum2Poles standard basis: shape, finite output, b1 sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2, 4))
+        run = _compile(theory)
+        base = run()
+        _check(base, 'JAXEffortTracerSpectrum2Poles (standard)')
+        assert base.shape == (3, len(k))
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', b1=3.0)
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', logA=2.5)
+
+    def test_tracer_spectrum_physical(self):
+        """JAXEffortTracerSpectrum2Poles physical basis: shape, finite output, b1 sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2, 4), prior_basis='physical')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'JAXEffortTracerSpectrum2Poles (physical)')
+        assert base.shape == (3, len(k))
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (physical)', b1=3.0)
+
+    def test_tracer_presets(self):
+        """JAXEffortTracerSpectrum2Poles: LRG/ELG/QSO fsat/sigv settings run without error."""
+        from desilike.theories.galaxy_clustering.full_shape import (
+            JAXEffortTracerSpectrum2Poles, get_physical_stochastic_settings,
+        )
+        k = np.linspace(0.01, 0.2, 20)
+        for tracer in ['LRG', 'ELG', 'QSO']:
+            settings = get_physical_stochastic_settings(tracer)
+            theory = JAXEffortTracerSpectrum2Poles(k=k, **settings)
+            _check(_compile(theory)(), f'JAXEffortTracerSpectrum2Poles tracer={tracer}')
+
+    def test_ells_subset(self):
+        """JAXEffortTracerSpectrum2Poles: ells=(0, 2) gives the right output shape."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        assert _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_training_ranges(self):
+        """training_ranges / truncate_priors classmethods (PT and tracer classes): the
+        'emulator' basis keeps the networks' native inputs (z, H0, m_ncdm_tot), the 'cosmo'
+        basis maps them to sampled parameter names; out-of-range parameters NaN-mask the
+        tracer prediction at runtime."""
+        from desilike import Parameter, VariableCollection
+        from desilike.theories.galaxy_clustering.full_shape import (
+            JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, _JAXEFFORT_THETA_NAMES,
+        )
+
+        ranges_emulator = JAXEffortTracerSpectrum2Poles.training_ranges(basis='emulator')
+        assert set(ranges_emulator) == set(_JAXEFFORT_THETA_NAMES)
+        ranges = JAXEffortTracerSpectrum2Poles.training_ranges()  # basis='cosmo'
+        assert 'z' not in ranges and 'H0' not in ranges and 'm_ncdm_tot' not in ranges
+        assert ranges['h'] == (ranges_emulator['H0'][0] / 100., ranges_emulator['H0'][1] / 100.)
+        assert ranges['m_ncdm'] == ranges_emulator['m_ncdm_tot']
+        assert all(low < high for low, high in ranges.values())
+        # PT and tracer classes expose the same classmethods.
+        assert JAXEffortPTSpectrum2Poles.training_ranges() == ranges
+
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        params.set(Parameter('logA', value=3.036, prior=dict(limits=[1.61, 3.91])))
+        JAXEffortTracerSpectrum2Poles.truncate_priors(params)
+        assert params['h'].prior.limits == ranges['h']
+        low, high = ranges['logA']
+        assert params['logA'].prior.limits == (max(1.61, low), min(3.91, high))
+
+        # Runtime out-of-training-range guard: NaN prediction instead of silent extrapolation.
+        k = np.linspace(0.01, 0.2, 20)
+        run = _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))
+        assert np.isfinite(np.asarray(run())).all()
+        assert np.isnan(np.asarray(run(logA=ranges['logA'][1] + 0.5))).all(), \
+            'JAXEffortTracerSpectrum2Poles: expected NaN outside the training range'
+
+
+# ── COMET ─────────────────────────────────────────────────────────────────────
+
+class TestCOMET:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('comet')
+
+    def test_matter_spectrum(self):
+        """COMETPTSpectrum2Poles: table has shape (ndiagrams, nells, nk) with finite values."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = COMETPTSpectrum2Poles(k=k)
+        _compile(theory)()
+        table = np.asarray(theory.table)
+        assert table.shape == (len(COMETPTSpectrum2Poles._diagrams), len(theory.ells), len(k)), \
+            f'table shape mismatch: {table.shape}'
+        assert np.isfinite(table).all(), 'COMETPTSpectrum2Poles: non-finite table'
+
+    def test_cosmo_sensitivity(self):
+        """COMETTracerSpectrum2Poles/3Poles: jit-vs-eager sensitivity to *cosmological*
+        parameters (h, omega_cdm, omega_b, n_s), not just bias -- regression test for
+        comet's background/growth machinery (AP via compute_ap_params, the s12/f
+        derived via compute_s12_f) under jit. Includes h=0.3, an extreme-but-finite
+        value that pushes Om0 above 1 (Ode0 < 0): comet's growth Ode0 floor keeps the
+        derived s12/f finite *and in range* there (f(z=1) ~ 1.03 < 1.05), so the result
+        stays finite. h=3.0 instead drives f(z=1) ~ 0.3 below its GP training range
+        (0.5, 1.05): comet's jax path then taints the outputs with NaN (instead of
+        silently evaluating at the clipped point), while every raw parameter is in range."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles
+        comet_tol = dict(rtol=2e-3, atol=1e-6)
+        cosmo_overrides = [('h', 0.7), ('h', 0.3), ('omega_cdm', 0.13), ('omega_b', 0.0235), ('n_s', 0.98)]
+
+        k = np.linspace(0.02, 0.3, 60)
+        theory = COMETTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        for param_name, value in cosmo_overrides:
+            result = run(**{param_name: value})
+            assert np.isfinite(result).all(), f'COMETTracerSpectrum2Poles ({param_name}={value}): non-finite result'
+            _check_sensitivity(run, base, f'COMETTracerSpectrum2Poles ({param_name}={value})',
+                               **{param_name: value}, **comet_tol)
+        assert np.isnan(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected NaN (derived f below its training range)'
+
+        k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        theory3 = COMETTracerSpectrum3Poles(k=k3)
+        run3 = _compile(theory3)
+        base3 = run3()
+        for param_name, value in cosmo_overrides:
+            result3 = run3(**{param_name: value})
+            assert np.isfinite(result3).all(), f'COMETTracerSpectrum3Poles ({param_name}={value}): non-finite result'
+            _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
+                               **{param_name: value}, **comet_tol)
+        assert np.isnan(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected NaN (derived f below its training range)'
+
+    def test_out_of_training_range(self):
+        """Parameters outside comet's training ranges yield NaN poles (both the PT-split and
+        pt=False direct paths) instead of narrowed priors: the priors are left untouched, and
+        a build-time warning flags the effective prior truncation."""
+        import warnings as _warnings
+        from desilike.base import get_params
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+
+        k = np.linspace(0.02, 0.3, 20)
+        for pt in [None, False]:
+            with _warnings.catch_warnings(record=True) as caught:
+                _warnings.simplefilter('always')
+                theory = COMETTracerSpectrum2Poles(k=k, pt=pt)
+                run = _compile(theory)
+                base = run()
+            assert any('training range' in str(warning.message) for warning in caught), f'no truncation warning (pt={pt})'
+            # priors are no longer narrowed to the emulator training ranges
+            prior_limits = get_params(theory)['n_s'].prior.limits
+            assert prior_limits[1] > 1.03, prior_limits
+            assert np.isfinite(base).all()
+            result = run(n_s=1.08)  # outside comet's ns training range (0.9, 1.03)
+            assert np.isnan(np.asarray(result)).all(), f'expected all-NaN poles (pt={pt}): {result}'
+
+    def test_tracer_spectrum(self):
+        """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+
+        # Default EggScoSmi+Comet basis.
+        theory = COMETTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        # COMET is a genuinely-compiled (non pure_callback) GP-emulator pipeline: jit's XLA
+        # fusion can reorder floating-point ops relative to eager, giving ~1e-7 relative
+        # differences in the GP output (Pk_lin). The bias decomposition then amplifies these
+        # by up to ~1000x due to near-cancellation between tree-level and one-loop terms
+        # (poles ~5 from terms of order ~400), giving up to ~1e-3 relative error in poles.
+        comet_tol = dict(rtol=2e-3, atol=1e-6)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        # All free bias params: b1 (linear), b2/g2/g21 (higher-order). cnlo is fixed=True for VDG_infty.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, g21=0.3, **comet_tol)
+        # Comet counterterms (c0/c2/c4; cnlo is fixed=True for VDG_infty).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', c0=1.0, c2=1.0, c4=1.0, **comet_tol)
+        # Stochastic shot-noise params.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', NP0=0.1, NP20=0.1, NP22=0.1, **comet_tol)
+        # avir (VDG_infty FoG damping): regression test ensuring avir is correctly passed to
+        # PX_ell() (which, unlike Pell(), doesn't internally refresh RSD params from its params dict).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', avir=10.0, **comet_tol)
+
+        # Other bias bases (each with Comet counterterms); bias_overrides covers all free bias params,
+        # ct_overrides covers all free counterterm + stochastic params.
+        # bGam3 (AssBauGre), b3t (AmiGleKok), btd (DESI non-physical) are fixed=True → omitted.
+        # cnlo is fixed=True for VDG_infty → omitted. The physical bases expose FOLPSD's names
+        # (b1/b2/bs/b3, alpha0/alpha2/alpha4, sn0/sn2/sn22), not comet's own.
+        comet_ct = dict(c0=1.0, c2=1.0, c4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
+        physical_ct = dict(alpha0=1.0, alpha2=1.0, alpha4=1.0, sn0=0.1, sn2=0.1, sn22=0.1)
+        for prior_basis, bias_overrides, ct_overrides in [
+            ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5), comet_ct),
+            ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3), comet_ct),
+            ('DESI+Comet',      dict(b1=2.0, b2d=0.5, bk2=0.3), comet_ct),
+            ('physical',        dict(b1=2.0, b2=0.5, bs=0.3, b3=0.2), physical_ct),
+        ]:
+            theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            run_bb = _compile(theory_bb)
+            base_bb = run_bb()
+            _check(base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})')
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **bias_overrides, **comet_tol)
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **ct_overrides, **comet_tol)
+
+        # Other counterterm bases (each with EggScoSmi bias): check all free ct + stochastic params.
+        # cnlo/cnlos are fixed=True for VDG_infty → omitted.
+        # DESIct non-physical NP20/NP22 omitted: they are not divided by nbar in _get_canonical_params
+        # (unlike Comet/ClassPT/PBJ), so NP20=0.1 only produces a ~1e-5 absolute change — below
+        # np.allclose's threshold for poles of order 1e4. NP0=0.1 passes because it is h^-3 normalized.
+        for ct_basis, ct_overrides in [
+            ('ClassPT', dict(b1=2.0, c0s=1.0, c2s=1.0, c4s=1.0, NP0=0.1, NP20s=0.1, NP22s=0.1)),
+            ('PBJ',     dict(b1=2.0, c0t=1.0, c2t=1.0, c4t=1.0, NP0=0.1, eps0=0.1, eps2=0.1)),
+            ('DESIct',  dict(b1=2.0, a0=1.0, a2=1.0, a4=1.0, NP0=0.1)),
+        ]:
+            theory_ct = COMETTracerSpectrum2Poles(k=k, prior_basis=f'EggScoSmi+{ct_basis}')
+            run_ct = _compile(theory_ct)
+            base_ct = run_ct()
+            _check(base_ct, f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})')
+            _check_sensitivity(run_ct, base_ct, f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})', **ct_overrides, **comet_tol)
+
+        # ells subset.
+        assert _compile(COMETTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_tracer_spectrum_direct(self):
+        """COMETTracerSpectrum2Poles(pt=False): comet's Pell() (monolithic, bias-combined,
+        no separate PT calculator) must agree with the default PX_ell()-decomposed path."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        comet_tol = dict(rtol=2e-3, atol=1e-6)
+
+        theory = COMETTracerSpectrum2Poles(k=k, pt=False)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', avir=10.0, **comet_tol)
+
+        theory_shared = COMETTracerSpectrum2Poles(k=k)
+        run_shared = _compile(theory_shared)
+        for prior_basis, sensitivity_param, override in [
+            ('EggScoSmi+Comet', 'b1', dict(b1=2.0)),
+            ('AssBauGre+Comet', 'b1', dict(b1=2.0)),
+            ('AmiGleKok+Comet', 'b1t', dict(b1t=2.0)),
+            ('DESI+Comet',      'b1', dict(b1=2.0)),
+            ('physical_aap',        'b1', dict(b1=2.0)),
+            ('EggScoSmi+ClassPT', None, {}),
+            ('EggScoSmi+PBJ', None, {}),
+            ('EggScoSmi+DESIct', None, {}),
+        ]:
+            theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            theory_bb_direct = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis, pt=False)
+            base_shared = np.asarray(_compile(theory_bb)(**override))
+            base_direct = np.asarray(_compile(theory_bb_direct)(**override))
+            np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
+                                       err_msg=f'COMETTracerSpectrum2Poles ({prior_basis}): pt=False disagrees with shared PT')
+
+    def test_stochastic_normalization(self):
+        """The stochastic terms are analytic, so both COMET paths must reproduce them exactly:
+        NP0 -> 1/nbar on the monopole, NP20 -> k^2/nbar (isotropic), NP22 -> k^2/nbar on the
+        quadrupole.  Regression for the pt=False path, which used to divide NP0/NP20/NP22 by
+        h^3/h^5: that rescaling compensates the PX_ell() spline's Mpc -> Mpc/h conversion of
+        the noise columns (pt=True), but Pell() adds its stochastic term outside the spline,
+        already in (Mpc/h)^3."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 20)
+        nbar = 3e-4
+
+        runs = {}
+        for pt in [None, False]:
+            theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='EggScoSmi+Comet')
+            if pt is False:
+                theory = COMETTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='EggScoSmi+Comet', pt=False)
+            runs[pt] = run = _compile(theory)
+            base = np.asarray(run(b1=2.))
+            # NP0 is a pure constant added to the monopole: exact, no spline involved.
+            response = np.asarray(run(b1=2., NP0=1.)) - base
+            np.testing.assert_allclose(response[0], 1. / nbar, rtol=1e-9,
+                                       err_msg=f'COMETTracerSpectrum2Poles (pt={pt}): NP0 monopole response is not 1/nbar')
+            np.testing.assert_allclose(response[1:], 0., atol=1e-6,
+                                       err_msg=f'COMETTracerSpectrum2Poles (pt={pt}): NP0 leaks into ell > 0')
+
+        # NP20 (isotropic k^2) and NP22 (quadrupole k^2) go through the spline on the pt=True
+        # path, so the two paths agree only at the ~1e-3 interpolation level.
+        for name in ['NP20', 'NP22']:
+            responses = [np.asarray(run(b1=2., **{name: 1.})) - np.asarray(run(b1=2.)) for run in runs.values()]
+            np.testing.assert_allclose(responses[1], responses[0], rtol=1e-3, atol=1e-8,
+                                       err_msg=f'COMETTracerSpectrum2Poles: pt=False {name} response disagrees with shared PT')
+
+    def test_physical_stochastic_convention(self):
+        """In the ``physical``/``physical_aap`` bases the stochastic sector follows the
+        TG_2pt3pt_priors document rather than comet's native columns.
+
+        P(k): ``NP20`` is the document's SN_2, multiplying k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)],
+        so it feeds both of comet's k^2 columns and means the same thing as FOLPSD's ``sn2``.
+        B: ``NP0`` carries the document's explicit factor 2 (comet absorbs it into NP0, its
+        power spectrum does not), so it means the same thing as FOLPSD's ``sn0``.
+        The native bases keep comet's own convention.
+        """
+        from desilike.theories.galaxy_clustering import (COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
+                                                         FOLPSTracerSpectrum2Poles, FOLPSTracerSpectrum3Poles)
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        k = np.linspace(0.02, 0.3, 20)
+        nbar, b1 = 3e-4, 2.
+        settings = get_physical_stochastic_settings()
+        sn2_amplitude = settings['fsat'] * settings['sigv']**2 / nbar
+
+        run = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='physical_aap'))
+        response = np.asarray(run(b1=b1, sn2=1.)) - np.asarray(run(b1=b1))
+        # SN_2 k^2 mu^2 -> (1/3, 2/3, 0) on (P0, P2, P4).
+        for iell, weight in enumerate([1. / 3., 2. / 3., 0.]):
+            np.testing.assert_allclose(response[iell], weight * sn2_amplitude * k**2, rtol=1e-6, atol=1e-8,
+                                       err_msg=f'COMET physical_aap: sn2 is not SN_2 k^2 mu^2 (ell index {iell})')
+        # ... and it is then the same parameter as FOLPSD's sn2.
+        run_folps = _compile(FOLPSTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap'))
+        folps_response = np.asarray(run_folps(b1=b1, sn2=1.)) - np.asarray(run_folps(b1=b1))
+        np.testing.assert_allclose(response, folps_response, rtol=1e-6, atol=1e-8,
+                                   err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
+
+        # The physical bases expose FOLPSD's names, so the two theories share them.
+        from desilike.base import get_params as get_params
+        cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
+                       'Omega_k', 'w0_fld', 'wa_fld'}
+        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
+        folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
+        assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
+        assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
+
+        # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
+        run_native = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='EggScoSmi+Comet'))
+        native = np.asarray(run_native(b1=b1, NP20=1.)) - np.asarray(run_native(b1=b1))
+        assert np.max(np.abs(native[1])) < 1e-9 * np.max(np.abs(native[0])), 'native NP20 leaked into the quadrupole'
+
+        # Bispectrum: NP0 gets the factor 2, so it matches FOLPSD's sn0 (whose response is
+        # quadratic in sn0 -- take the odd part to isolate the linear piece).
+        k3 = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)
+        run_b = _compile(COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap'))
+        run_bf = _compile(FOLPSTracerSpectrum3Poles(k=k3, nbar=nbar, prior_basis='physical_aap', damping='lor'))
+        comet_np0 = np.asarray(run_b(b1=b1, sn0=1.)) - np.asarray(run_b(b1=b1))
+        folps_sn0 = 0.5 * (np.asarray(run_bf(b1=b1, sn0=1.)) - np.asarray(run_bf(b1=b1, sn0=-1.)))
+        # The two codes use different PT for the Z1 P legs, so compare at the lowest k, where
+        # they agree best; without the factor 2 this ratio would be ~2.
+        # Checked on (2, 0, 2), not (0, 0, 0): FOLPSD's P-hat term multiplies the full
+        # Z1 = b1 + f mu^2, so it carries an f^2 mu^4 piece COMET lacks.  That is a mu-structure
+        # difference, not a normalization one, and it lands almost entirely on the monopole --
+        # at the lowest k the quadrupole agrees to 0.9% while the monopole is 8.5% off.
+        ratio = folps_sn0[1, 0] / comet_np0[1, 0]
+        assert abs(ratio - 1.) < 0.02, f'COMET bispectrum NP0 is not 2 SN_0: FOLPSD/COMET = {ratio}'
+
+        # The constant is SN_0^2, tied to NP0 as in FOLPSD, so B is quadratic in it with a
+        # k-independent 1/nbar^2 coefficient living only in the (0, 0, 0) multipole.  NB0 is an
+        # extra constant on top, fixed at 0 by default (the document has no free N^B_0).
+        theory_b = COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap')
+        assert theory_b.NB0.fixed, 'physical_aap NB0 should be fixed (its SN_0^2 piece comes from NP0)'
+        grid = np.array([-1., -0.5, 0., 0.5, 1.])
+        vander = np.vander(grid, 3)  # [x^2, x, 1]
+        for label, run_shot, name in [('COMET sn0', run_b, 'sn0'), ('FOLPSD sn0', run_bf, 'sn0')]:
+            poles = np.array([np.asarray(run_shot(b1=b1, **{name: value})) for value in grid])
+            coeff, *_ = np.linalg.lstsq(vander, poles.reshape(len(grid), -1), rcond=None)
+            residual = np.max(np.abs(poles.reshape(len(grid), -1) - vander @ coeff)) / np.max(np.abs(poles))
+            assert residual < 1e-11, f'{label}: B is not quadratic in {name} ({residual})'
+            quadratic = coeff.reshape(3, -1, len(k3))[0]
+            np.testing.assert_allclose(quadratic[0], 1. / nbar**2, rtol=1e-8,
+                                       err_msg=f'{label}: the constant is not SN_0^2 = 1/nbar^2')
+            assert np.max(np.abs(quadratic[1])) < 1e-8 / nbar**2, f'{label}: SN_0^2 leaked into B_202'
+
+    def test_tracer_bispectrum(self):
+        """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import (
+            COMETTracerSpectrum3Poles, COMETPTSpectrum3Poles,
+        )
+        k = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)  # diagonal (k1, k2) pairs
+
+        theory = COMETTracerSpectrum3Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        # See test_tracer_spectrum's comment on comet_tol (same XLA-fusion amplification applies).
+        comet_tol = dict(rtol=2e-3, atol=1e-6)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        # All free bias params for EggScoSmi: b1, b2, g2. cnlo is fixed=True for VDG_infty.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, b2=0.5, g2=0.5, **comet_tol)
+        # Bispectrum stochastic params (NP0/NB0/MB0 all enter the coeff vector).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', NP0=0.1, NB0=0.1, MB0=0.1, **comet_tol)
+        # avir (VDG_infty FoG damping): regression for BX_ell_Sugi() silently ignoring it.
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', avir=5.0, **comet_tol)
+
+    def test_tracer_bispectrum_direct(self):
+        """COMETTracerSpectrum3Poles(pt=False): comet's Bell_Sugi() (monolithic,
+        bias-combined, no separate PT calculator) must agree with the default
+        BX_ell_Sugi()-decomposed path."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum3Poles
+        k = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        comet_tol = dict(rtol=2e-3, atol=1e-6)
+
+        theory = COMETTracerSpectrum3Poles(k=k, pt=False)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', avir=5.0, **comet_tol)
+
+        theory_shared = COMETTracerSpectrum3Poles(k=k)
+        run_shared = _compile(theory_shared)
+        base_shared = np.asarray(run_shared(b1=2.0))
+        base_direct = np.asarray(run(b1=2.0))
+        np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
+                                   err_msg='COMETTracerSpectrum3Poles: pt=False disagrees with shared PT')
+
+    def test_numpy_backend(self):
+        """backend='numpy' produces finite results and agrees with backend='jax' to within ~5%.
+
+        The numpy backend sets _is_external=True so comet is called via jax.pure_callback;
+        params are passed as numpy arrays so PTEmu uses the sklearn GP (not the JAX-ported GP),
+        guaranteeing a numpy Pk_lin and a proper scipy spline build (with extrapolation_min set).
+        The two backends use different GP implementations (sklearn vs JAX port), which naturally
+        differ by ~1e-4 in Pk_lin; the bias combination amplifies this by up to ~1000x
+        due to near-cancellation, giving up to ~5% relative difference in the final poles.
+        """
+        from desilike.theories.galaxy_clustering.full_shape import (
+            COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
+        )
+        k2 = np.linspace(0.02, 0.3, 60)
+        k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+
+        for Theory, k in [(COMETTracerSpectrum2Poles, k2), (COMETTracerSpectrum3Poles, k3)]:
+            for direct in [False, True]:
+                pt_arg = False if direct else None  # False = monolithic Pell/Bell_Sugi; None = shared PT table
+                name = f'{Theory.__name__}(pt={pt_arg}, backend=...)'
+                theory_jax = Theory(k=k, pt=pt_arg, backend='jax')
+                theory_np = Theory(k=k, pt=pt_arg, backend='numpy')
+                result_jax = np.asarray(_compile(theory_jax)())
+                result_np = np.asarray(_compile(theory_np)())
+                assert np.isfinite(result_np).all(), f'{name}: non-finite numpy result'
+                np.testing.assert_allclose(result_np, result_jax, rtol=0.05, atol=1.0,
+                                           err_msg=f'{name}: numpy backend disagrees with jax')
+
+    def test_training_ranges(self):
+        """training_ranges / truncate_priors classmethods (PT and tracer, 2- and 3-poles): the
+        'emulator' basis keeps native comet names and units (wc, As in 1e-9, GP coordinates
+        s12/f), the 'cosmo' basis maps them to sampled desilike parameter names."""
+        from desilike import Parameter, VariableCollection
+        from desilike.theories.galaxy_clustering.full_shape import (
+            COMETPTSpectrum2Poles, COMETTracerSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles,
+        )
+
+        ranges_emulator = COMETTracerSpectrum2Poles.training_ranges(basis='emulator')
+        # VDG_infty GP inputs: shape parameters (wb, wc, ns, As, Mnu) + derived coordinates (s12, f);
+        # no h -- it only enters through the derived s12/f, checked at runtime.
+        assert 'wc' in ranges_emulator and 's12' in ranges_emulator and 'h' not in ranges_emulator
+        ranges = COMETTracerSpectrum2Poles.training_ranges()  # basis='cosmo'
+        assert 'wc' not in ranges and 's12' not in ranges and 'f' not in ranges
+        assert ranges['omega_cdm'] == ranges_emulator['wc']
+        if 'As' in ranges_emulator:
+            low, high = ranges_emulator['As']
+            assert ranges['A_s'] == (low * 1e-9, high * 1e-9)
+            np.testing.assert_allclose(ranges['logA'], (np.log(low * 10.), np.log(high * 10.)))
+        assert all(low < high for low, high in ranges.values())
+        # All four COMET calculators expose the same classmethods.
+        for calculator_cls in (COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum3Poles):
+            assert calculator_cls.training_ranges() == ranges
+
+        params = VariableCollection()
+        params.set(Parameter('h', value=0.6736, prior=dict(limits=[0.1, 10.])))
+        params.set(Parameter('omega_cdm', value=0.12, prior=dict(limits=[0.01, 0.99])))
+        COMETTracerSpectrum2Poles.truncate_priors(params)
+        assert params['h'].prior.limits == (0.1, 10.)  # no comet range on h: untouched
+        low, high = ranges['omega_cdm']
+        assert params['omega_cdm'].prior.limits == (max(0.01, low), min(0.99, high))
+
+
+class TestGeoFPTAX:
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('geofptax')
+
+    
+    def test_pt_spectrum(self):
+        """GeoFPTAXPTSpectrum2Poles: shape and finite output of the 1-loop P(k)."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = GeoFPTAXPTSpectrum2Poles(k=k)
+        print(theory.template, flush = True)
+        result = _compile(theory)()
+        assert result.shape == (len(k),)
+        assert np.isfinite(result).all()
+
+    def test_tracer_bispectrum_sugiyama(self):
+        """GeoFPTAXTracerSpectrum3Poles (Sugiyama basis): shape and parameter sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Sugiyama basis expects (N, 2)
+        k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='sugiyama')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Sugiyama)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Sugiyama)', b1=2.0, b2=0.5, bs=0.3)
+
+    def test_tracer_bispectrum_scoccimarro(self):
+        """GeoFPTAXTracerSpectrum3Poles (Scoccimarro basis): shape and parameter sensitivity with valid triangles."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Scoccimarro basis expects (N, 3) valid triangles.
+        # We use equilateral triangles which are strictly valid.
+        k_diag = np.linspace(0.02, 0.1, 11)
+        k = np.column_stack([k_diag, k_diag, k_diag])
+        
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='scoccimarro')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)', b1=2.0, b2=0.5, bs=0.3)
+
+    def test_tracer_bispectrum_shapefit(self):
+        """GeoFPTAXTracerSpectrum3Poles (Scoccimarro basis): shape and parameter sensitivity with valid triangles."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        from desilike.theories.galaxy_clustering.template import ShapeFitSpectrum2Template
+        
+        # Scoccimarro basis expects (N, 3) valid triangles.
+        # We use equilateral triangles which are strictly valid.
+        k_diag = np.linspace(0.02, 0.1, 11)
+        k = np.column_stack([k_diag, k_diag, k_diag])
+        
+        
+        template = ShapeFitSpectrum2Template(z=0.8, apmode = 'qisoqap')
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, basis='scoccimarro', template = template)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)')
+        assert base.shape == (len(theory.ells), len(k))
+        
+        # Sensitivity
+        _check_sensitivity(run, base, 'GeoFPTAXTracerSpectrum3Poles (Scoccimarro)', qiso = 0.95, qap = 0.95, dm = 0.02, df =1.2)
+
+    def test_invalid_triangles_scoccimarro(self):
+        """GeoFPTAXTracerSpectrum3Poles: fails if invalid triangles are provided for Scoccimarro."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Invalid triangle: k3 > k1 + k2
+        k_invalid = np.array([[0.1, 0.1, 0.3]])
+        
+        with pytest.raises(ValueError, match="violate the triangle inequality"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_invalid, basis='scoccimarro')
+            
+        # Also test wrong shape
+        k_2d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        with pytest.raises(ValueError, match="shape \\(N, 3\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
+    
+    def test_k_validation(self):
+        """GeoFPTAXTracerSpectrum3Poles: k array shape validation based on basis."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        # Sugiyama expects (N, 2)
+        k_2d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        theory_sugiyama = GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='sugiyama')
+        _check(_compile(theory_sugiyama)(), 'Sugiyama with (N,2) k')
+        
+        # Wrong shape for Sugiyama should raise error
+        k_3d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 3)
+        with pytest.raises(ValueError, match="basis='sugiyama'.*shape \\(N, 2\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='sugiyama')
+        
+        # Scoccimarro expects (N, 3)
+        theory_scoccimarro = GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='scoccimarro')
+        _check(_compile(theory_scoccimarro)(), 'Scoccimarro with (N,3) k')
+        
+        # Wrong shape for Scoccimarro should raise error
+        with pytest.raises(ValueError, match="basis='scoccimarro'.*shape \\(N, 3\\)"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
+        
+        # Invalid triangles for Scoccimarro should raise error
+        k_invalid = np.array([[0.1, 0.1, 0.3]])  # violates triangle inequality
+        with pytest.raises(ValueError, match="triangle inequality"):
+            GeoFPTAXTracerSpectrum3Poles(k=k_invalid, basis='scoccimarro')
+    
+    def test_integration_with_template(self):
+        """GeoFPTAXTracerSpectrum3Poles: integration with DirectSpectrum2Template."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template, ShapeFitSpectrum2Template
+        
+        k = np.column_stack([np.linspace(0.02, 0.1, 8)] * 2)
+        
+        # Test with explicit template
+        template = DirectSpectrum2Template(engine='eisenstein_hu', z=0.5)
+        theory = GeoFPTAXTracerSpectrum3Poles(k=k, template=template, num_points=5)
+        result = _compile(theory)()
+        _check(result, 'GeoFPTAXTracerSpectrum3Poles with explicit template')
+        assert result.shape == (len(theory.ells), len(k))
+        
+        # Verify that changing template parameters affects the result
+        template2 = DirectSpectrum2Template(engine='eisenstein_hu', z=0.8)
+        theory2 = GeoFPTAXTracerSpectrum3Poles(k=k, template=template2, num_points=5)
+        result2 = _compile(theory2)()
+        assert not np.allclose(result, result2), 'Result should change with different template'
+
+
+        template3 = ShapeFitSpectrum2Template(z=0.8)
+        theory3 = GeoFPTAXTracerSpectrum3Poles(k=k, template=template3, num_points=5)
+        result3 = _compile(theory3)()
+        assert not np.allclose(result, result3), 'Result should change with ShapeFit template'
+    
+    def test_num_points_sensitivity(self):
+        """GeoFPTAXTracerSpectrum3Poles: verify that num_points affects accuracy."""
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXTracerSpectrum3Poles
+        
+        k = np.column_stack([np.linspace(0.02, 0.08, 5)] * 2)
+        
+        # Low precision
+        theory_low = GeoFPTAXTracerSpectrum3Poles(k=k, num_points=5)
+        result_low = _compile(theory_low)()
+        
+        # High precision
+        theory_high = GeoFPTAXTracerSpectrum3Poles(k=k, num_points=15)
+        result_high = _compile(theory_high)()
+        
+        # Results should be similar but not identical
+        # (higher num_points should be more accurate)
+        reldiff = np.max(np.abs(result_high - result_low) / (np.abs(result_high) + 1e-30))
+        assert reldiff < 0.1, f'Low and high precision results differ by {reldiff:.3f}'
+    
+    def test_emulated(self):
+        """GeoFPTAXPTSpectrum2Poles emulated as pt= in bispectrum."""
+        from desilike import build
+        from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template, ShapeFitSpectrum2Template
+        try:
+            from desilike.theories.galaxy_clustering.full_shape import (
+                GeoFPTAXPTSpectrum2Poles,
+                GeoFPTAXTracerSpectrum3Poles,
+            )
+        except ImportError:
+            pytest.skip("GeoFPTAXPTSpectrum2Poles not available yet; skipping emulation test.")
+        
+        # GeoFPTAXTracerSpectrum3Poles expects a 2D (k1, k2) grid, 
+        # while GeoFPTAXPTSpectrum2Poles expects a 1D k grid.
+        k_2d = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        k_1d = np.linspace(0.02, 0.1, 11)
+        ells = ((0, 0, 0), (2, 0, 2))
+        
+        # 1. Exact pipeline (using the default internal 1-loop computation)
+        pipe_exact = build(GeoFPTAXTracerSpectrum3Poles(k=k_2d, ells=ells))
+        
+        # 2. Emulated pipeline: replace the internal PT with an emulator
+        # Note: This requires GeoFPTAXTracerSpectrum3Poles to accept a `pt` argument,
+        # following the standard desilike pattern (e.g., FOLPSTracerSpectrum3Poles).
+        try:
+            theory_emu = GeoFPTAXTracerSpectrum3Poles(
+                k=k_2d, ells=ells, pt=GeoFPTAXPTSpectrum2Poles(k=k_1d, ells=(0,)),
+            )
+            # _emulate fits a degree-1 Taylor expansion on the PT calculator and 
+            # replaces it in-place, then compiles the full tracer pipeline.
+            _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='logA')
+        except TypeError:
+            # Gracefully skip if the `pt` argument hasn't been added to the tracer yet
+            pytest.skip("GeoFPTAXTracerSpectrum3Poles does not yet accept a `pt` argument; skipping emulation test.")
+
+
+    def test_pt_emulated(self):
+        """GeoFPTAXPTSpectrum2Poles emulated directly (bypassing the bispectrum tracer).
+        This avoids the large amplitudes and non-linear bias expansion of the bispectrum,
+        which can easily cause a 1st-order Taylor emulator to exceed tight tolerances."""
+        from desilike import build
+        from desilike.emulators import Emulator, Space
+        from desilike.theories.galaxy_clustering.full_shape import GeoFPTAXPTSpectrum2Poles
+        
+        k = np.linspace(0.02, 0.2, 20)
+        theory = GeoFPTAXPTSpectrum2Poles(k=k)
+        pipe_exact = build(theory)
+        
+        # Emulate the PT directly. Ported from the legacy `TaylorEmulator`, which this branch's
+        # emulator refactor replaced: the box now comes from a `Space` rather than from an
+        # expansion order, and `train` from `fit`. `_fd_box` gives the same finite-difference
+        # steps the old expansion used, so this stays the test it was.
+        emu = Emulator(theory, Space(bounds=_fd_box(theory)))
+        emu.train(budget=1, verbose=False)
+        pipe_emu = build(emu.to_calculator())
+        
+        # 1. Check center (exact match)
+        center = {p.name: p.value for p in pipe_exact.params}
+        np.testing.assert_allclose(
+            np.asarray(pipe_emu(center)), 
+            np.asarray(pipe_exact(center)),
+            atol=1e-5, rtol=0., 
+            err_msg='PT emulator mismatch at expansion center'
+        )
+        
+        # 2. Check shifted (relative error)
+        # GeoFPTAX PT depends on cosmological parameters via the template, e.g., logA
+        shift_param = 'logA'
+        if shift_param in center:
+            shifted = {**center, shift_param: center[shift_param] * 1.05}
+            exact_s = np.asarray(pipe_exact(shifted))
+            emu_s = np.asarray(pipe_emu(shifted))
+            reldiff = float(np.max(np.abs(emu_s - exact_s) / (np.abs(exact_s) + 1e-30)))
+            assert reldiff < 0.10, f'[{shift_param}+5%] PT max reldiff={reldiff:.3f} > 0.10'
+
+        
+def test_jit():
+
+    from desilike import build, get_params
+    from desilike.theories import CosmoprimoCosmology
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum2Poles
+    k = np.linspace(0.02, 0.3, 20)
+    ells = (0, 2)
+    for engine in ['camb', 'eisenstein_hu']:
+        cosmo = CosmoprimoCosmology(engine=engine)
+        template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+        pipe = build(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
+
+        pipe_jit = jax.jit(pipe)
+        for i in range(3):
+            params = {param.name: param.prior.sample(key=jax.random.key(42 + i)) for param in get_params(cosmo).select(varied=True)}
+            poles = pipe(params)
+            poles_jit = pipe_jit(params)
+            assert np.allclose(poles_jit, poles)
+
+
+
+def test_compile_input():
+    """
+    Demonstrates ``build(root, input=fn)``: feed pre-computed cosmological results
+    from an external pipeline into a theory pipeline via the ``input`` callable.
+
+    Design
+    ------
+    ``cosmo_ext`` (CosmoprimoCosmology) runs the real solver and exposes its
+    computed arrays as JAX leaves via ``tree_flatten``.
+
+    ``cosmo`` (PrimordialCosmology) is a lightweight proxy in the theory graph: its
+    ``__call__`` is a no-op when ``_results`` is already populated, so it acts as a
+    pass-through holder for externally provided results.
+
+    ``pipe_ext`` compiles ``cosmo_ext`` and returns its leaves on each call.
+    ``pipe`` compiles the theory with an ``input`` callable that injects the
+    pre-computed cosmo results into the proxy for side-effects only.
+    The parameter dict is passed as the second positional argument::
+
+        cosmo_leaves = pipe_ext(cosmo_params)          # run external cosmo
+        poles = pipe(cosmo_leaves, bias_params)        # inject + theory params
+    """
+    from desilike.base import build, get_params
+    from desilike.theories import PrimordialCosmology, CosmoprimoCosmology
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, KaiserTracerSpectrum2Poles
+
+    k = np.linspace(0.02, 0.3, 20)
+
+    # cosmo_ext: the real solver (eisenstein_hu is JAX-native, not truly external,
+    # but the pattern works identically for camb/class).
+    cosmo_ext = CosmoprimoCosmology(engine='eisenstein_hu')
+
+    # cosmo: a lightweight proxy that holds results but does not run a solver.
+    # Uses the same Parameter objects as cosmo_ext so naming is consistent.
+    cosmo = PrimordialCosmology(params=get_params(cosmo_ext))
+
+    template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+    theory = KaiserTracerSpectrum2Poles(k=k, template=template)
+
+    # input callable: pure side-effect — injects pre-computed cosmo results into
+    # the proxy.  The parameter dict is passed separately as the second arg to pipe.
+    # `cosmo_ext_aux` is bound below, before this is ever called.
+    def input_fn(cosmo_leaves):
+        proxy = PrimordialCosmology.tree_unflatten(cosmo_ext_aux, cosmo_leaves)
+        cosmo._results = proxy._results
+
+    # Compile the theory FIRST: the template registers what it needs from the cosmology in its
+    # `__post_init__`, which runs at build, so before this `cosmo._requirements` holds nothing
+    # of what the theory reads -- and cosmo_ext would then be asked for none of it, leaving the
+    # proxy to fill the spectra with its zero placeholders and the poles to come out NaN.
+    pipe = build(theory, input=input_fn)
+
+    # Register on cosmo_ext the requirements that the template registered on cosmo.
+    # Conversion: cosmo._requirements format  →  add_requirements dict format.  A spec carries a
+    # coordinate only when it was registered with one (`params.*` has neither z nor k).
+    ext_reqs = {}
+    for (method_key, static_items), spec in cosmo._requirements.items():
+        entries = ext_reqs.setdefault(method_key, [])
+        base = dict(static_items)
+        if 'k' in spec:
+            base['k'] = spec['k']
+        if 'z' in spec:
+            entries.extend({**base, 'z': float(z_val)} for z_val in spec['z'])
+        else:
+            entries.append(base)
+    cosmo_ext.update(requirements=ext_reqs)
+
+    # Compile cosmo_ext: output is the flat list of JAX leaves
+    # [param_marker, results_0, results_1, ...].
+    pipe_ext = build(cosmo_ext, output=lambda: cosmo_ext.tree_flatten()[0])
+    # Capture aux (engine + ordered_specs) after build so __post_init__ has run.
+    _, cosmo_ext_aux = cosmo_ext.tree_flatten()
+
+    # Separate the compiled params into cosmo vs bias sets.
+    ext_param_names = {p.name for p in pipe_ext.params}
+    all_defaults = {p.name: p.value for p in pipe.params}
+    cosmo_defaults = {name: val for name, val in all_defaults.items() if name in ext_param_names}
+    bias_defaults = {name: val for name, val in all_defaults.items() if name not in ext_param_names}
+
+    # Run external cosmo pipeline to get pre-computed leaves.
+    cosmo_leaves = pipe_ext(cosmo_defaults)
+
+    # Feed pre-computed cosmo results into the theory pipeline.
+    poles = pipe(cosmo_leaves, bias_defaults)
+    _check(poles, 'test_compile_input')
+
+    # jax.jit(pipe): input_fn runs as a Python side-effect at trace time; the JAX
+    # computation graph then includes the full data-flow from cosmo_leaves to poles.
+    poles_jit = jax.jit(pipe)(cosmo_leaves, bias_defaults)
+    np.testing.assert_allclose(np.asarray(poles_jit), np.asarray(poles), rtol=1e-5)
+
+    # Cross-check: the same result should come from the monolithic pipeline.
+    cosmo_full = CosmoprimoCosmology(engine='eisenstein_hu')
+    template_full = DirectSpectrum2Template(cosmo=cosmo_full, z=1.)
+    theory_full = KaiserTracerSpectrum2Poles(k=k, template=template_full)
+    pipe_full = build(theory_full)
+    ref = np.asarray(pipe_full(all_defaults))
+    np.testing.assert_allclose(np.asarray(poles), ref, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(poles_jit), ref, rtol=1e-5)
+
+
+
+
+
+if __name__ == '__main__':
+
+    test = TestREPTVelocileptors()
+    test.test_fixed_template_jit_timing()

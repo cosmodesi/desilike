@@ -1,23 +1,32 @@
 Profilers
 =========
 
+base
+----
+.. automodule:: desilike.profilers.base
+  :members:
+  :show-inheritance:
+
 minuit
 ------
 .. automodule:: desilike.profilers.minuit
   :members:
-  :inherited-members:
   :show-inheritance:
 
 bobyqa
--------
+------
 .. automodule:: desilike.profilers.bobyqa
   :members:
-  :inherited-members:
   :show-inheritance:
 
 scipy
 -----
 .. automodule:: desilike.profilers.scipy
   :members:
-  :inherited-members:
+  :show-inheritance:
+
+optax
+-----
+.. automodule:: desilike.profilers.optax
+  :members:
   :show-inheritance:

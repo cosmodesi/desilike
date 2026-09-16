@@ -1,255 +1,316 @@
-import os
+"""PocoMC preconditioned Monte Carlo kernel."""
+
+import logging
 
 import numpy as np
 
-from desilike.samples import Chain
-from desilike import utils
-from .base import BaseBatchPosteriorSampler
+try:
+    import pocomc as _pocomc
+    POCOMC_INSTALLED = True
+except ModuleNotFoundError:
+    POCOMC_INSTALLED = False
+
+from .base import PopulationKernel, update_kwargs
 
 
-class Prior(object):
+class _Prior:
+    """Prior wrapper for ``pocoMC`` built from prior callables."""
 
-    """Prior distribution for PocoMC."""
-
-    def __init__(self, params, random_state=None):
-        self.dists = [param.prior for param in params]
-        self.random_state = random_state
+    def __init__(self, prior_logpdf, prior_rvs, prior_bounds, ndim, rng):
+        self._logpdf = prior_logpdf
+        self._rvs = prior_rvs
+        self._rng = rng
+        self._bounds = prior_bounds   # (ndim, 2)
+        self._ndim = ndim
 
     def logpdf(self, x):
-        logp = np.zeros(len(x))
-        for i, dist in enumerate(self.dists):
-            logp += dist(x[:,i])
-        return logp
+        x = np.asarray(x)
+        log_p = np.asarray([result for result in self._logpdf(x)])
+        in_bounds = np.all((x >= self._bounds[:, 0]) & (x <= self._bounds[:, 1]), axis=1)
+        log_p[~in_bounds] = -np.inf
+        return log_p
 
     def rvs(self, size=1):
-        samples = []
-        for dist in self.dists:
-            samples.append(dist.sample(size=size, random_state=self.random_state))
-        return np.transpose(samples)
+        # Drawing through the sampler rather than through a PPF of our own also lets pocoMC
+        # start from proposals that have no inverse CDF, such as an existing chain.
+        return np.asarray(self._rvs(size, self._rng))
 
     @property
     def bounds(self):
-        bounds = []
-        for dist in self.dists:
-            bounds.append(dist.limits)
-        return np.array(bounds)
+        return self._bounds
 
     @property
     def dim(self):
-        return len(self.dists)
+        return self._ndim
 
 
-class PocoMCSampler(BaseBatchPosteriorSampler):
+def _default_device():
+    """Torch device matching the one JAX is using, or ``None`` to stay on the CPU.
+
+    A JAX likelihood already holds the GPU, and the flow costs 0.12 GiB beside it (see
+    :func:`_flow_on_device`), so there is nothing to gain from leaving the preconditioner on
+    the CPU when both libraries can see the accelerator. ROCm builds of ``torch`` also expose
+    their device as ``'cuda'``, hence the single name for both JAX GPU backends.
     """
-    Wrapper for PocoMC sampler (preconditioned Monte Carlo method).
-
-    Reference
-    ---------
-    - https://github.com/minaskar/pocomc
-    - https://arxiv.org/abs/2207.05652
-    - https://arxiv.org/abs/2207.05660
-    """
-    name = 'pocomc'
-
-    def __init__(self, *args, n_active=250, n_ess=1000, flow='maf6', train_config=None,
-                 precondition=True, n_prior=None, sample='tpcn', max_steps=None, patience=None, ess_threshold=None, **kwargs):
-        """
-        Initialize PocoMC sampler.
-
-        Parameters
-        ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
-
-        n_active : int, str, default=250
-            The number of active particles (default is ``n_active=250``). It must be smaller than ``n_ess``.
-            Defaults to :attr:`Chain.shape[1]` of input chains, if any,
-            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-            Can be given in dimension units, e.g. '3 * ndim'.
-
-        n_ess : int, default=1000
-            The effective sample size maintained during the run (default is ``n_ess=1000``).
-
-        flow : ``torch.nn.Module``
-            Normalizing flow (default is ``maf6``). The default is a Masked Autoregressive Flow
-            (MAF) with 6 blocks of 3x64 layers and residual connections.
-
-        train_config : dict, default=None
-            Configuration for training the normalizing flow
-            (default is ``train_config=None``). Options include a dictionary with the following
-            keys: ``"validation_split"``, ``"epochs"``, ``"batch_size"``, ``"patience"``,
-            ``"learning_rate"``, ``"annealing"``, ``"gaussian_scale"``, ``"laplace_scale"``,
-            ``"noise"``, ``"shuffle"``, ``"clip_grad_norm"``, ``"verbose"``.
-
-        precondition : bool, default=True
-            If True, use preconditioned MCMC (default is ``precondition=True``). If False,
-            use standard MCMC without normalizing flow.
-
-        n_prior : int, default=None
-            Number of prior samples to draw (default is ``n_prior=2*(n_ess//n_active)*n_active``).
-
-        sample : str, default='tpcn'
-            Type of MCMC sampler to use (default is ``sample='tpcn'``). Options are
-            ``'tpcn'`` (t-Preconditioned Crank-Nicolson) or ``'rwm'`` (Random-Walk Metropolis).
-
-        max_steps : int, default=None
-            Maximum number of MCMC steps (default is ``max_steps=5*n_dim``).
-
-        patience : int, default=None
-            Number of steps for early stopping of MCMC (default is ``patience=None``). If ``patience=None``,
-            MCMC terminates automatically.
-
-        ess_threshold : int, default=None
-            Effective sample size threshold for resampling (default is ``ess_threshold=4*n_dim``).
-
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            Save samples to this location. This is mandatory, because as for now PocoMC does not provide proper __getstate__/__setstate__ methods.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
-        """
-        super(PocoMCSampler, self).__init__(*args, **kwargs)
-        ndim = len(self.varied_params)
-        if n_active is None:
-            shapes = self.mpicomm.bcast([chain.shape if chain is not None else None for chain in self.chains], root=0)
-            if any(shape is not None for shape in shapes):
-                try:
-                    nwalkers = shapes[0][1]
-                    assert all(shape[1] == nwalkers for shape in shapes)
-                except (IndexError, AssertionError) as exc:
-                    nwalkers = 250  # default
-                n_active = nwalkers
-        self.nwalkers = utils.evaluate(n_active, type=int, locals={'ndim': ndim})
-        bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
-        import pocomc
-        self.prior = Prior(self.varied_params)
-        self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, n_dim=ndim, n_effective=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, n_max_steps=max_steps, n_steps=patience, vectorize=True, output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
-        if self.save_fn is None:
-            raise ValueError('save_fn must be provided, in order to save pocomc state')
-        self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
-
-    def loglikelihood(self, values):
-        return self.logposterior(values) - self.prior.logpdf(values)
-
-    def _prepare(self):
-        self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
-        #self.chains = [None] * len(self.chains)
-
-    def run(self, *args, **kwargs):
-        """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
-
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
-
-        Parameters
-        ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
-
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
-
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        thin_by : int, default=1
-            Thin samples by this factor.
-        """
-        return super(PocoMCSampler, self).run(*args, **kwargs)
-
-    def _run_one(self, start, niterations=300, progress=False, **kwargs):
-        load_state_bak = type(self.sampler).load_state
-        resume_state_path = None
-
-        if self.resume:
-            resume_state_path = self.state_fn[self._ichain]
-
-            def load_state(path):
-                load_state_bak(self.sampler, path)
-                #if self.mpicomm.rank == 0:
-                #    self.derived = self.sampler.derived
-                #    del self.sampler.derived
-                from pocomc.tools import FunctionWrapper
-                # Because dill is unable to cope with our loglikelihood and logprior
-                self.sampler.log_likelihood = FunctionWrapper(self.loglikelihood, args=None, kwargs=None)
-                self.sampler.log_prior = FunctionWrapper(self.logprior, args=None, kwargs=None)
-                x = np.asarray(self.sampler.results.get('x'))
-                self.sampler.log_likelihood(x.reshape(-1, x.shape[-1]))  # to set derived parameters
-                #particles = self.sampler.particles
-                #particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim, ess_threshold=particles.ess_threshold)  # clear particles
-        else:
-            def load_state(path):
-                load_state_bak(self.sampler, path)
-
-        self.sampler.load_state = load_state
-
+    try:
+        import jax
+        backend = jax.default_backend()
+    except Exception:
+        return None
+    if backend not in ('gpu', 'cuda', 'rocm'):
+        return None
+    try:
         import torch
-        np_random_state_bak, torch_random_state_bak = np.random.get_state(), torch.get_rng_state()
-        self.sampler.random_state = self.rng.randint(0, high=0xffffffff)
-        self.prior.random_state = self.rng
-        np.random.set_state(self.rng.get_state())  # self.rng is same for all ranks
-        torch.set_rng_state(self.mpicomm.bcast(torch_random_state_bak, root=0))
+        if torch.cuda.is_available():
+            return 'cuda'
+    except Exception:
+        pass
+    return None
 
-        t0 = self.sampler.t
-        nparticles = len(self.sampler.particles.get('x'))
 
-        def _not_termination(current_particles):
-            return (self.sampler.t - t0) < niterations
+def _flow_on_device(device):
+    """Return a subclass of ``pocomc.Flow`` whose normalizing flow lives on *device*.
 
-        self.sampler._not_termination = _not_termination
-        if niterations > 0:
-            self.sampler.run(n_total=niterations, progress=progress, resume_state_path=resume_state_path, **kwargs)  # progress=True else bug
-        else:
-            return None
-        np.random.set_state(np_random_state_bak)
-        torch.set_rng_state(torch_random_state_bak)
-        #self.sampler.load_state = load_state_bak
-        particles = self.sampler.particles
-        particles.results_dict = None  # to recompute results
+    ``pocoMC`` has no device handling anywhere: :class:`pocomc.Flow` builds the ``zuko`` flow on
+    the CPU, ``numpy_to_torch`` makes CPU tensors, and ``torch_to_numpy`` calls ``.numpy()``
+    with no ``.cpu()`` -- so the preconditioner never reaches the GPU the likelihood is already
+    using, and an already-moved flow would raise on the way back out.
+
+    It is worth moving because the flow's INVERSE is what the MCMC loop calls every step, and
+    ``zuko.transforms.AutoregressiveTransform._inverse`` runs ``passes`` *sequential* network
+    evaluations -- ``n_dim`` of them for a fully autoregressive flow, so 47 x 6 transforms = 282
+    per step at 47 parameters, against one for the forward direction. Measured on an A100, 512
+    points, 47 dimensions: one ``flow.inverse`` costs 2717 ms on the CPU and 376 ms on the GPU
+    (7.2x), or 164 ms and 32.5 ms with ``passes=2`` coupling transformations (5.0x).
+
+    Every tensor crossing back out is returned on the CPU, so nothing downstream changes.
+
+    Notes
+    -----
+    Sharing the device with a JAX likelihood needs no memory tuning: measured on an A100-40GB
+    with JAX initialised first, the default preallocation takes 29.6 GiB and leaves 9.4, while
+    the flow needs 0.12 GiB (15.7 MiB of parameters plus context) and runs at the same speed.
+    It still fits at ``XLA_PYTHON_CLIENT_MEM_FRACTION=0.98``, with 0.4 GiB left. Only reach for
+    ``XLA_PYTHON_CLIENT_PREALLOCATE=false`` on a small device or a much larger flow.
+    A checkpoint written with a GPU-resident flow reloads onto the same device.
+
+    **Do not reach for ``torch.compile`` here.** A fixed-shape micro-benchmark says the inverse
+    should compile well -- 332.9 ms eager against 45.1 ms compiled at 47 parameters and 512
+    points, because the 47 sequential passes of a 256-wide network are launch-overhead bound, not
+    arithmetic bound. On a real LRG3 run it LOSES, badly, in both modes: flow.inverse per step
+    goes 0.113 s eager -> 0.383 s with ``mode='reduce-overhead'`` -> 0.791 s with
+    ``dynamic=True`` (totals 269 / 391 / 536 s).
+
+    The cause is not varying input shapes -- measured, every one of the 312 ``inverse`` calls in
+    an LRG3 run has the identical shape ``(n_active, n_dim)``, so padding buys nothing. It is the
+    retraining cadence: ``Flow.fit`` ran 35 times in that same run (``train_frequency`` is 1 at
+    the production shape), each refit replaces the module's weights, dynamo re-guards, and the
+    recompilation costs more than the compiled kernel saves. A micro-benchmark misses this
+    because it compiles once against frozen weights.
+
+    """
+    import torch
+    from pocomc.flow import Flow as _Flow
+
+    class DeviceFlow(_Flow):
+
+        def __init__(self, n_dim, flow='nsf3'):
+            super().__init__(n_dim, flow)
+            self.device = torch.device(device)
+            self.flow = self.flow.to(self.device)
+
+        def to_device(self, tensor):
+            return tensor.to(self.device) if torch.is_tensor(tensor) else tensor
+
+        @staticmethod
+        def to_host(result):
+            # Every pocoMC consumer casts with `torch_to_numpy`, which is `.detach().numpy()`
+            # with no `.cpu()`, so everything must come back on the host.
+            if torch.is_tensor(result):
+                return result.cpu()
+            return tuple(tensor.cpu() for tensor in result)
+
+        def forward(self, x):
+            return self.to_host(super().forward(self.to_device(x)))
+
+        def inverse(self, u):
+            return self.to_host(super().inverse(self.to_device(u)))
+
+        def log_prob(self, x):
+            return self.to_host(super().log_prob(self.to_device(x)))
+
+        def sample(self, size=1):
+            return self.to_host(super().sample(size))
+
+        def fit(self, x, weights=None, **kwargs):
+            return super().fit(self.to_device(x), weights=self.to_device(weights), **kwargs)
+
+    return DeviceFlow
+
+
+_CLEAR_BEFORE_SAVE = ('log_likelihood', 'log_prior', 'sample_prior', 'prior', 'pool', 'distribute', 'save_state')
+
+
+def _patch_save_state(pocomc_sampler):
+    """Monkey-patch ``pocoMC``'s ``save_state`` to null unpicklable attributes before dumping."""
+    _original_save_state = pocomc_sampler.save_state
+
+    def _save_state_no_likelihood(path):
+        saved = {attr: getattr(pocomc_sampler, attr, None) for attr in _CLEAR_BEFORE_SAVE}
+        for attr in _CLEAR_BEFORE_SAVE:
+            setattr(pocomc_sampler, attr, None)
         try:
-            result = self.sampler.results
-        except ValueError:
-            return None
-        # This is not picklable
-        particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim)  # clear particles
-        particles.update(self.sampler.current_particles)  # for next iteration, only last particles are needed
-        try:
-            del self.sampler.log_likelihood, self.sampler.log_prior, self.sampler._not_termination, self.sampler.load_state
-        except AttributeError:
-            pass
-        # Clear saved quantities to save space
-        for name in self.sampler.__dict__:
-            if name.startswith('saved_'): setattr(self.sampler, name, [])
-        # Save last parameters, which be reused in the next run
-        if self.mpicomm.rank == 0:
-            #self.sampler.derived = [d[-1:] for d in self.derived]
-            self.sampler.save_state(self.state_fn[self._ichain])  # save ~ all self.sampler.__dict__
-        data = [np.asarray(result['x'][..., iparam], dtype='f8')[nparticles:] for iparam, param in enumerate(self.varied_params)] + [np.asarray(result['logl'] + result['logp'], dtype='f8')[nparticles:]]
-        return Chain(data=data, params=self.varied_params + ['logposterior']).reshape(-1, self.nwalkers)
+            _original_save_state(path)
+        finally:
+            for attr, val in saved.items():
+                setattr(pocomc_sampler, attr, val)
+
+    pocomc_sampler.save_state = _save_state_no_likelihood
+    return _save_state_no_likelihood
+
+
+class PocoMC(PopulationKernel):
+    """Preconditioned Monte Carlo sampler via ``pocomc``.
+
+    .. rubric:: References
+    - https://github.com/minaskar/pocomc
+    - https://doi.org/10.21105/joss.04634
+    - https://doi.org/10.1093/mnras/stac2272
+    """
+
+    logger = logging.getLogger('PocoMC')
+
+    def __init__(self, device=None, n_steps=None, **kwargs):
+        """
+        Parameters
+        ----------
+        n_steps : int or None, optional
+            MCMC rejuvenation steps per SMC iteration. ``None`` (default) uses ``n_dim // 2``,
+            which is pocoMC's own default. Under-rejuvenated particles bias the marginals
+            narrow on a non-Gaussian target, and the requirement grows with dimension, so
+            ``n_dim // 2`` is not enough at either size measured. Against a known truth:
+
+            ===========  =========  ==========================
+            n_dim        n_steps    sampled width / true width
+            ===========  =========  ==========================
+            13           6          0.944 +- 0.008
+            13           10         0.979
+            13           15         0.994 +- 0.004
+            13           40         0.993
+            25           12         0.948
+            25           15         0.976
+            ===========  =========  ==========================
+
+            So 15 suffices at 13 parameters but not at 25, where it still leaves 2.4% on the
+            mean and 5.6% on the worst parameter; a Gaussian target shows none of this. Cost is
+            proportional, so raise it deliberately rather than by default. The threshold at 45
+            parameters is not measured.
+        device : str or None, optional
+            Torch device for the normalizing flow, e.g. ``'cuda'``, or ``'cpu'`` to pin it to
+            the host. ``None`` (default) follows JAX: the flow goes on the GPU if JAX is using
+            one and ``torch`` can see it, and stays on the CPU otherwise -- ``pocoMC`` itself
+            only ever builds it on the CPU. The flow's inverse is most of a high-dimensional
+            step (82% at 47 parameters), so moving it is worth 8.7x end to end there, and it
+            shares the device with a JAX likelihood without any memory tuning; see
+            :func:`_flow_on_device` and :func:`_default_device`.
+        **kwargs
+            Extra keyword arguments forwarded to ``pocomc.Sampler``. ``flow`` accepts a
+            ``zuko.flows.Flow`` object as well as a name, which is how to get coupling
+            transformations: ``zuko.flows.NSF(..., passes=2)`` makes the inverse exact in 2
+            sequential passes instead of ``n_dim``.
+        """
+        self._device = device
+        self._n_steps = n_steps
+        self._kwargs = kwargs
+        self._sampler = None
+
+    def reset_state(self):
+        self._sampler = None
 
     @classmethod
-    def install(cls, config):
-        config.pip('pocomc')
+    def install(cls, installer):
+        installer.pip('pocomc')
+
+    def init(self, likelihood, prior, rng, **context):
+        _, self._likelihood_logpdf_with_derived = likelihood
+        self._prior_logpdf, _, self._prior_rvs, self._prior_bounds = prior
+        self._rng = rng
+        self._pool = context['pool']
+        self._ndim = context['ndim']
+        self._output_dir = context.get('output_dir')
+
+    def run(self, **kwargs):
+        if not POCOMC_INSTALLED:
+            raise ImportError("The 'pocomc' package is required but not installed.")
+
+        if self._pool.main:
+            if self._sampler is None:
+                if self._output_dir is not None:
+                    # `pmc_*.state` after every step, read back to resume, so the directory has
+                    # to exist before the sampler is built. Made here rather than by the sampler
+                    # that owns the run, so a kernel that checkpoints nothing leaves none behind.
+                    self._output_dir.mkdir(parents=True, exist_ok=True)
+                prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_bounds, self._ndim, self._rng)
+                n_steps = self._n_steps
+                if n_steps is None:
+                    n_steps = max(self._ndim // 2, 1)
+                init_kwargs = update_kwargs(
+                    dict(n_steps=int(n_steps), **self._kwargs), 'pocoMC',
+                    prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,
+                    n_dim=self._ndim, pool=self._pool,
+                    output_dir=self._output_dir,
+                    random_state=self._rng.integers(2**32 - 1))
+                device = self._device
+                if device is None:
+                    device = _default_device()
+                    if device is not None:
+                        self.logger.info('JAX is on GPU, placing the normalizing flow on {}.'.format(device))
+                if device is None:
+                    self._sampler = _pocomc.Sampler(**init_kwargs)
+                else:
+                    # pocoMC instantiates its Flow internally, so substitute the class for the
+                    # duration of the construction rather than reaching into the built sampler.
+                    original_flow = _pocomc.sampler.Flow
+                    _pocomc.sampler.Flow = _flow_on_device(device)
+                    try:
+                        self._sampler = _pocomc.Sampler(**init_kwargs)
+                    finally:
+                        _pocomc.sampler.Flow = original_flow
+
+                _patch_save_state(self._sampler)
+
+                # Restore checkpoint if available.
+                if self._output_dir is not None:
+                    filepath_max = None
+                    state_max = -1
+                    for filepath in self._output_dir.glob('pmc_*.state'):
+                        state = str(filepath.stem).split('_')[1]
+                        if state == 'final':
+                            filepath_max = filepath
+                            break
+                        state = int(state)
+                        if state > state_max:
+                            state_max = state
+                            filepath_max = filepath
+                    if filepath_max is not None:
+                        saved = {attr: getattr(self._sampler, attr, None)
+                                 for attr in _CLEAR_BEFORE_SAVE}
+                        self._sampler.load_state(filepath_max)
+                        for attr, val in saved.items():
+                            setattr(self._sampler, attr, val)
+                        _patch_save_state(self._sampler)
+
+            run_kwargs = update_kwargs(
+                kwargs, 'pocoMC',
+                resume_state_path=None,
+                save_every=1 if self._output_dir is not None else None)
+            self._sampler.run(**run_kwargs)
+
+            samples, weights, logl, logp, blobs = self._sampler.posterior(return_blobs=True)
+            blobs = blobs.reshape(len(samples), -1)
+
+            self._pool.stop_wait()
+            self.logger.info('Finished sampling.')
+            return samples, blobs, dict(aweight=weights, logposterior=logl + logp)
+        self._pool.wait()
+        return None

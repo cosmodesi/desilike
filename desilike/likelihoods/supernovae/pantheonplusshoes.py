@@ -1,56 +1,72 @@
+"""Pantheon+ (with SH0ES Cepheid calibration) type Ia supernovae likelihood."""
+
+import os
+
 import numpy as np
+import jax.numpy as jnp
 
-from desilike import utils
-from desilike.cosmo import is_external_cosmo
-from desilike.jax import numpy as jnp
+from desilike.parameter import Variable
 from .base import BaseSNLikelihood
-from .pantheonplus import PantheonPlusSNLikelihood
 
 
-class PantheonPlusSHOESSNLikelihood(PantheonPlusSNLikelihood):
+class PantheonPlusSHOESSNLikelihood(BaseSNLikelihood):
     """
-    Likelihood for Pantheon+ (with SH0ES) type Ia supernovae sample.
+    Likelihood for the Pantheon+ (with SH0ES) type Ia supernovae sample.
+
+    SNe hosted by a Cepheid calibrator use the Cepheid host distance as theory
+    (constraining ``h`` through the calibrator subsample) instead of the
+    cosmological distance modulus.
 
     Reference
     ---------
     https://arxiv.org/abs/2202.04077
-
-    Parameters
-    ----------
-    data_dir : str, Path, default=None
-        Data directory. Defaults to path saved in desilike's configuration,
-        as provided by :class:`Installer` if likelihood has been installed.
     """
-    config_fn = 'pantheonplusshoes.yaml'
     installer_section = 'PantheonPlusSNLikelihood'
-    name = 'PantheonPlusSHOESSN'
+    data_file = 'Pantheon+SH0ES.dat'
+    covariance_file = 'Pantheon+SH0ES_STAT+SYS.cov'
+    _zname = 'zcmb'
 
-    def initialize(self, *args, cosmo=None, **kwargs):
-        BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
-        # Select only those SNe at z > 0.01 or the ones used as calibrators
+    def read_light_curve_params(self, fn):
+        data = super().read_light_curve_params(fn, header='', sep=' ')
+        return {'zcmb': data['zHD'], 'zhel': data['zHEL'], 'mb': data['m_b_corr'],
+                'is_calibrator': data['IS_CALIBRATOR'].astype('?'), 'cepheid_distance': data['CEPH_DIST']}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Select SNe at z > 0.01, plus those used as Cepheid calibrators.
         zmask = (self.light_curve_params['zcmb'] > 0.01) | self.light_curve_params['is_calibrator']
         self.light_curve_params = {name: value[zmask] for name, value in self.light_curve_params.items()}
         self.covariance = self.covariance[np.ix_(zmask, zmask)]
-        self.precision = utils.inv(self.covariance)
-        self.std = np.diag(self.covariance)**0.5
-        if is_external_cosmo(self.cosmo):
-            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.light_curve_params['mb']))
+        self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
 
-    def calculate(self, Mb=0):
-        self.flattheory = self.light_curve_params['zcmb'] * np.nan
+    def __post_init__(self, *args, **kwargs):
+        self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zcmb']}]})
 
-        # Use Cepheids host distances as theory
+    def __call__(self):
         is_calibrator = self.light_curve_params['is_calibrator']
-        self.flattheory[is_calibrator] = self.light_curve_params['cepheid_distance'][is_calibrator]
+        zcmb = self.light_curve_params['zcmb']
+        zhel = self.light_curve_params['zhel']
+        dL = self.cosmo.get_background().luminosity_distance(z=zcmb)
+        distance_modulus = 5 * jnp.log10(dL / self.cosmo['h']) + 25 + 5 * jnp.log10((1 + zhel) / (1 + zcmb))
+        # Cepheid host distances replace the cosmological prediction for calibrator SNe.
+        self.flattheory = jnp.where(is_calibrator, self.light_curve_params['cepheid_distance'], distance_modulus) + self.Mb.value
+        return super().__call__()
 
-        # Compute predictions at those redshifts that are not used as calibrators
-        zcmb = self.light_curve_params['zcmb'][~is_calibrator]
-        zhel = self.light_curve_params['zhel'][~is_calibrator]
-        self.flattheory[~is_calibrator] = 5 * jnp.log10(self.cosmo.luminosity_distance(zcmb) / self.cosmo['h']) + 25 + 5 * np.log10((1 + zhel) / (1 + zcmb))
+    @classmethod
+    def install(cls, installer):
+        try:
+            data_dir = installer[cls.installer_section]['data_dir']
+        except KeyError:
+            data_dir = installer.data_dir(cls.installer_section)
 
-        self.flatdata = self.light_curve_params['mb'] - Mb
-        BaseSNLikelihood.calculate(self)
+        from desilike.install import exists_path, download
 
-    def read_light_curve_params(self, fn):
-        data = BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ')
-        return {'zcmb': data['zHD'], 'zhel': data['zHEL'], 'mb': data['m_b_corr'], 'is_calibrator': data['IS_CALIBRATOR'].astype('?'), 'cepheid_distance': data['CEPH_DIST']}
+        data_fn = os.path.join(data_dir, cls.data_file)
+
+        if installer.reinstall or not exists_path(data_fn):
+            github = 'https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/Pantheon%2B_Data/4_DISTANCES_AND_COVAR/'
+            for fn in [cls.data_file, cls.covariance_file]:
+                download(os.path.join(github, fn), os.path.join(data_dir, fn))
+
+        installer.write({cls.installer_section: {'data_dir': data_dir}})

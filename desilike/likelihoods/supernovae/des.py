@@ -1,84 +1,42 @@
+"""DES-Y5 type Ia supernovae likelihoods."""
+
 import os
+
 import numpy as np
-from desilike import plotting, utils
-from desilike.cosmo import is_external_cosmo
-from desilike.jax import numpy as jnp
+import jax.numpy as jnp
+
+from desilike.parameter import Parameter, Variable, VariableCollection
 from .base import BaseSNLikelihood
 
 
-class DESY5SNLikelihood(BaseSNLikelihood):
-    """
-    Likelihood for DES-Y5 type Ia supernovae sample.
+class _BaseDESY5SNLikelihood(BaseSNLikelihood):
+    """Shared setup for the two DES-Y5 data releases (see :class:`DESY5v1SNLikelihood`
+    and :class:`DESY5DovekieSNLikelihood`): distance-modulus theory and ``install()``.
 
     Reference
     ---------
     https://arxiv.org/abs/2401.02929
-
-    Parameters
-    ----------
-    data_dir : str, Path, default=None
-        Data directory. Defaults to path saved in desilike's configuration,
-        as provided by :class:`Installer` if likelihood has been installed.
     """
-    config_fn = 'des.yaml'
     installer_section = 'DESY5SNLikelihood'
-    name = 'DESY5SN'
+    _zname = 'zHD'
 
-    def initialize(self, *args, cosmo=None, **kwargs):
-        BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
-        self.covariance = self.covariance + np.diag(self.light_curve_params['MUERR_FINAL'])**2
-        self.precision = utils.inv(self.covariance)
-        self.std = np.diag(self.covariance)**0.5
-        if is_external_cosmo(self.cosmo):
-            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zHD']}}}
+    @classmethod
+    def propose_params(cls):
+        return VariableCollection([Parameter('Mb', value=0., prior=dict(limits=[-5., 5.]), latex='M_b')])
 
-    def calculate(self, Mb=0):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        flatdata = self.light_curve_params['MU'] - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + self.light_curve_params['zHD']))
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(flatdata))
+
+    def __post_init__(self, *args, **kwargs):
+        self.cosmo.add_requirements({'background.luminosity_distance': [{'z': self.light_curve_params['zHD']}]})
+
+    def __call__(self):
         z = self.light_curve_params['zHD']
-        self.flattheory = 5 * jnp.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
-        self.flatdata = self.light_curve_params['MU'] - Mb - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + z))
-        BaseSNLikelihood.calculate(self)
-
-    def read_light_curve_params(self, fn):
-        return BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=',', skip='#')
-
-    @plotting.plotter
-    def plot(self, fig=None):
-        """
-        Plot Hubble diagram: Hubble residuals as a function of distance.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least 2 axes.
-
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-        show : bool, default=False
-            If ``True``, show figure.
-        """
-        from matplotlib import pyplot as plt
-        if fig is None:
-            fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
-            fig.subplots_adjust(hspace=0)
-        else:
-            lax = fig.axes
-        alpha = 0.3
-        argsort = np.argsort(self.light_curve_params['zHD'])
-        zdata = self.light_curve_params['zHD'][argsort]
-        flatdata, flattheory, std = self.flatdata[argsort], self.flattheory[argsort], self.std[argsort]
-        lax[0].plot(zdata, flatdata, marker='o', markeredgewidth=0., linestyle='none', alpha=alpha, color='b')
-        lax[0].plot(zdata, flattheory, linestyle='-', marker=None, color='k')
-        lax[0].set_xscale('log')
-        lax[1].errorbar(zdata, flatdata - flattheory, yerr=std, linestyle='none', marker='o', alpha=alpha, color='b')
-        lax[0].set_ylabel(r'distance modulus [$\mathrm{mag}$]')
-        lax[1].set_ylabel(r'Hubble res. [$\mathrm{mag}$]')
-        lax[1].set_xlabel('$z$')
-        return lax
+        dL = self.cosmo.get_background().luminosity_distance(z=z)
+        self.flattheory = 5 * jnp.log10(dL / self.cosmo['h']) + 25 + self.Mb.value
+        return super().__call__()
 
     @classmethod
     def install(cls, installer):
@@ -89,20 +47,96 @@ class DESY5SNLikelihood(BaseSNLikelihood):
 
         from desilike.install import exists_path, download, extract
 
-        data_fn = os.path.join(data_dir, 'DES-SN5YR_HD.csv')
-        cov_fn = os.path.join(data_dir, 'STAT+SYS.txt')
+        data_fn = os.path.join(data_dir, cls.data_file)
+        cov_fn = os.path.join(data_dir, cls.covariance_file)
 
         if installer.reinstall or not exists_path(data_fn):
-            github = 'https://raw.githubusercontent.com/des-science/DES-SN5YR/main/4_DISTANCES_COVMAT/'
+            # Only .txt files are served gzipped upstream; .csv/.npz files are not.
             for fn in [data_fn, cov_fn]:
                 fngz = fn.replace('.txt', '.txt.gz')
-                download(os.path.join(github, os.path.basename(fngz)), fngz)
-                if fngz.endswith('.gz'): extract(fngz, fn, remove=True)
+                download(os.path.join(cls.github_dir, os.path.basename(fngz)), fngz)
+                if fngz.endswith('.gz'):
+                    extract(fngz, fn, remove=True)
 
-            # Creates config file to ensure compatibility with base class
-            config_fn = os.path.join(data_dir, 'config.dataset')
-            with open(config_fn, 'w') as file:
-                for text in ['name = DESY5', 'data_file = {}'.format(os.path.basename(data_fn)), 'mag_covmat_file = {}'.format(os.path.basename(cov_fn))]:
-                    file.write(text + '\n')
+        installer.write({cls.installer_section: {'data_dir': data_dir}})
 
-        installer.write({cls.__name__: {'data_dir': data_dir}})
+
+class DESY5v1SNLikelihood(_BaseDESY5SNLikelihood):
+    """
+    Likelihood for the DES-Y5 type Ia supernovae sample, original v1.0 data release
+    matching the DES-SN5YR Y5 cosmology paper.
+
+    Covariance is a plain-text stat+sys systematics matrix; the per-SN statistical
+    variance (``MUERR_FINAL``) is added on the diagonal.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2401.02929
+    """
+    data_file = 'DES-SN5YR_HD.csv'
+    covariance_file = 'STAT+SYS.txt'
+    github_dir = 'https://raw.githubusercontent.com/des-science/DES-SN5YR/v1.0/4_DISTANCES_COVMAT/'
+
+    def read_light_curve_params(self, fn):
+        return super().read_light_curve_params(fn, header='', sep=',', skip='#')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.covariance = self.covariance + np.diag(self.light_curve_params['MUERR_FINAL']) ** 2
+        self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
+
+
+class DESY5DovekieSNLikelihood(_BaseDESY5SNLikelihood):
+    """
+    Likelihood for the DES-Y5 type Ia supernovae sample, "Dovekie" recalibration
+    (``main`` branch of the data repository).
+
+    Light-curve parameters use a ``VARNAMES:``/``SN:``-prefixed text format, and the
+    covariance file directly stores the upper triangle of the *precision* (inverse
+    covariance) matrix as a ``.npz`` archive (unpacking logic per
+    ``5_COSMOLOGY/Dovekie_cosmosis_likelihood.py`` in the data repository), already
+    including all statistical and systematic contributions (no extra diagonal term
+    is added).
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2401.02929
+    """
+    data_file = 'DES-Dovekie_HD.csv'
+    covariance_file = 'STAT+SYS.npz'
+    github_dir = 'https://raw.githubusercontent.com/des-science/DES-SN5YR/main/4_DISTANCES_COVMAT/'
+
+    def read_light_curve_params(self, fn):
+        """Parse the 'VARNAMES:'/'SN:'-prefixed, whitespace-separated Dovekie light-curve file."""
+        names, values = None, None
+        with open(fn, 'r') as file:
+            for line in file:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('VARNAMES:'):
+                    names = line[len('VARNAMES:'):].split()
+                    values = {name: [] for name in names}
+                    continue
+                if line.startswith('SN:'):
+                    row = line[len('SN:'):].split()
+                    for name, value in zip(names, row):
+                        try: value = float(value)
+                        except ValueError: pass  # str, e.g. CID
+                        values[name].append(value)
+        return {name: np.array(value) for name, value in values.items()}
+
+    def read_covariance(self, fn):
+        """Unpack the Dovekie .npz precision matrix (upper-triangle-packed, symmetrized)."""
+        data = np.load(fn)
+        n = int(data['nsn'][0])
+        precision = np.zeros((n, n))
+        precision[np.triu_indices(n)] = data['cov']
+        i_lower = np.tril_indices(n, -1)
+        precision[i_lower] = precision.T[i_lower]
+        return precision
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.covariance already holds the full stat+sys precision matrix directly.
+        self.precision = jnp.asarray(self.covariance)

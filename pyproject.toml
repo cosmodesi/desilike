@@ -18,25 +18,39 @@ dependencies = [
     "scipy",
     "pyyaml",
     "mpi4py",
+    "jax",
+    "interpax",
     "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo",
     "lsstypes @ git+https://github.com/adematti/lsstypes"]
 
 [project.optional-dependencies]
 tests = [
+    "matplotlib",
     "emcee",
-    "pyclass @ git+https://github.com/adematti/pyclass"]
+    "pyclass @ git+https://github.com/adematti/pyclass",
+    "folps @ git+https://github.com/cosmodesi/FolpsD",
+    "velocileptors @ git+https://github.com/sfschen/velocileptors.git",
+    "pybird-lss @ git+https://github.com/pierrexyz/pybird.git",
+    "dynesty",
+    "nautilus-sampler",
+    "pocomc",
+    "zeus-mcmc",
+    "h5py",
+    "pyclass @ git+https://github.com/adematti/pyclass",
+    "jax",
+    "interpax",
+    "blackjax"]
 plotting = [
     "matplotlib",
     "tabulate",
     "getdist",
     "anesthetic"]
-jax = [
-    "numpy>=1.25",
-    "jax",
-    "interpax"]
 
 [project.urls]
 Home = "https://desilike.readthedocs.io/en/latest/"
+
+[tool.pytest.ini_options]
+testpaths = ["desilike"]
 
 [tool.flit]
 sdist.exclude = ["doc", ".gitignore", ".github", ".readthedocs.yaml"]

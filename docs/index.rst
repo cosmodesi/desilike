@@ -25,6 +25,7 @@ Table of Contents
 
   user/building
   user/getting_started
+  user/samplers
 
 .. toctree::
   :maxdepth: 1
@@ -47,3 +48,4 @@ Table of Contents
   dev/introduction
   dev/documentation
   dev/tests
+  dev/calculator

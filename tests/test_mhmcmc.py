@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from emcee.autocorr import integrated_time
 
-from desilike.samplers.mhmcmc import FastSlowProposer
-from desilike.samplers.mhmcmc import StandAloneMetropolisHastingsSampler
+from desilike.sampling.mhmcmc import FastSlowProposer
+from desilike.sampling.mhmcmc import StandAloneMetropolisHastingsSampler
 
 
 @pytest.mark.mpi_skip

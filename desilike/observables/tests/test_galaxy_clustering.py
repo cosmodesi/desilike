@@ -361,7 +361,7 @@ def _make_correlation2_lsstypes():
         coords_values = [np.mean(e, axis=-1) for e in edges]
         counts = 1. + rng.uniform(size=tuple(v.size for v in coords_values))
         return types.Count2(counts=counts, norm=np.ones_like(counts),
-                            **{coord: val for coord, val in zip(coords, coords_values)},
+                            **dict(zip(coords, coords_values)),
                             **{f'{coord}_edges': val for coord, val in zip(coords, edges)},
                             coords=coords, attrs=dict(los='x'))
 

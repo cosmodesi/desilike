@@ -39,7 +39,7 @@ class Kernel:
         available.  The default implementation does nothing.
         """
 
-    def run(self, state: 'ProfilerState', chi2, grad=None, **kwargs) -> 'ProfilerState':
+    def run(self, state: ProfilerState, chi2, grad=None, **kwargs) -> ProfilerState:
         """Run one optimisation.
 
         Parameters
@@ -172,7 +172,7 @@ def _pool_map(mpicomm, fn, items):
     return results
 
 
-def _state_to_profiles(state: ProfilerState, varied_params) -> 'Profiles | None':
+def _state_to_profiles(state: ProfilerState, varied_params) -> Profiles | None:
     """Convert a completed ProfilerState to a Profiles object (rescaled space)."""
     if state.best is None:
         return None

@@ -413,7 +413,7 @@ class MCSamples(Samples):
                 sigfigs=sigfigs, positive_sign='u',
             )
             if is_latex:
-                return '${{}}_{{{lo}}}^{{{hi}}}$'.format(lo=lo_r, hi=hi_r)
+                return f'${{}}_{{{lo_r}}}^{{{hi_r}}}$'
             return f'{lo_r}/{hi_r}'
 
         rows = []

@@ -45,7 +45,7 @@ def _write_camspec_fixture(data_dir):
     with open(data_dir / 'like_NPIPE_12.6_unified_data_ranges.txt', 'w') as file:
         for cl in all_cls:
             lo, hi = elllims[cl]
-            file.write('{} {} {}\n'.format(cl, lo, hi))
+            file.write(f'{cl} {lo} {hi}\n')
 
     nx = sum(hi - lo + 1 for lo, hi in elllims.values())
     covariance = (np.eye(nx, dtype='f4') * 1e-2)

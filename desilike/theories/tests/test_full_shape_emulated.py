@@ -58,9 +58,8 @@ def _fd_box(calculator, width=3.):
         # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
         # the node `_check` asserts the emulator is exact at.
         bounds = getattr(getattr(param, 'prior', None), 'limits', None)
-        if bounds is not None and np.isfinite(bounds).all():
-            if low < float(bounds[0]) or high > float(bounds[1]):
-                continue
+        if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
+            continue
         limits[param.name] = (low, high)
     return limits
 

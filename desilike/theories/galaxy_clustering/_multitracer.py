@@ -111,7 +111,7 @@ def assign_params(inst, vc, tracers, mapping=None):
             value = params_group[0]
         else:
             # Deterministic cross: two params — order as (X, Y).
-            name_X, name_Y = tracers
+            name_X, _name_Y = tracers
             value = tuple(sorted(params_group, key=lambda p: 0 if name_X in p.namespace else 1))
         attr_name = mapping(bn) if mapping is not None else bn
         if attr_name.isidentifier():

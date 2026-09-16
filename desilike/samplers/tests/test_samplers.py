@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-import desilike.samplers as samplers
+from desilike import samplers
 from desilike.samples import MCSamples
 from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter

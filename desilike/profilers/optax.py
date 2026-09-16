@@ -60,8 +60,8 @@ class Optax(Kernel):
     def init(self):
         try:
             import optax  # noqa: F401
-        except ImportError:
-            raise ImportError("'optax' is required but not installed. Run: pip install optax")
+        except ImportError as exc:
+            raise ImportError("'optax' is required but not installed. Run: pip install optax") from exc
 
     def run(
         self,

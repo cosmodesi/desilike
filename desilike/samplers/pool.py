@@ -173,8 +173,8 @@ class MPIPool:
         try:
             from mpi4py import MPI
             self.MPI = MPI
-        except ImportError:
-            raise RuntimeError('MPI environment not found!')
+        except ImportError as exc:
+            raise RuntimeError('MPI environment not found!') from exc
         if comm is None:
             comm = self.MPI.COMM_WORLD
         self.comm = comm

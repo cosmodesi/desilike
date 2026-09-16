@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-import desilike.profilers as profilers
+from desilike import profilers
 from desilike.samples import Profiles
 from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter

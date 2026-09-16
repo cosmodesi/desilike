@@ -239,8 +239,8 @@ def get_physical_stochastic_settings(tracer=None):
                     'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5}}
         try:
             settings = settings[tracer]
-        except KeyError:
-            raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
+        except KeyError as exc:
+            raise ValueError(f'unknown tracer: {tracer}, please use any of {list(settings.keys())}') from exc
     else:
         settings = {'fsat': 0.1, 'sigv': 5.}
     return settings
@@ -964,7 +964,7 @@ class LPTVelocileptorsPTSpectrum2Poles(Calculator):
         # Non-node setup only.
         self.nmu = int(mu)
         self._options = {name: kwargs.get(name, val) for name, val in self._lpt_defaults.items()}
-        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads'))
 
     def __call__(self):
         from scipy.interpolate import interp1d as _interp1d
@@ -1183,7 +1183,7 @@ class REPTVelocileptorsPTSpectrum2Poles(Calculator):
         # Non-node setup only.
         self.nmu = int(mu)
         self._options = {name: kwargs.get(name, val) for name, val in self._rept_defaults.items()}
-        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads'))
 
     def __call__(self):
         from scipy.interpolate import interp1d as _interp1d
@@ -1196,7 +1196,7 @@ class REPTVelocileptorsPTSpectrum2Poles(Calculator):
         log10_fk = np.log10(np.clip(np.asarray(self.template.fk), 1e-30, None))
         fk = 10.**_interp1d(log10_ktempl, log10_fk, kind='cubic', fill_value='extrapolate', assume_sorted=True)(np.log10(pt.kv))
         pks = pt.compute_redshift_space_power_multipoles_tables(fk, apar=float(self.template.qpar), aperp=float(self.template.qper), ngauss=self.nmu)[1:]
-        pktable_kv = np.array([pks[list([0, 2, 4]).index(ell)] for ell in self.ells])  # (n_ells, n_kv, 19)
+        pktable_kv = np.array([pks[[0, 2, 4].index(ell)] for ell in self.ells])  # (n_ells, n_kv, 19)
         self.table = _interp1d(pt.kv, pktable_kv, kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
         self.qpar = float(self.template.qpar)
         self.qper = float(self.template.qper)
@@ -2576,7 +2576,7 @@ class FOLPSTracerCorrelation2Poles(Calculator):
 
 #@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
 def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
-                              f0, qpar, qper, multipoles=['B000', 'B202'],
+                              f0, qpar, qper, multipoles=('B000', 'B202'),
                               precision=(4, 16, 4), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
@@ -4452,7 +4452,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
                                        ) / self._sigma8_fid
         canonical = self._get_canonical_params(rescale_counterterms=False)
-        pell_params = {k: v for k, v in cosmo_params.items()}
+        pell_params = dict(cosmo_params.items())
         for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
             pell_params[name] = _wrap(canonical[name])
         if avir is not None:
@@ -4902,7 +4902,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
                                        ) / self._sigma8_fid
         canonical = self._get_canonical_params()
-        bell_params = {k: v for k, v in cosmo_params.items()}
+        bell_params = dict(cosmo_params.items())
         bell_params['z'] = float(self.z)
         for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'):
             bell_params[name] = _wrap(canonical[name])
@@ -5239,22 +5239,21 @@ class _ScaledEmulator(CalculatorEmulator):
             scalars_budget = 2
         self.set_graph_scalars()
         trained = super().train(*args, **kwargs)
-        if self.input_scalars is None:
-            if self._emulator_cls_scalars is not None:
-                from ...emulators.api import Emulator as _build
+        if self.input_scalars is None and self._emulator_cls_scalars is not None:
+            from ...emulators.api import Emulator as _build
 
-                self.logger.info('training the run-time scalar provider, over the full space')
-                provider = self._emulator_cls_scalars.calculator_from_template(
-                    self.calculator.template)
-                # The full space: which of it the provider actually expands is the provider's
-                # own business (`ScalingScalarsEmulator.select_params` leaves w0/wa to its
-                # analytic core), not something the caller should reach in and decide.
-                emulator = _build(provider, self.space,
-                                  cls=self._emulator_cls_scalars).train(budget=scalars_budget)
-                # The fitted provider is what travels in the state; the graph runs over the
-                # calculator it gives back, so predictions cost no Boltzmann call.
-                self._state_scalars = emulator.__getstate__()
-                self.graph_scalars = _compile_scalars(emulator.to_calculator())
+            self.logger.info('training the run-time scalar provider, over the full space')
+            provider = self._emulator_cls_scalars.calculator_from_template(
+                self.calculator.template)
+            # The full space: which of it the provider actually expands is the provider's
+            # own business (`ScalingScalarsEmulator.select_params` leaves w0/wa to its
+            # analytic core), not something the caller should reach in and decide.
+            emulator = _build(provider, self.space,
+                              cls=self._emulator_cls_scalars).train(budget=scalars_budget)
+            # The fitted provider is what travels in the state; the graph runs over the
+            # calculator it gives back, so predictions cost no Boltzmann call.
+            self._state_scalars = emulator.__getstate__()
+            self.graph_scalars = _compile_scalars(emulator.to_calculator())
         return trained
 
     def set_graph_scalars(self):
@@ -5558,8 +5557,8 @@ class FOLPSDEmulator(_ScaledEmulator):
         degrees = dict(zip(table, table_degrees(table, 1)))
         degrees.update(zip(table_now, table_degrees(table_now, 3)))
         # the k row each column is sampled on: the kTout row of its own table
-        k = {name: table[0] for name in table}
-        k.update({name: table_now[0] for name in table_now})
+        k = dict.fromkeys(table, table[0])
+        k.update(dict.fromkeys(table_now, table_now[0]))
         layout = {name: name for name in ('kap', 'muap', 'jac', 'f', 'f0', 'qpar', 'qper',
                                           'sigma8', 'fsigma8', 'sigma8_fid')}
         layout.update(k=k, degrees=degrees, f0_entries=(table[-1], table_now[-1]))
@@ -5723,8 +5722,8 @@ class FKPTEmulator(FOLPSDEmulator):
         # transform carries them through untouched
         degrees.update({name: 0 for name in names
                         if name.startswith('kernel_constants.')})
-        k_rows = {name: table_w[0] for name in table_w}
-        k_rows.update({name: table_now[0] for name in table_now})
+        k_rows = dict.fromkeys(table_w, table_w[0])
+        k_rows.update(dict.fromkeys(table_now, table_now[0]))
         layout = {name: name for name in self._SCALARS}
         layout.update(degrees=degrees, k=k_rows,
                       # the trailing column of each table is f0, degree 0 and rescaled by the

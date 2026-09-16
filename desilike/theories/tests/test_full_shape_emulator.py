@@ -106,7 +106,7 @@ def test_the_background_scalars_are_routed_exactly(emulators):
 def test_to_calculator_agrees_with_predict(emulators):
     """The bug this caught once: an emulated calculator that ignores its parameters and returns
     the fiducial state, indistinguishably from a plain emulator."""
-    emulator, swapped = emulators['folpsd']
+    emulator, _swapped = emulators['folpsd']
     fast = emulator.to_calculator()
     graph = build(fast)
     names = [param.name for param in graph.params if not param.derived]

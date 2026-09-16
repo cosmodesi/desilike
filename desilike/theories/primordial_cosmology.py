@@ -147,13 +147,13 @@ class PrimordialCosmology(Calculator):
         self._engine = None
         self._get_derived = {}
         for param in self.derived_params:
-            if param.basename in ['sigma8_m']:
+            if param.basename == 'sigma8_m':
                 req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_m'})
-            elif param.basename in ['sigma8_cb']:
+            elif param.basename == 'sigma8_cb':
                 req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_cb'})
-            elif param.basename in ['rs_drag']:
+            elif param.basename == 'rs_drag':
                 req = ('thermodynamics.rs_drag', {'of': 'delta_cb'})
-            elif param.basename in ['age']:
+            elif param.basename == 'age':
                 req = ('background.age', {})
             else:
                 req = (f'params.{param.basename}', {})
@@ -410,7 +410,7 @@ class PrimordialCosmology(Calculator):
         obj._engine = aux['engine']
         obj.params = aux['params']
         obj._get_derived = aux['get_derived']
-        obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
+        obj._requirements = dict(aux['ordered_specs'])
         n_results = len(aux['ordered_specs'])
         obj._param_values = children[0]
         obj._results = {sk: arr for (sk, _), arr in zip(aux['ordered_specs'], children[1:1 + n_results])}
@@ -448,7 +448,8 @@ _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)
 def _get_cosmoprimo_fiducial(fiducial):
     """Return a cosmoprimo Cosmology from a name string, (name, kwargs) tuple, dict, or Cosmology."""
     import cosmoprimo
-    import cosmoprimo.fiducial  # noqa: ensure submodule is accessible as cosmoprimo.fiducial
+    # Ensure the submodule is accessible as cosmoprimo.fiducial.
+    import cosmoprimo.fiducial  # noqa: F401
     if fiducial is None:
         raise ValueError('fiducial cosmology is required')
     if hasattr(fiducial, 'get_fourier'):
@@ -1061,7 +1062,7 @@ def _find_capse_ellmax(spectrum_dir, nout):
         else:
             raise ValueError(f'Capse-style emulator {spectrum_dir}: multipole grid length ({len(ell)}) '
                              f'does not match the network output length ({nout})')
-    return int(round(float(np.max(ell))))
+    return round(float(np.max(ell)))
 
 
 def _intersect_ranges(ranges_per_emulator):
@@ -1421,7 +1422,7 @@ class ACECosmology(PrimordialCosmology):
                 base_dir = cosmology._init[1].get('base_dir')
         base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
         if isinstance(engine, str):
-            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section_: engine for section_ in ['harmonic', 'fourier', 'background']}
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else dict.fromkeys(['harmonic', 'fourier', 'background'], engine)
         if section is not None:
             sections = [section] if isinstance(section, str) else list(section)
             unknown = [name for name in sections if name not in engine]
@@ -1492,7 +1493,7 @@ class ACECosmology(PrimordialCosmology):
             base_emulator_dir = Path(Installer().install_dir) / 'ace-emulators'
         _SECTIONS = ['harmonic', 'fourier', 'background']
         if isinstance(engine, str):
-            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section: engine for section in _SECTIONS}
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else dict.fromkeys(_SECTIONS, engine)
 
         def _find_inputs_outputs(emulator_dir):
             import json
@@ -1768,7 +1769,7 @@ class ACECosmology(PrimordialCosmology):
                 else:
                     raise NotImplementedError(f'no background formula for {method_key!r}')
             elif kind == 'jaxace':
-                ace_output = run_ace(spec['z'] if 'z' in spec else 0.)
+                ace_output = run_ace(spec.get('z', 0.))
                 if method_key.startswith('fourier.sigma8_z'):
                     # sigma8_z is total-matter; of='delta_cb' is served with the same value
                     # (see _PACKAGED_EMULATORS).  For theta: fsigma8(z) = f_z * sigma8_z.
@@ -1834,7 +1835,8 @@ class ACECosmology(PrimordialCosmology):
                     filter_cosmo = cosmoprimo_cosmo if self._conversion == 'cosmoprimo' else None
                     filter_cosmo_fid = self._fiducial if self._conversion == 'cosmoprimo' else None
 
-                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z):
+                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z,
+                                           filter_cosmo_fid=filter_cosmo_fid):
                         # the same fixed grid the emulated spectrum was resampled onto, so the
                         # filter is prepared on the fiducial and called on every point after
                         if filter_cosmo_fid is None:
@@ -2045,7 +2047,7 @@ class _SectionEmulator(CalculatorEmulator):
         if cached is not None:
             return cached
         aux = self.aux
-        specs = {spec_key: spec for spec_key, spec in aux['ordered_specs']}
+        specs = dict(aux['ordered_specs'])
         inputs = {param.basename for param in aux['params']}
 
         def describe(spec_key):
@@ -2092,7 +2094,7 @@ class _SectionEmulator(CalculatorEmulator):
             # broadcasts the scalar it divides into a vector. Measured: two derived sigma8 leaves
             # turned a 12-wide derived row into a 14-wide one, and emcee died on the mismatch
             # several hundred steps in, where the walkers' blobs no longer lined up.
-            method_key, kwargs = getter
+            _method_key, kwargs = getter
             described = dict(describe(_spec_key(*getter)))
             described.update({coord: np.atleast_1d(kwargs[coord])
                               for coord in _COORDS if coord in kwargs})

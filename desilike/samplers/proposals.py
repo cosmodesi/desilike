@@ -38,7 +38,7 @@ from ..samples import diagnostics
 logger = logging.getLogger('Proposal')
 
 
-class BaseProposal(object):
+class BaseProposal:
     """Base class for proposal distributions.
 
     Subclasses implement :meth:`logpdf` and :meth:`rvs` (or :meth:`ppf`), and set

@@ -109,7 +109,7 @@ class TestCosmoprimoCosmology:
         cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI', requirements={
             'fourier.pk_now': [{'of': 'delta_cb', 'engine': engine, 'z': [0.5, 1.1], 'k': k}]})
         build(cosmo)
-        spec_key = [key for key in cosmo._requirements if key[0] == 'fourier.pk_now'][0]
+        spec_key = next(key for key in cosmo._requirements if key[0] == 'fourier.pk_now')
 
         def run(point, restart=False):
             for param in cosmo.params:
@@ -170,7 +170,7 @@ class TestCosmoprimoCosmology:
         # Unphysical point, eager: raises (loud, useful for direct/debugging use). pure_callback
         # wraps the original CosmologyInputError, even outside jax.jit.
         bad_eager = {**defaults, 'omega_cdm': -0.05}
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- the wrapping exception type is an implementation detail
             pipe(bad_eager, return_derived=True)
 
         # Same shape of unphysical point (distinct value: the failed eager call above already
@@ -627,7 +627,7 @@ def _space(*names):
 def _relative(emulator, point, leaf='fourier.pk|of=delta_cb,delta_cb', kmin=0., kmax=np.inf):
     predicted, exact = emulator.predict(**point)[leaf], emulator.compute(point)[leaf]
     ratio = np.asarray(predicted) / np.asarray(exact)
-    return ratio[..., (K >= kmin) & (K <= kmax)] if 'pk' in leaf else ratio
+    return ratio[..., (kmin <= K) & (kmax >= K)] if 'pk' in leaf else ratio
 
 
 class TestFourierEmulator:

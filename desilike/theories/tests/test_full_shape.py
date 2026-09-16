@@ -82,9 +82,8 @@ def _fd_box(calculator, width=3.):
         # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
         # the node `_check` asserts the emulator is exact at.
         bounds = getattr(getattr(param, 'prior', None), 'limits', None)
-        if bounds is not None and np.isfinite(bounds).all():
-            if low < float(bounds[0]) or high > float(bounds[1]):
-                continue
+        if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
+            continue
         limits[param.name] = (low, high)
     return limits
 
@@ -236,7 +235,7 @@ class TestTNSPoles:
         # Parameter sensitivity on the (cheap default) template, reusing one build.
         theory = TNSPTSpectrum2Poles(k=k)
         run = _compile(theory)
-        param = list(get_params(theory).select(fixed=False))[0]
+        param = next(iter(get_params(theory).select(fixed=False)))
         lo, hi = (float(v) for v in np.asarray(param.ref.sample(jax.random.key(0), shape=2)))
         run(**{param.name: lo})
         r0 = np.asarray(theory.table['pk_dd'])
@@ -1024,7 +1023,7 @@ class TestCOMET:
                                    err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
 
         # The physical bases expose FOLPSD's names, so the two theories share them.
-        from desilike.base import get_params as get_params
+        from desilike.base import get_params
         cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
                        'Omega_k', 'w0_fld', 'wa_fld'}
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
@@ -1275,7 +1274,7 @@ class TestGeoFPTAX:
         
         # Wrong shape for Sugiyama should raise error
         k_3d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 3)
-        with pytest.raises(ValueError, match="basis='sugiyama'.*shape \\(N, 2\\)"):
+        with pytest.raises(ValueError, match=r"basis='sugiyama'.*shape \(N, 2\)"):
             GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='sugiyama')
         
         # Scoccimarro expects (N, 3)
@@ -1283,7 +1282,7 @@ class TestGeoFPTAX:
         _check(_compile(theory_scoccimarro)(), 'Scoccimarro with (N,3) k')
         
         # Wrong shape for Scoccimarro should raise error
-        with pytest.raises(ValueError, match="basis='scoccimarro'.*shape \\(N, 3\\)"):
+        with pytest.raises(ValueError, match=r"basis='scoccimarro'.*shape \(N, 3\)"):
             GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
         
         # Invalid triangles for Scoccimarro should raise error

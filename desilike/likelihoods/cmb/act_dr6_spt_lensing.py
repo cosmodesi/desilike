@@ -86,7 +86,7 @@ class _CachingNumpy:
         previous entry or a complete new one, never a half-written array.
         """
         target = os.path.join(self._write_dir, name)
-        tmp = '{}.tmp.{}'.format(target, os.getpid())
+        tmp = f'{target}.tmp.{os.getpid()}'
         try:
             os.makedirs(self._write_dir, exist_ok=True)
             np.save(tmp, array)
@@ -94,8 +94,8 @@ class _CachingNumpy:
             os.replace(tmp + '.npy', target)
         except OSError as exc:
             if not self._warned:
-                warnings.warn('could not cache {}: {}. Falling back to parsing the ASCII data on '
-                              'every construction, which costs ~50 s each.'.format(target, exc))
+                warnings.warn(f'could not cache {target}: {exc}. Falling back to parsing the ASCII data on '
+                              'every construction, which costs ~50 s each.')
                 self._warned = True
             try: os.remove(tmp + '.npy')
             except OSError: pass
@@ -189,9 +189,9 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
             # `_cache_loadtxt`), and so does a partial download. Say what is missing here
             # rather than letting `load_data` fail on whichever file it happens to want first.
             if not os.path.isdir(os.path.join(data_dir, 'like_corrs')):
-                raise ValueError('no ACT DR6 lensing data at {}. Run the installer for {} '
+                raise ValueError(f'no ACT DR6 lensing data at {data_dir}. Run the installer for {self.installer_section} '
                                  '(desilike.install), or pass `data_dir` explicitly.'
-                                 .format(data_dir, self.installer_section))
+                                 )
 
         only_spt = (variant == 'spt3g')
         if only_spt:

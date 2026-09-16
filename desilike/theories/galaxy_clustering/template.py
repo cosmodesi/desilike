@@ -62,7 +62,7 @@ from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 # the analytic w0waCDM scalars ScalingScalars divides out; imported here as well because
 # callers have always read them off this module
-from cosmoprimo.emulators.analytic import fourier_analytic_scales# noqa: F401
+from cosmoprimo.emulators.analytic import fourier_analytic_scales  # noqa: F401
 from ._multitracer import propose_params_multitracer, assign_params
 
 
@@ -1923,8 +1923,7 @@ class ScalingScalarsEmulator(CalculatorEmulator):
         names = self.children_leafnames
         corrections = [values[name] for name in names[:len(self._CORRECTIONS)]]
         c_qpar, c_qper, c_D, c_f, c_DM = corrections
-        for name, value in zip(names, corrections):
-            out[name] = value
+        out.update(zip(names, corrections))
 
         # The analytic core wants CANONICAL values, and a pipeline may vary `H0` or `A_s`.
         # Reading them by name cannot work -- H0 is 100 h -- so the cosmology converts: clone the

@@ -49,9 +49,9 @@ def _inv(mat, check_valid='raise'):
         if check_valid == 'raise':
             raise exc
         elif check_valid == 'warn':
-            warnings.warn('Matrix inversion failed: {}'.format(exc))
+            warnings.warn(f'Matrix inversion failed: {exc}')
         elif check_valid != 'ignore':
-            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]')
+            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]') from exc
         return None
 
     # Accuracy check: mat @ invmat ≈ I
@@ -59,7 +59,7 @@ def _inv(mat, check_valid='raise'):
         tmp = mat.dot(invmat)
         ref = np.eye(tmp.shape[0], dtype=tmp.dtype)
         if not np.allclose(tmp, ref, rtol=1e-3, atol=1e-3):
-            msg = 'Numerically inaccurate inverse matrix, max absolute diff {:.6f}.'.format(np.max(np.abs(tmp - ref)))
+            msg = f'Numerically inaccurate inverse matrix, max absolute diff {np.max(np.abs(tmp - ref)):.6f}.'
             if check_valid == 'raise':
                 raise np.linalg.LinAlgError(msg)
             elif check_valid == 'warn':
@@ -112,14 +112,14 @@ def _iat_from_corr(corr, size, criterion, reliable, check_valid, param_name, **k
         toret    = 2.0 * np.sum(corr_sum) - 1.0 - corr_even[ix]
     else:
         raise ValueError(
-            'Unknown criterion {!r}; must be one of "min_corr", "sokal", "geyer"'.format(criterion)
+            f'Unknown criterion {criterion!r}; must be one of "min_corr", "sokal", "geyer"'
         )
 
     if reliable * toret > size:
         msg = (
-            'The chain is shorter than {:d} times the integrated autocorrelation '
-            'time for {!r}. Use this estimate with caution and run a longer chain!\n'
-            'N/{:d} = {:.0f};\ntau: {}'.format(reliable, param_name, reliable, size / reliable, toret)
+            f'The chain is shorter than {reliable:d} times the integrated autocorrelation '
+            f'time for {param_name!r}. Use this estimate with caution and run a longer chain!\n'
+            f'N/{reliable:d} = {size / reliable:.0f};\ntau: {toret}'
         )
         if check_valid == 'raise':
             raise ValueError(msg)
@@ -192,7 +192,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         if nsplits is None or nchains * nsplits < 2:
             raise ValueError(
                 'Provide at least 2 chains to estimate Gelman-Rubin, or specify '
-                'nsplits >= {:d}'.format(int(2.0 / nchains + 0.5))
+                f'nsplits >= {int(2.0 / nchains + 0.5):d}'
             )
         chains = [
             chain[islab * len(chain) // nsplits:(islab + 1) * len(chain) // nsplits]
@@ -202,7 +202,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
 
     sizes = [chain.size for chain in chains]
     if any(size < 2 for size in sizes):
-        raise ValueError('Not enough samples ({}) to estimate Gelman-Rubin'.format(sizes))
+        raise ValueError(f'Not enough samples ({sizes}) to estimate Gelman-Rubin')
 
     if params is None:
         params = _varied_names(chains[0])
@@ -382,8 +382,7 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     flat_chains = []
     for chain in chains:
         if chain.ndim == 2:
-            for walker_idx in range(chain.shape[1]):
-                flat_chains.append(chain[:, walker_idx])
+            flat_chains.extend(chain[:, walker_idx] for walker_idx in range(chain.shape[1]))
         else:
             flat_chains.append(chain)
     chains = flat_chains
@@ -407,9 +406,9 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     # Single parameter from here on
     sizes = [chain.size for chain in chains]
     if not all(size == sizes[0] for size in sizes):
-        raise ValueError('All chains must have the same length; found {}'.format(sizes))
+        raise ValueError(f'All chains must have the same length; found {sizes}')
     if any(size < 2 for size in sizes):
-        raise ValueError('Not enough samples ({}) to estimate IAT'.format(sizes))
+        raise ValueError(f'Not enough samples ({sizes}) to estimate IAT')
 
     size = chains[0].size
     corr = autocorrelation(chains, params)   # (size,) for scalar, (*var_shape, size) for non-scalar
@@ -448,11 +447,11 @@ def _autocorrelation_1d(x):
     x = np.atleast_1d(x)
     if x.ndim != 1:
         raise ValueError(
-            'Expected a 1-D array; got shape {}'.format(x.shape)
+            f'Expected a 1-D array; got shape {x.shape}'
         )
     if x.size < 2:
         raise ValueError(
-            'Need at least 2 samples to compute autocorrelation; got {:d}'.format(x.size)
+            f'Need at least 2 samples to compute autocorrelation; got {x.size:d}'
         )
 
     # Next power-of-2 length for zero-padding
@@ -526,7 +525,7 @@ def geweke(chains, params=None, first=0.1, last=0.5):
         nlast  = value_last.shape[0]
         if nfirst < 2 or nlast < 2:
             raise ValueError(
-                'Not enough samples ({:d}) to estimate Geweke statistics'.format(nsamples)
+                f'Not enough samples ({nsamples:d}) to estimate Geweke statistics'
             )
 
         w_first = aweight_first * fweight_first

@@ -190,7 +190,7 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         f = self.dbeta * template.f
 
         # AP-distorted coordinates; shapes (n_k, n_mu).
-        jac, kap, muap = template.ap_k_mu(k, mu)
+        _jac, kap, muap = template.ap_k_mu(k, mu)
         pknowap = _interp_loglog(kap, template.k, template.pknow_dd)
         pkap = _interp_loglog(kap, template.k, template.pk_dd)
 
@@ -379,7 +379,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
 
         f = self.dbeta * template.f
 
-        jac, kap, muap = template.ap_k_mu(k, mu)
+        _jac, kap, muap = template.ap_k_mu(k, mu)
         pknow_ap = _interp_loglog(kap, template.k, template.pknow_dd)
         pk_ap = _interp_loglog(kap, template.k, template.pk_dd)
 
@@ -496,11 +496,11 @@ def _bb_spectrum_auto_params(ells, broadband):
                                              fd=dict(eps=0.005), latex=f'a_{{{ell},{pow}}}'))
     else:
         for ell in ells:
-            for ik in _BB_SPECTRUM_KERNEL_IKS:
-                auto_params.append(Parameter(f'al{ell}_{ik}', value=0.,
-                                             prior=dict(dist='norm', loc=0., scale=1e4),
-                                             ref=dict(dist='norm', loc=0., scale=1e-2),
-                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}'))
+            auto_params.extend(Parameter(f'al{ell}_{ik}', value=0.,
+                                         prior=dict(dist='norm', loc=0., scale=1e4),
+                                         ref=dict(dist='norm', loc=0., scale=1e-2),
+                                         fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}')
+                               for ik in _BB_SPECTRUM_KERNEL_IKS)
     return auto_params
 
 
@@ -524,10 +524,10 @@ def _bb_correlation_auto_params(ells, broadband):
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-1),
                                              fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}'))
         for ell in ells:
-            for pow in _BB_CORRELATION_BL_POWS:
-                auto_params.append(Parameter(f'bl{ell}_{pow}', value=0.,
-                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
-                                             fd=dict(eps=0.005), latex=f'b_{{{ell},{pow}}}'))
+            auto_params.extend(Parameter(f'bl{ell}_{pow}', value=0.,
+                                         prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
+                                         fd=dict(eps=0.005), latex=f'b_{{{ell},{pow}}}')
+                               for pow in _BB_CORRELATION_BL_POWS)
     return auto_params
 
 

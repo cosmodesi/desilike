@@ -240,9 +240,9 @@ def test_jacrev_external():
     for name in params:
         assert jac_rev[name].shape == (len(K),), f"jacrev[{name}].shape = {jac_rev[name].shape}"
     eps = 1e-5
-    for name in params:
-        fd = (np.asarray(pipe_pk({**params, name: params[name] + eps})) -
-              np.asarray(pipe_pk({**params, name: params[name] - eps}))) / (2 * eps)
+    for name, value in params.items():
+        fd = (np.asarray(pipe_pk({**params, name: value + eps})) -
+              np.asarray(pipe_pk({**params, name: value - eps}))) / (2 * eps)
         assert np.allclose(np.asarray(jac_rev[name]), fd, atol=1e-4), \
             f"jacrev vs FD mismatch for {name}: max err = {np.abs(np.asarray(jac_rev[name]) - fd).max():.2e}"
 
@@ -1721,7 +1721,7 @@ def test_clone_shares_init_params():
 
 def test_clone_mutation_independence():
     """Mutating a param value in the copy does not affect the original pipeline."""
-    _, _, A, _, _, spectrum, likelihood = _make_nodes()
+    _, _, _A, _, _, spectrum, likelihood = _make_nodes()
     spec2 = copy(spectrum)
     pipe1 = build(likelihood)
     pipe2 = build(spec2)
@@ -2347,7 +2347,7 @@ def test_jit_then_eager_does_not_leak_tracers(kind):
              if name in pipe.params}
     jitted = float(jax.jit(lambda params: pipe(params))(point))
     # the eager call is the one that used to raise
-    eager, derived = pipe(point, return_derived=True)
+    eager, _derived = pipe(point, return_derived=True)
     assert np.isfinite(jitted) and np.isfinite(float(eager))
     assert abs(float(eager) - jitted) < 1e-8
     # and again, to catch state that only goes wrong on a second pass

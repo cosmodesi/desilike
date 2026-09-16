@@ -130,7 +130,7 @@ def find_names(allnames, name, quiet=True):
             if add:
                 toret.append(candidate)
     if not toret and not quiet:
-        raise ValueError('No match found for {}'.format(name))
+        raise ValueError(f'No match found for {name}')
     return toret
 
 
@@ -364,7 +364,7 @@ class Variable(Node):
                         base = r'{%s}' % self._latex if '_' in self._latex else self._latex
                         latex = r'%s_{%s}' % (base, latex_namespace)
             if inline:
-                latex = '${}$'.format(latex)
+                latex = f'${latex}$'
             return latex
         return str(self.name)
 

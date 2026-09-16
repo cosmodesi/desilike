@@ -88,8 +88,7 @@ def test_accuracy(likelihood, profile_posterior, key):
 
     sd = dict(zip(['a', 'b'], SD_POSTERIOR if profile_posterior else
                   SD_LIKELIHOOD))
-    use = (~samples.get_flag('optimize', 'a') &
-           samples.get_flag('optimize', 'b'))
+    use = (~samples.flags['optimize', 'a'] & samples.flags['optimize', 'b'])
     assert np.sum(use) == 4
     assert np.allclose(
         -0.5 * ((samples['a'] - mean['a'])**2 / sd['a']**2)[use],

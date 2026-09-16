@@ -77,7 +77,7 @@ class FlagAccessor:
         return [key for key in self.samples.keys if key.startswith('flag_')]
 
     def __repr__(self):
-        return str({key: value for key, value in self.samples.items()
+        return str({key[5:]: value for key, value in self.samples.data.items()
                     if key in self.keys})
 
 
@@ -109,7 +109,7 @@ class ParameterAccessor:
             key.startswith('flag_') or key in SPECIAL_KEYS)]
 
     def __repr__(self):
-        return str({key: value for key, value in self.samples.items()
+        return str({key: value for key, value in self.samples.data.items()
                     if key in self.keys})
 
 
@@ -564,7 +564,7 @@ class Samples(BaseClass):
         """
         use = np.ones(len(self), dtype=bool)
         parameters = np.atleast_1d(parameters)
-        for param in self.parameters:
+        for param in self.parameters.keys:
             # In case only one parameter is requested, use even the case
             # where the parameter itself is optimized. In all other cases, the
             # grid will not be regular, so don't.

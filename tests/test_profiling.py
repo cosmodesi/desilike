@@ -3,7 +3,7 @@ import pytest
 from jax import numpy as jnp
 
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.profilers import optimize, Profiler
+from desilike.profiling import optimize, Profiler
 
 MEAN_PRIOR = np.array([+0.2, -0.1])
 SD_PRIOR = np.array([0.1, 0.05])

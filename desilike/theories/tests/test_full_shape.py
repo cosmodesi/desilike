@@ -676,6 +676,56 @@ class TestFOLPS:
         theory_ells = FOLPSTracerSpectrum3Poles(k=k, ells=((0, 0, 0),))
         assert _compile(theory_ells)().shape[0] == 1
 
+    def test_tracer_bispectrum_scoccimarro(self):
+        """FOLPSTracerSpectrum3Poles in the Scoccimarro basis: integer ells, (k1, k2, k3) triangles."""
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum3Poles
+
+        k = np.array([[0.05, 0.05, 0.05], [0.05, 0.08, 0.10], [0.06, 0.10, 0.12], [0.08, 0.10, 0.15]])
+        ells = (0, 2, 4)
+
+        theory = FOLPSTracerSpectrum3Poles(k=k, ells=ells)
+        # The basis follows the shape of ells, as jaxpower's estimator names them, so a
+        # Scoccimarro window drives the theory over on its own.
+        assert theory._basis == 'scoccimarro' and theory.ells == ells
+        run = _compile(theory)
+        base = run()
+        _check(base, 'FOLPSTracerSpectrum3Poles (scoccimarro)')
+        assert base.shape == (len(ells), len(k))
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum3Poles (scoccimarro)', b1=2.0)
+
+        # The multipoles are taken about the third leg (jaxpower puts the Y_lm on `meshes[2]`),
+        # which the theory arranges by rotating the triplet.  The monopole cannot see that -- it
+        # is an orientation average of a function symmetric in its three legs -- while every
+        # higher multipole depends on it entirely.
+        for permutation in [[1, 2, 0], [2, 0, 1]]:
+            other = _compile(FOLPSTracerSpectrum3Poles(k=k[:, permutation], ells=ells))()
+            assert np.allclose(other[0], base[0], rtol=1e-6), 'B0 should not see the leg ordering'
+            assert np.max(np.abs(other[1] / base[1] - 1.)) > 0.1, 'B2 should follow the leg ordering'
+
+        # Angular quadrature.  Measured here (z = 0.8, the triangles above, against (10, 40)),
+        # max |dB/B| per ell: (10, 6) -> 1e-8, 1e-6, 3e-3; (10, 8) -> 2e-11, 5e-10, 3e-7;
+        # (10, 10) -> 3e-15, 2e-13, 2e-10.  Nphi matters more here than in the Sugiyama basis:
+        # (4, 10) is off by 1% on B2 and 4% on B4, (6, 10) by 3e-4.
+        assert _compile(FOLPSTracerSpectrum3Poles(k=k, ells=ells, precision=(10, 16)))() is not None
+        # Nmu <= ell is not inaccurate but empty: the nodes are the roots of P_Nmu.  Refused
+        # when the pipeline is built, `precision` being non-node setup (__post_init__).
+        for precision in [(10, 4), (10, 2)]:
+            try:
+                _compile(FOLPSTracerSpectrum3Poles(k=k, ells=ells, precision=precision))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'precision={precision} should be refused for ells={ells}')
+
+        # k and ells must agree on the basis.
+        for kk, ee in [(k, ((0, 0, 0),)), (k[:, :2], (0, 2))]:
+            try:
+                FOLPSTracerSpectrum3Poles(k=kk, ells=ee)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'k of shape {kk.shape} with ells={ee} should be refused')
+
     def test_emulated(self):
         """FOLPSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
         from desilike import build

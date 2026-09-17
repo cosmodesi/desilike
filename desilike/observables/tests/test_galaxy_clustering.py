@@ -436,6 +436,35 @@ def test_spectrum3poles_lsstypes():
     np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
 
 
+def test_spectrum3poles_scoccimarro():
+    """Spectrum3PolesObservable: a Scoccimarro data set drives the theory into that basis."""
+    import lsstypes as types
+    from desilike.observables.galaxy_clustering import Spectrum3PolesObservable
+    from desilike.base import build, get_params
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum3Poles
+
+    # (k1, k2, k3) triangles, k1 <= k2 <= k3, as the jaxpower estimator bins them, and plain
+    # integer ells -- the two things that tell the theory which basis it is in.
+    k = np.array([[0.05, 0.05, 0.05], [0.05, 0.08, 0.10], [0.06, 0.10, 0.12], [0.08, 0.10, 0.15]])
+    edges = np.stack([k - 0.005, k + 0.005], axis=-1)
+    ells = [0, 2]
+    data = types.Mesh3SpectrumPoles([types.Mesh3SpectrumPole(
+        k=k, k_edges=edges, num_raw=np.zeros(len(k)), basis='scoccimarro', ell=ell) for ell in ells])
+
+    theory = FOLPSTracerSpectrum3Poles(template=DirectSpectrum2Template(z=0.8), nk=120, nfftlog=128)
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+    # No window: the observable then builds the trivial selection, which is enough to check that
+    # the ells and the (N, 3) coordinates reach the theory.
+    observable = Spectrum3PolesObservable(data=data, theory=theory, covariance=covariance)
+    assert theory._basis == 'scoccimarro' and theory.ells == tuple(ells)
+    assert np.array_equal(theory.k, k)
+
+    pipe = build(observable)
+    pipe({param.name: param.value for param in get_params(observable)})
+    flattheory = np.asarray(observable.flattheory)
+    assert flattheory.shape == (data.size,) and np.isfinite(flattheory).all()
+
+
 def test_correlation2poles_lsstypes():
     """Correlation2PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types

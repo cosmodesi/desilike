@@ -2156,7 +2156,34 @@ class FOLPSPTSpectrum2Poles(Calculator):
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
-def _resolve_spectrum3_multipoles(multipoles):
+def _format_spectrum3_ells(ells, basis=None):
+    """Return ``(ells, basis)``, the basis inferred from the shape of *ells* when not given.
+
+    The same convention as jaxpower's ``_format_ells``: the Sugiyama basis indexes multipoles by
+    a ``(l1, l2, L)`` triplet and its wavenumbers by a ``(k1, k2)`` pair, the Scoccimarro basis
+    by a single integer and a ``(k1, k2, k3)`` triangle.  Inferring rather than asking is what
+    lets :class:`~desilike.observables.galaxy_clustering.Spectrum3PolesObservable` switch the
+    theory over on its own: it passes the window's own ``ells`` straight through.
+    """
+    ells = [ells] if np.ndim(ells) == 0 else list(ells)
+    inferred = 'sugiyama' if np.ndim(ells[0]) else 'scoccimarro'
+    if basis is None:
+        basis = inferred
+    elif inferred not in str(basis):
+        # The one spelling this cannot read: :class:`GeoFPTAXTracerSpectrum3Poles` names its
+        # Scoccimarro multipoles with triplets too, ``(0, 0, 0)``, ``(2, 0, 0)``, ``(0, 2, 0)``,
+        # ``(0, 0, 2)``, which is ambiguous against the Sugiyama ones and additionally encodes
+        # the leg the expansion is about.  Here it is always the third leg, jaxpower's.
+        raise ValueError(f'basis={basis!r} does not match ells={ells}, which are {inferred}. In the '
+                         'scoccimarro basis the multipoles are plain integers, as jaxpower names '
+                         'them, and are taken about the third leg; to expand about another leg, '
+                         'permute the columns of k instead')
+    if 'scoccimarro' in basis:
+        return tuple(int(ell) for ell in ells), 'scoccimarro'
+    return tuple(tuple(int(e) for e in ell) for ell in ells), 'sugiyama'
+
+
+def _resolve_spectrum3_multipoles(multipoles, basis='sugiyama'):
     """Map requested bispectrum multipole names onto the ones folps computes.
 
     Returns ``(folps_multipoles, provided)``: the list to ask folps for, and, per requested
@@ -2164,6 +2191,12 @@ def _resolve_spectrum3_multipoles(multipoles):
     index-swapped partner (that entry is then zero).  Note the swap transposes a 1-D array,
     i.e. it is a no-op, so it is correct only on the ``k1 == k2`` diagonal.
     """
+    if 'scoccimarro' in basis:
+        # No index-swapped partner to look for: one integer, not an (l1, l2) pair.
+        available = ['B0', 'B2', 'B4']
+        provided = [(multipole, False) if multipole in available else (False, False)
+                    for multipole in multipoles]
+        return [multipole for multipole, _ in provided if multipole], provided
     available = ['B000', 'B110', 'B220', 'B112', 'B202', 'B022', 'B222']
     folps_multipoles, provided = [], []
     for multipole in multipoles:
@@ -2606,12 +2639,13 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               precision=(4, 16, 4), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
-                              renormalized=True, use_fk=False, redshift_smearing=None):
+                              renormalized=True, use_fk=False, redshift_smearing=None,
+                              basis='sugiyama'):
     folpsv2 = _import_folps()
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
-    ells, provided = _resolve_spectrum3_multipoles(multipoles)
+    ells, provided = _resolve_spectrum3_multipoles(multipoles, basis=basis)
 
     BispectrumClass = (
         folpsv2.BispectrumCalculator_fk
@@ -2626,7 +2660,31 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
         _patch_folps_bispectrum()
         bispectrum._redshift_smearing = redshift_smearing
 
-    if use_fk:
+    if 'scoccimarro' in basis:
+        # folps expands in the mu of its FIRST leg; jaxpower's estimator puts the Y_lm on the
+        # third (`meshes[2]`), and the Scoccimarro binning sorts k1 <= k2 <= k3, so that is a
+        # different leg and every ell > 0 would disagree.  Rotate the triplet: the bispectrum is
+        # symmetric under permutations, and folps rebuilds the internal angle x12 from whichever
+        # triplet it is handed, so this only moves which leg the Legendre expansion is about.
+        k1k2 = jnp.asarray(k1k2)[:, [2, 0, 1]]
+        # `renormalized` has no counterpart here: the (2l + 1) / 2 factors are always applied.
+        raw = bispectrum.Scoccimarro_Bell(
+            k1k2,
+            f0,
+            bpars,
+            qpar,
+            qper,
+            k_pkl_pklnw_fk,
+            precision=precision,
+            damping=damping,
+            multipoles=ells,
+            bias_scheme=bias_scheme,
+            interpolation_method=interpolation_method,
+        )
+        # Scoccimarro_Bell returns (B0, B2, B4, x), with None in the slots it was not asked for.
+        slots = {'B0': 0, 'B2': 1, 'B4': 2}
+        result = [raw[slots[ell]] for ell in ells]
+    elif use_fk:
         result = bispectrum.Sugiyama_Bell(
             f0,
             bpars,
@@ -2679,9 +2737,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
     Parameters
     ----------
-    k : array, shape (N, 2), default=None
-        Output ``(k1, k2)`` wavenumber pairs [h/Mpc].  Defaults to a diagonal grid
-        ``k1 == k2`` over ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
+    k : array, shape (N, 2) or (N, 3), default=None
+        Output wavenumbers [h/Mpc]: ``(k1, k2)`` pairs in the Sugiyama basis, ``(k1, k2, k3)``
+        triangles in the Scoccimarro one.  Defaults to a diagonal grid ``k1 == k2`` over
+        ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
     pt : FOLPSPTSpectrum3Poles, default=None
         PT calculator providing ``sigma8``, ``fsigma8``, ``qpar``, ``qper`` and the
         underlying template.  Defaults to a new :class:`FOLPSPTSpectrum3Poles`, which computes
@@ -2689,9 +2748,23 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         calculator with a power spectrum theory instead.
     template : template calculator, default=None
         Forwarded to ``pt`` if given.  Defaults to :class:`DirectSpectrum2Template`.
-    ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
-        Bispectrum multipole triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0),
-        (2,2,0), (2,0,2), (0,2,2), (1,1,2), (2,2,2).
+    ells : tuple, default=((0, 0, 0), (2, 0, 2))
+        Bispectrum multipoles, **and** the basis they are expressed in, since the two conventions
+        index them differently -- as jaxpower's estimator does:
+
+        - Sugiyama: triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0), (2,2,0), (2,0,2),
+          (0,2,2), (1,1,2), (2,2,2); ``k`` is then ``(k1, k2)`` pairs.
+        - Scoccimarro: plain integers, the Legendre order of the expansion about the
+          line of sight.  Available: 0, 2, 4; ``k`` is then ``(k1, k2, k3)`` triangles.
+
+        So a Scoccimarro window drives the theory into the Scoccimarro basis by itself:
+        :class:`~desilike.observables.galaxy_clustering.Spectrum3PolesObservable` passes its
+        ``ells`` straight through.  Note :class:`GeoFPTAXTracerSpectrum3Poles` spells its own
+        Scoccimarro multipoles as triplets instead, which is ambiguous against the Sugiyama ones;
+        this class takes jaxpower's integers.
+    basis : str, default=None
+        ``'sugiyama'`` or ``'scoccimarro'``, to assert what ``ells`` already says rather than to
+        change it.
     prior_basis : str, default='physical_aap'
         Bias / counterterm / stochastic parameterization:
 
@@ -2708,7 +2781,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     model : str, default='FOLPSD'
     damping : str, default='lor'
     precision : tuple, default=(4, 16, 4)
-        Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.
+        Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.  The Scoccimarro
+        basis has no ``Nx`` axis -- the triangle fixes that angle -- so it takes ``(Nphi, Nmu)``,
+        and a 3-tuple given there drops its middle entry.  The measurements below are for the
+        Sugiyama basis; the two shared axes are the ones they find already converged.
 
         The three axes are not equally hard.  Scored in :math:`\Delta\chi^2` through the real
         LRG3 window and the joint P+B covariance, against a converged ``(20, 40, 40)`` rule and
@@ -2806,17 +2882,21 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
     def __init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                  prior_basis='physical_aap', redshift_smearing=None, tracers=None, params=None,
-                 **kwargs):
+                 basis=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
         self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
+        self.ells, self._basis = _format_spectrum3_ells(ells, basis=basis)
+        ndim = 3 if self._basis == 'scoccimarro' else 2
         if k is None:
-            k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+            k = np.column_stack([np.linspace(0.01, 0.1, 11)] * ndim)
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
-        self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
+        if self.k.shape[-1] != ndim:
+            raise ValueError(f'the {self._basis} basis takes k of shape (N, {ndim:d}), '
+                             f'got {self.k.shape}')
         if pt is None:
             pt = FOLPSPTSpectrum3Poles(**kwargs)
         self.pt = pt
@@ -2827,16 +2907,29 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                       prior_basis='physical_aap', fsat=None, sigv=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(4, 16, 4),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
-                      tracers=None, **kwargs):
+                      tracers=None, basis=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        precision = tuple(precision)
+        if self._basis == 'scoccimarro':
+            if len(precision) == 3:
+                # A 3-tuple is a Sugiyama (Nphi, Nx, Nmu), which says nothing about this basis:
+                # there is no Nx axis (the triangle fixes that angle), and carrying its Nmu over
+                # would be actively wrong -- the default Nmu = 4 is *degenerate* for ell = 4, the
+                # Gauss-Legendre nodes being the roots of P_Nmu, so that projection comes out
+                # identically zero rather than merely inaccurate.  Use folps' own default.
+                precision = (10, 10)
+            if precision[-1] <= max(self.ells):
+                raise ValueError(f'precision={precision} cannot give ell = {max(self.ells):d}: the '
+                                 f'{precision[-1]:d} Gauss-Legendre nodes are the roots of '
+                                 f'P_{precision[-1]:d}, so that projection is identically zero')
         self._options = dict(model=str(model), damping=str(damping),
-                             precision=tuple(precision), renormalized=bool(renormalized),
-                             interpolation_method=str(interpolation_method))
+                             precision=precision, renormalized=bool(renormalized),
+                             interpolation_method=str(interpolation_method), basis=self._basis)
 
     def __call__(self):
         sigma8 = self.pt.sigma8
@@ -2876,7 +2969,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             pars = [1. + b1L, b2L, bsL, c1, c2,
                     self.snb0.value / self._nbar, self.sn0.value / self._nbar, self.X_FoG.value]
 
-        multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
+        if self._basis == 'scoccimarro':
+            multipoles = tuple(f'B{ell:d}' for ell in self.ells)
+        else:
+            multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
         options = dict(self._options)
         self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme,

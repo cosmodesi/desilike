@@ -12,6 +12,18 @@ on:
     - cron: '0 0 1 * *'
   workflow_dispatch:
 
+env:
+  # The version whose coverage is reported -- and the only one that runs desilike/theories, which
+  # is ~94% of the suite's runtime.  Those tests exercise numerics, not Python-version behaviour,
+  # so running them on all four versions cost four times the minutes for one version's worth of
+  # signal.  The trade is explicit: a theory-level break that is specific to another interpreter
+  # is caught by the monthly cron on that version, not by the push that introduces it.
+  COVERAGE_PYTHON: "3.13"
+  # Packages holding MPI-aware code (`mpicomm` / `mpi4py`): samplers, profilers, samples,
+  # emulators, and the package root (desilike/tests covers it).  Nothing else can behave
+  # differently off rank 0, so nothing else is worth running twice under mpirun.
+  MPI_TESTPATHS: "desilike/tests desilike/samplers desilike/profilers desilike/samples desilike/emulators"
+
 jobs:
   test:
 
@@ -21,7 +33,12 @@ jobs:
         os: [ubuntu-latest]
         # 3.10 is out: jax stopped at 0.6.2 there, too old for desilike's jax-native design.
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # The serial and MPI passes are independent -- they only used to run one after the other
+        # because they shared a `coverage combine`.  As two matrix legs they run concurrently, so
+        # the check's wall clock is the slower of the two rather than their sum.
+        suite: [serial, mpi]
     runs-on: ${{ matrix.os }}
+    name: ${{ matrix.suite }} (${{ matrix.os }}, ${{ matrix.python-version }})
 
     steps:
     - uses: actions/checkout@v4
@@ -40,7 +57,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install 'ruff>=0.16,<0.17' pytest pytest-cov pytest-mpi
+        python -m pip install 'ruff>=0.16,<0.17' pytest pytest-cov pytest-mpi pytest-timeout pytest-xdist
         if [ "$RUNNER_OS" == "Linux" ]; then
           sudo apt install libopenmpi-dev
         else
@@ -61,18 +78,73 @@ jobs:
         python -m pip install .[tests]  # brings in cosmoprimo and lsstypes, from git, every run
         python -m pip install ipython  # TODO: temporary fix for https://github.com/AnswerDotAI/fastprogress/issues/117
     - name: Lint with ruff
+      if: matrix.suite == 'serial'  # the same tree either way; linting it twice says nothing new
       run: |
         # Rules and per-file exceptions live in pyproject.toml, [tool.ruff.lint].
         ruff check desilike
     - name: Test with pytest
+      # Outer net for a hang that pytest-timeout cannot see because it happens outside a test
+      # item: collection, MPI_Finalize, or interpreter shutdown.  It only has to beat the 6h
+      # default that once let a deadlocked mpirun burn a whole job.
+      timeout-minutes: 90
       run: |
         # Tests live next to the code they cover; `testpaths` in pyproject.toml points at them.
-        COVERAGE_FILE=.coverage.no_mpi python -m pytest --cov=desilike --durations=0
-        mpirun -n 2 bash -c 'COVERAGE_FILE=.coverage.mpi.$OMPI_COMM_WORLD_RANK python -m pytest --cov=desilike --durations=0 --with-mpi'
+        #
+        # --timeout turns a deadlock into a named failure with a stack trace instead of a
+        # cancelled job.  --timeout-method=thread is required, not a preference: the default
+        # `signal` method cannot interrupt a rank blocked inside MPI_Recv -- measured, the
+        # blocked rank sat there until the job was killed -- whereas a watchdog thread dumps
+        # the stack and names the line.  Both limits are ~10x the slowest test they cover, so
+        # only a genuine hang can trip them.
+        TIMEOUT_METHOD="--timeout-method=thread"
+        if [ "${{ matrix.suite }}" = "mpi" ]; then
+          # No xdist here: xdist forks its own workers per rank, which is not a thing to combine
+          # with mpirun.  The slowest test in this subset is ~30s, hence the tighter limit.
+          mpirun -n 2 bash -c "COVERAGE_FILE=.coverage.mpi.\$OMPI_COMM_WORLD_RANK python -m pytest --cov=desilike --durations=0 --with-mpi $MPI_TESTPATHS --timeout=600 $TIMEOUT_METHOD"
+        else
+          # `--dist load` spreads individual tests, not whole files: the two full_shape files are
+          # ~20 min each, so keeping a file on one worker would set the floor there.
+          # The slowest legitimate test is ~4 min, so --timeout=1800 is pure headroom.
+          IGNORE=""
+          if [ "${{ matrix.python-version }}" != "${{ env.COVERAGE_PYTHON }}" ]; then
+            IGNORE="--ignore=desilike/theories"
+          fi
+          COVERAGE_FILE=.coverage.serial python -m pytest --cov=desilike --durations=0 \
+            -n auto --dist load $IGNORE --timeout=1800 $TIMEOUT_METHOD
+        fi
+    - name: Upload coverage data
+      # Only the reported version's data is kept; the other legs run a subset and would dilute it.
+      if: ${{ success() && ( matrix.python-version == env.COVERAGE_PYTHON ) && ( matrix.os == 'ubuntu-latest' ) }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-${{ matrix.suite }}
+        path: .coverage.*
+        include-hidden-files: true  # `.coverage.*` is dotted, and v4 drops hidden files by default
+        if-no-files-found: error
+
+  coverage:
+    # The combine step the split took out of the test job: it needs both passes' data, so it can
+    # only run once both have finished.
+    needs: test
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ env.COVERAGE_PYTHON }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.COVERAGE_PYTHON }}
+    - name: Download coverage data
+      uses: actions/download-artifact@v4
+      with:
+        pattern: coverage-*
+        merge-multiple: true
+    - name: Combine
+      run: |
+        python -m pip install coverage
         coverage combine
         coverage lcov
     - name: Coverage with Coveralls
-      if: ${{ success() && ( matrix.python-version == '3.13' ) && ( matrix.os == 'ubuntu-latest' ) }}
       uses: coverallsapp/github-action@v2
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}

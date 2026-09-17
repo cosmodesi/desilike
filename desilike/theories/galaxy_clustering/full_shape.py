@@ -1374,6 +1374,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
     with_stoch : bool, default=True
     with_resum : str or bool, default='full'
     with_ap : bool, default=True
+    LambdaIR : float, default=None
+        IR cutoff passed to PyBird Resum. None uses 0.1 for with_resum='full', otherwise 1.0.
     """
 
     _is_external = True
@@ -1384,7 +1386,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4),
                  accboost=1, fftaccboost=2, fftbias=-1.6,
-                 with_stoch=True, with_resum='full', with_ap=True, **kwargs):
+                 with_stoch=True, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -1396,7 +1398,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4),
                       accboost=1, fftaccboost=2, fftbias=-1.6,
-                      with_stoch=True, with_resum='full', with_ap=True, **kwargs):
+                      with_stoch=True, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
         self._with_stoch = bool(with_stoch)
         self._with_nnlo = False
@@ -1420,7 +1422,9 @@ class PyBirdPTSpectrum2Poles(Calculator):
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
         # NOTE: theory prediction is sensitive to the chosen value of LambdaIR, better to check with the author
-        self._resum = Resum(LambdaIR=0.1 if (with_resum == 'full') else 1.0, NFFT=192, co=self._co)
+        if LambdaIR is None:
+            LambdaIR = 0.1 if with_resum == 'full' else 1.0
+        self._resum = Resum(LambdaIR=LambdaIR, NFFT=192, co=self._co)
         self._projection = Projection(self.k, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
 
     def __call__(self):
@@ -1757,7 +1761,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
     s : array, default=None
     template : DirectSpectrum2Template, default=None
     ells : tuple of int, default=(0, 2, 4)
-    accboost, fftaccboost, fftbias, with_stoch, with_resum, with_ap : same as PyBirdPTSpectrum2Poles.
+    accboost, fftaccboost, fftbias, with_stoch, with_resum, with_ap, LambdaIR : same as PyBirdPTSpectrum2Poles.
     """
 
     _is_external = True
@@ -1768,7 +1772,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
 
     def __init__(self, s=None, template=None, ells=(0, 2, 4),
                  accboost=1, fftaccboost=2, fftbias=-1.6,
-                 with_stoch=False, with_resum='full', with_ap=True, **kwargs):
+                 with_stoch=False, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if s is None:
             s = np.linspace(20., 200., 181)
@@ -1780,7 +1784,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
 
     def __post_init__(self, s=None, template=None, ells=(0, 2, 4),
                       accboost=1, fftaccboost=2, fftbias=-1.6,
-                      with_stoch=False, with_resum='full', with_ap=True, **kwargs):
+                      with_stoch=False, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
         self._with_stoch = bool(with_stoch)
         self._with_nnlo = False
@@ -1799,7 +1803,9 @@ class PyBirdPTCorrelation2Poles(Calculator):
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
-        self._resum = Resum(LambdaIR=0.1 if (with_resum == 'full') else 1.0, NFFT=192, co=self._co)
+        if LambdaIR is None:
+            LambdaIR = 0.1 if with_resum == 'full' else 1.0
+        self._resum = Resum(LambdaIR=LambdaIR, NFFT=192, co=self._co)
         self._projection = Projection(self.s, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
 
     def __call__(self):

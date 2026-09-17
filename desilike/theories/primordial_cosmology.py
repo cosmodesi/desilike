@@ -2021,6 +2021,34 @@ class _SectionEmulator(CalculatorEmulator):
       at the centre for ever.
     """
 
+    def to_calculator(self, calculator=None, **kwargs):
+        """Deploy, with an ``add_requirements`` bound to the class so a copy keeps it.
+
+        A consumer left un-emulated -- a template on an arm the emulator did not replace -- calls
+        ``add_requirements`` on every build. The base deployment answers that from the instance,
+        which ``copy()`` discards: it re-runs ``__init__``, and the deployed one is a no-op. So
+        ``sample`` and ``profile``, which copy before building, died on a missing
+        ``_requirements`` where ``build`` alone looked clean.
+
+        Requirements are fixed at training, so this is a no-op for one that was emulated and
+        raises for one that was not, naming it here rather than leaving a missing leaf later.
+        """
+        deployed = super().to_calculator(calculator=calculator, **kwargs)
+        emulated = {spec_key[0] for spec_key in deployed._requirements}
+
+        def add_requirements(self, requirements):
+            missing = sorted(set(requirements) - emulated)
+            if missing:
+                raise ValueError(f'{missing} not emulated by this cosmology, which serves '
+                                 f'{sorted(emulated)}. It was deployed from an emulator trained '
+                                 'on the requirements registered at the time; re-train with the '
+                                 'new ones in place, or leave the arm that needs them exact.')
+
+        # The class is synthesised per deployment (`type(f'Emulated{...}', ...)`), so this
+        # reaches only this deployment's own class.
+        type(deployed).add_requirements = add_requirements
+        return deployed
+
     def set_children_leafnames(self):
         aux, calculator = self.aux, self.calculator
         # in the order `tree_flatten` produces: a dict child flattens in sorted key order

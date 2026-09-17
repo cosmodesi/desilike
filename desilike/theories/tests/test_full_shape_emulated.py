@@ -30,16 +30,32 @@ _K = np.linspace(0.02, 0.2, 15)
 _ELLS = (0, 2)
 _S = np.linspace(50., 150., 10)
 _EMU_ORDER = 1
+# Training costs one full PT evaluation per finite-difference node, ~(2 * ndim + 1) of them, so
+# the box dimension sets the runtime of this whole file (measured on Kaiser: 3.96s at ndim=5,
+# 1.87s at ndim=2, i.e. linear).  `_check` only ever shifts a BIAS parameter (`b1`, `b1p`), which
+# is downstream of the emulator, so no assertion here evaluates it off-centre along any of those
+# axes -- carrying all of them is cost for nothing.  Two keep the multi-parameter plumbing under
+# test at a bit under half the price; `max_axes=None` asks for the full box, which one test per
+# file still does so the all-axes path stays covered.
+# A COUNT, not a list of names: which parameters are varied depends on the template (a default
+# template gives h/logA/n_s/omega_b/omega_cdm, a `BAOSpectrum2Template(apmode='qparqper')` gives
+# the dilation parameters instead), so naming them fits one case and raises on the next.
+# NOTE: test_full_shape.py carries its own copy of this helper; keep the two in step.
+_EMU_MAX_AXES = 2
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
-def _fd_box(calculator, width=3.):
+def _fd_box(calculator, width=3., max_axes=_EMU_MAX_AXES):
     """A box `value +- width * fd.eps` per varied parameter.
 
     The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
     the emulated region comparable. not the `ref` box: these parameters have none, and the
     prior is far too wide to evaluate.
+
+    *max_axes* caps how many varied parameters the box spans, taking them in name order so the
+    choice is reproducible (``None`` keeps every one).  A parameter left out is frozen at its
+    trained value, which `_check` already accounts for.
     """
     from desilike.base import build
     limits = {}
@@ -61,16 +77,25 @@ def _fd_box(calculator, width=3.):
         if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
             continue
         limits[param.name] = (low, high)
+    if max_axes is not None:
+        if not limits:
+            raise ValueError(f'{calculator} has no varied parameter to emulate over')
+        limits = {name: limits[name] for name in sorted(limits)[:max_axes]}
     return limits
 
 
-def _emulate(theory, inner_pt=None):
+def _train(inner_pt, max_axes=_EMU_MAX_AXES):
+    """Train an emulator on *inner_pt* over its finite-difference box."""
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt, max_axes=max_axes)))
+    emu.train(budget=_EMU_ORDER)
+    return emu
+
+
+def _emulate(theory, inner_pt=None, max_axes=_EMU_MAX_AXES):
     """Emulate ``inner_pt`` (default: ``theory.pt``) in-place; return compiled pipeline."""
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
-    emu.train(budget=_EMU_ORDER)
-    replace(theory, inner_pt, emu.to_calculator())
+    replace(theory, inner_pt, _train(inner_pt, max_axes=max_axes).to_calculator(inner_pt))
     return build(theory)
 
 
@@ -114,7 +139,9 @@ def test_kaiser_spectrum_emulated():
         k=_K, ells=_ELLS,
         pt=KaiserPTSpectrum2Poles(k=_K, ells=_ELLS,
                                    template=BAOSpectrum2Template(z=0.5, fiducial=_FID, apmode='qparqper')))
-    pipe_emu = _emulate(theory_emu)
+    # `max_axes=None`: the one test in this file that trains over EVERY varied parameter, so the
+    # full-box path stays covered.  Kaiser is the cheapest PT here, which is why it carries it.
+    pipe_emu = _emulate(theory_emu, max_axes=None)
 
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
@@ -341,11 +368,24 @@ def test_folps_spectrum3_poles_prior_bases():
     _K3 = np.column_stack([np.linspace(0.02, 0.1, 5)] * 2)
     _ELLS3 = ((0, 0, 0), (2, 0, 2))
 
-    for prior_basis in ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap'):
-        theory = FOLPSTracerSpectrum3Poles(k=_K3, ells=_ELLS3, prior_basis=prior_basis,
-                                           pt=FOLPSPTSpectrum2Poles())
-        pipe = _emulate(theory)
-        out = np.asarray(pipe())
+    # `prior_basis` selects a bias-parameter conversion, which sits DOWNSTREAM of the PT
+    # sub-graph: the four theories below configure their `pt` identically, so training an
+    # emulator per iteration trained the same thing four times over (measured at 879s, the
+    # slowest test in the suite by 2.4x).  Train once and deploy it into each theory instead.
+    # Each deployment gets its own `pt` instance, because `to_calculator` takes the constructor
+    # arguments -- template and cosmology included -- off the calculator it is handed, and
+    # sharing one across the four would leave them aliasing a single template.
+    bases = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
+    theories, pts = [], []
+    for prior_basis in bases:
+        pt = FOLPSPTSpectrum2Poles()
+        theories.append(FOLPSTracerSpectrum3Poles(k=_K3, ells=_ELLS3, prior_basis=prior_basis, pt=pt))
+        pts.append(pt)
+
+    emu = _train(pts[0])
+    for prior_basis, theory, pt in zip(bases, theories, pts):
+        replace(theory, pt, emu.to_calculator(pt))
+        out = np.asarray(build(theory)())
         assert out.shape == (len(_ELLS3), len(_K3)), f'unexpected shape {out.shape} for prior_basis={prior_basis!r}'
 
 

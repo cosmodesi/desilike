@@ -58,12 +58,27 @@ def _compile(theory):
     return run
 
 
-def _fd_box(calculator, width=3.):
+# Training costs one full PT evaluation per finite-difference node, ~(2 * ndim + 1) of them, so
+# the box dimension sets what the `test_emulated` methods cost -- a third of this suite's runtime.
+# `_check_emulator` only ever shifts a BIAS parameter, which is downstream of the emulator, so no
+# assertion here evaluates it off-centre along a box axis.  Two axes keep the multi-parameter
+# plumbing under test at a bit under half the cost; `max_axes=None` asks for the full box, which
+# the Kaiser case still does.  A COUNT, not a list of names: which parameters are varied depends
+# on the template, so naming them fits one case and raises on the next.
+# NOTE: test_full_shape_emulated.py carries its own copy of this helper; keep the two in step.
+_EMU_MAX_AXES = 2
+
+
+def _fd_box(calculator, width=3., max_axes=_EMU_MAX_AXES):
     """A box `value +- width * fd.eps` per varied parameter.
 
     The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
     the emulated region comparable.  NOT the `ref` box: these parameters have none, and the
     prior is far too wide to evaluate.
+
+    *max_axes* caps how many varied parameters the box spans, taking them in name order so the
+    choice is reproducible (``None`` keeps every one).  A parameter left out is frozen at its
+    trained value, which `_check_emulator` accounts for.
     """
     from desilike.base import build
     limits = {}
@@ -85,19 +100,23 @@ def _fd_box(calculator, width=3.):
         if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
             continue
         limits[param.name] = (low, high)
+    if max_axes is not None:
+        if not limits:
+            raise ValueError(f'{calculator} has no varied parameter to emulate over')
+        limits = {name: limits[name] for name in sorted(limits)[:max_axes]}
     return limits
 
 
-def _emulate(theory, inner_pt=None):
+def _emulate(theory, inner_pt=None, max_axes=_EMU_MAX_AXES):
     """Emulate ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
     from desilike import build
     from desilike.base import replace
     from desilike.emulators import Emulator, Space
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt, max_axes=max_axes)))
     emu.train(budget=1, verbose=False)
-    replace(theory, inner_pt, emu.to_calculator())
+    replace(theory, inner_pt, emu.to_calculator(inner_pt))
     return build(theory)
 
 
@@ -204,7 +223,9 @@ class TestKaiserPoles:
         pipe_exact = build(KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template))
         theory_emu = KaiserTracerSpectrum2Poles(k=k, ells=ells,
                                                 pt=KaiserPTSpectrum2Poles(k=k, ells=ells, template=copy(template)))
-        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+        # `max_axes=None`: the one case here that trains over EVERY varied parameter, so the
+        # full-box path stays covered.  Kaiser is the cheapest PT here, which is why it carries it.
+        _check_emulator(pipe_exact, _emulate(theory_emu, max_axes=None), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
         template_s = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')

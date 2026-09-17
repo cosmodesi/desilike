@@ -497,18 +497,10 @@ class CalculatorEmulator(_Emulator):
         rebuilt = self._calculator_cls.tree_unflatten(self.aux, children)
         for key, value in rebuilt.__dict__.items():
             setattr(deployed, key, value)
-        # Bind the deployed calculator to the emulator's OWN parameter objects.
-        #
+        # Bind the deployed calculator to the emulator's own parameter objects.
         # `tree_unflatten` above restores whatever the aux carried, which can include same-named
         # Parameter objects alongside the ones this emulator holds.  `_trace_graph` would then
-        # unify the duplicates first-seen-wins: measured back when the root constructor still ran,
-        # a prior narrowed in place on `emulator.graph_params['h']` came back as (0.1, 10.0)
-        # instead of (0.66, 0.69), silently discarding what the caller set -- which is exactly
-        # what `desi-clustering` does before deploying.
-        #
-        # Binding here makes the winner a decision rather than a traversal order, and it is the
-        # only reason auto-share fires at all: measured across 355 tests, all six triggers were
-        # this case.
+        # unify the duplicates first-seen-wins.
         from desilike.base import replace
 
         for param in self.graph_params:

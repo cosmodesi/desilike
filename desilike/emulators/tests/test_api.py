@@ -527,3 +527,38 @@ def test_a_bare_deploy_carries_the_trained_grid_not_the_default():
     build(deployed)(b1=2.)
     assert np.allclose(deployed.k, k_trained) and tuple(deployed.ells) == (0, 2)
     assert np.shape(deployed.poles) == (2, k_trained.size)
+
+
+class MetadataToy(Toy):
+    def tree_flatten(self):
+        return [self.pk], {'k': K, 'ells': (0,), 'z': 0.5}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = super().tree_unflatten(aux, children)
+        obj.__dict__.update(aux)
+        return obj
+
+
+class MetadataParent(Parent):
+    def __init__(self, child):
+        self.child = child
+        self.k = child.k
+        self.ells = child.ells
+        self.z = child.z
+
+
+def test_metadata_survives_parent_construction_after_graph_copy(tmp_path):
+    from desilike.base import build, copy
+
+    emulator = Emulator(MetadataToy(h=Variable('h', value=0.7)),
+                        Space(bounds={'h': (0.6, 0.8)}), budget=1).train()
+    path = tmp_path / 'metadata.h5'
+    emulator.write(path)
+    from desilike.emulators import CalculatorEmulator
+    deployed = CalculatorEmulator.read(path).to_calculator()
+    original = MetadataParent(deployed)
+    cloned = copy(original)
+    np.testing.assert_array_equal(cloned.k, K)
+    assert cloned.ells == (0,) and cloned.z == 0.5
+    np.testing.assert_allclose(build(original)({'h': .73}), build(cloned)({'h': .73}))

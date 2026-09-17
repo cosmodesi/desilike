@@ -388,6 +388,14 @@ class CalculatorEmulator(_Emulator):
                 # chain wander until CLASS refused). What the object needs instead is its state,
                 # which `tree_unflatten` rebuilds from the aux and one prediction, and its
                 # parameters, which the emulator holds.
+                # Graph copying reconstructs this class by calling its constructor.
+                # Restore state here so parents can read static metadata while they
+                # are being constructed, before any graph evaluation takes place.
+                predicted = predict(**emulator.space.center)
+                leaves = [predicted[name] for name in children_leafnames]
+                children = jax.tree_util.tree_unflatten(children_treedef, leaves)
+                rebuilt = root_cls.tree_unflatten(aux, children)
+                self.__dict__.update(rebuilt.__dict__)
                 self.emulator_derived = dict(derived_nodes)
                 # Hold the parameter nodes as an attribute of this object. `_trace_graph`
                 # discovers Nodes nested in dicts, so the compiled graph threads values into
@@ -485,18 +493,6 @@ class CalculatorEmulator(_Emulator):
             # find the pipeline's own calculator here.
             self.calculator = calculator
         deployed = EmulatedCalculator()
-        # No constructor ran, so give the object its state now rather than at the first call:
-        # `plot()`, `tree_flatten` and any consumer reading `theory.k` do so before then. The aux
-        # carries the configuration and one prediction at the deployment point carries the rest --
-        # the same two ingredients `__call__` uses, so the object starts out exactly as a called
-        # one looks.
-        centre = dict(self.space.center)
-        predicted = self.predict(**centre)
-        leaves = [predicted[name] for name in self.children_leafnames]
-        children = jax.tree_util.tree_unflatten(self.children_treedef, leaves)
-        rebuilt = self._calculator_cls.tree_unflatten(self.aux, children)
-        for key, value in rebuilt.__dict__.items():
-            setattr(deployed, key, value)
         # Bind the deployed calculator to the emulator's own parameter objects.
         # `tree_unflatten` above restores whatever the aux carried, which can include same-named
         # Parameter objects alongside the ones this emulator holds.  `_trace_graph` would then

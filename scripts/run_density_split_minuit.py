@@ -15,7 +15,9 @@ os.environ.setdefault('MPLCONFIGDIR', str(Path(tempfile.gettempdir()) / 'matplot
 import numpy as np
 
 from desilike import setup_logging
-from desilike.emulators import EmulatedCalculator, Emulator, TaylorEmulatorEngine
+from desilike.emulators import CalculatorEmulator, Emulator, Space
+from desilike import get_params
+from desilike.base import replace
 from desilike.likelihoods import ObservablesGaussianLikelihood
 from desilike.observables.galaxy_clustering import (
     DensitySplitPowerSpectrumMultipolesObservable,
@@ -113,10 +115,10 @@ def check_emulator(theory, emulator):
             'The loaded emulator was trained from {}.'.format(found)
         )
 
-    expected = theory.pt.varied_params.names()
+    expected = get_params(theory.pt).select(varied=True).names()
     if not expected:
         raise ValueError('FOLPS PT emulation requires at least one varied template/cosmology parameter.')
-    found = emulator.varied_params.names()
+    found = get_params(emulator).select(varied=True).names()
     if found != expected:
         raise ValueError(
             f'Loaded FOLPS PT emulator varied parameters do not match the current theory: '
@@ -125,34 +127,31 @@ def check_emulator(theory, emulator):
 
 
 def maybe_emulate_pt(theory, emulator_fn=None):
-    """Load or train a Taylor emulator for the FOLPS PT calculator."""
+    """Load or train a Chebyshev emulator for the FOLPS PT calculator."""
     if emulator_fn is None:
         return None
 
     emulator_fn = _emulator_path(emulator_fn)
     if emulator_fn.exists():
-        emulated_pt = EmulatedCalculator.load(str(emulator_fn))
+        emulated_pt = CalculatorEmulator.read(str(emulator_fn)).to_calculator()
         check_emulator(theory, emulated_pt)
         print(f'emulator: loaded {emulator_fn}')
         print('emulator_type: folps_pt')
-        print(f'emulator_varied_parameters: {", ".join(emulated_pt.varied_params.names())}')
+        print(f'emulator_varied_parameters: {", ".join(get_params(emulated_pt).select(varied=True).names())}')
     else:
-        if not theory.pt.varied_params:
+        if not get_params(theory.pt).select(varied=True):
             raise ValueError('FOLPS PT emulation requires at least one varied template/cosmology parameter.')
-        emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(method='finite', order=3))
-        emulator.set_samples()
-        emulator.fit()
+        emulator = Emulator(theory.pt, Space(theory.pt), engine='chebyshev', budget=3)
+        emulator.train()
         emulator_fn.parent.mkdir(parents=True, exist_ok=True)
         emulated_pt = emulator.to_calculator()
-        emulated_pt.save(str(emulator_fn))
+        emulator.write(str(emulator_fn))
         check_emulator(theory, emulated_pt)
         print(f'emulator: trained and saved {emulator_fn}')
         print('emulator_type: folps_pt')
-        print(f'emulator_varied_parameters: {", ".join(emulated_pt.varied_params.names())}')
+        print(f'emulator_varied_parameters: {", ".join(get_params(emulated_pt).select(varied=True).names())}')
 
-    theory_params = theory.init.params.deepcopy()
-    theory.init.update(pt=emulated_pt)
-    theory.init.params.update(theory_params)
+    replace(theory, theory.pt, emulated_pt)
     return emulated_pt
 
 

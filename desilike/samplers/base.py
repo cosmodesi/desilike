@@ -2,6 +2,7 @@
 
 import copy
 import json
+import pickle
 import math
 import sys
 import logging
@@ -14,7 +15,8 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.special import logsumexp
 
-from ..parameter import VariableCollection
+from ..base import build, CompiledGraph
+from ..parameter import VariableCollection, _cumsize_params
 from ..samples import MCSamples, Covariance, diagnostics
 from ..distributed import default_mpicomm, get_mpicomm
 from ..conditioning import AffineConditioner
@@ -31,28 +33,6 @@ def update_kwargs(user_kwargs, sampler_name, **desilike_kwargs):
             warnings.warn(f"Keyword argument '{key}' passed to {sampler_name} is overwritten.")
         kwargs[key] = value
     return kwargs
-
-
-def _param_sizes(varied_params):
-    """Return a list of ``(param, size, col_start)`` for each varied parameter.
-
-    Parameters
-    ----------
-    varied_params : VariableCollection
-
-    Returns
-    -------
-    list of (Parameter, int, int)
-        Each tuple contains the parameter, its flat scalar size, and its
-        starting column index in the flat parameter vector.
-    """
-    result = []
-    col = 0
-    for param in varied_params:
-        size = int(np.prod(param.shape)) if param.shape else 1
-        result.append((param, size, col))
-        col += size
-    return result
 
 
 def _normalize_sample_ids(nsamples):
@@ -97,11 +77,28 @@ def _flat_to_dict(sample, varied_params):
         scalar when ``param.shape`` is empty.  The values keep the dtype of
         *sample* (so this stays JAX-traceable when *sample* is a tracer).
     """
+    cumsize = _cumsize_params(varied_params)
     result = {}
-    for param, size, col in _param_sizes(varied_params):
-        chunk = sample[col:col + size]
+    for i, param in enumerate(varied_params):
+        chunk = sample[cumsize[i]:cumsize[i + 1]]
         result[param.name] = chunk.reshape(param.shape) if param.shape else chunk[0]
     return result
+
+
+def _logp_difference(log_post, log_prior):
+    """Return ``log_post - log_prior``, with every non-finite outcome mapped to ``-inf``.
+
+    The subtraction has two corners where the bare difference is not a log-density. Both
+    terms are ``-inf`` outside the prior box (or outside the proposal support, when one
+    replaces it), and ``-inf - -inf`` is a nan, which no kernel screens the way it screens
+    an impossible point. And where a proposal support stops just inside the posterior --
+    any truncated proposal keeping a margin off the hard bounds -- the difference is
+    ``+inf``, which would make that sliver infinitely attractive. A kernel adds the beta = 0
+    density back on (``log_prior + beta * log_likelihood``), so returning ``-inf`` here is
+    what rejects the point instead of poisoning the population with a nan.
+    """
+    difference = log_post - log_prior
+    return jnp.where(jnp.isfinite(difference), difference, -jnp.inf)
 
 
 def _batched(core, returns_tuple):
@@ -163,6 +160,11 @@ class Kernel:
     # number internally (e.g. via JAX vmap or numpyro num_chains).
     max_nparallel = 1
 
+    # Whether this kernel calls the posterior with a varying number of rows and so needs every
+    # evaluation padded to a single fixed shape. A jitted posterior recompiles per input shape,
+    # which is a property of the KERNEL's inner loop, not something a user should have to know.
+    enforce_batch_size = False
+
     def init(self, posterior_logpdf, rng, **context):
         """Initialise the kernel before sampling.
 
@@ -211,6 +213,20 @@ class Kernel:
         """
         raise NotImplementedError
 
+    def get_state(self):
+        """Return adapted kernel state to persist alongside the samples, or None.
+
+        Adaptation is often the dominant cost of a gradient sampler -- NUTS on a 10-parameter
+        emulated posterior spent 1774 s of a 2045 s run in warmup -- and it is state that a
+        resumed run should not have to re-derive.  Kernels that adapt a metric override this
+        (and :meth:`set_state`) to round-trip it through the output directory.
+        """
+        return
+
+    def set_state(self, state):
+        """Restore state written by :meth:`get_state`; return True if adaptation can be skipped."""
+        return False
+
     def adapt(self, initial_position=None, **kwargs):
         """Run warmup / adaptation.  No-op by default.
 
@@ -242,6 +258,7 @@ class PopulationKernel:
 
     # Population kernels always run one population at a time.
     max_nparallel = 1
+    enforce_batch_size = False
 
     def reset_state(self):
         """Reset lazy-created sampler for a new independent run.  No-op by default."""
@@ -257,16 +274,21 @@ class PopulationKernel:
         likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
             Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
             respectively for a single rescaled-space ``(ndim,)`` sample.
-        prior : tuple of (prior_logpdf, prior_ppf, prior_bounds)
+        prior : tuple of (prior_logpdf, prior_ppf, prior_rvs, prior_bounds)
             ``prior_logpdf``: pool-aware log-prior callable.
             ``prior_ppf``: unit-hypercube → parameter-space transform.
+            ``prior_rvs``: ``(size, rng)`` draws; see :meth:`BaseSampler.prior_rvs`.
             ``prior_bounds``: ``(ndim, 2)`` array of lower/upper bounds in rescaled space.
+
+            All four describe the beta = 0 distribution, which is the proposal rather than
+            the prior when one is set.
         rng : numpy.random.Generator
             Random-number generator (main process).
         **context : dict
             ``pool`` : Pool — MPI pool for distributing evaluations.
             ``ndim`` : int — dimensionality of the conditioned parameter space.
             ``output_dir`` : Path or None — checkpoint directory.
+            ``proposal`` : object or None — the proposal that replaced the prior, if any.
         """
 
     def run(self, **kwargs):
@@ -312,6 +334,11 @@ class StaticKernel:
 
     logger = logging.getLogger('StaticKernel')
     _sampler_cls = 'StaticSampler'
+
+    enforce_batch_size = False
+
+    #: Random-number generator, injected by :class:`StaticSampler` before :meth:`get_samples`.
+    rng = None
 
     def get_samples(self, varied_params, **kwargs):
         """Return an ``(n_samples, ndim)`` array of points in **original** parameter space.
@@ -363,12 +390,12 @@ class BaseSampler(ABC):
 
     @default_mpicomm
     def __init__(self, posterior, rng=None, mpicomm=None, output_dir=None,
-                 conditioner=None, batch_size=None):
+                 conditioner=None, batch_size=None, enforce_batch_size=False):
         """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
+        posterior : CompiledGraph or Calculator
+            Compiled pipeline returning the log-posterior.  A calculator is compiled here.
         rng : numpy.random.Generator, int, or None
             Random number generator.  Default is ``None``.
         mpicomm : MPI communicator, optional
@@ -380,12 +407,23 @@ class BaseSampler(ABC):
             Conditioning transform applied between original and working space.
             ``None`` (default) uses :class:`AffineConditioner` with no rescaling
             (identity transform).
+        enforce_batch_size : bool, optional
+            Pad the last chunk so EVERY evaluation sees exactly ``batch_size`` rows (the padding
+            is discarded). Not a user knob: the infrastructure classes read it off
+            ``kernel.enforce_batch_size``, since whether the posterior is called with a varying
+            number of rows is a property of the kernel's inner loop. Needs ``batch_size > 0``.
         batch_size : int or None, optional
             Controls how the pool batches likelihood/posterior calls.
             ``None`` (default) — pass all tasks as one stacked array per rank.
             ``0`` — evaluate one task at a time (no batching).
             ``N > 0`` — group tasks into chunks of N.
         """
+        # A Calculator is built here rather than being rejected -- but only the no-argument
+        # form: `build(root, output=...)` is a choice about what the pipeline returns, and a
+        # sampler cannot guess it. An already-built graph is taken as is: building runs the whole
+        # pipeline once.
+        posterior = posterior if isinstance(posterior, CompiledGraph) else build(posterior)
+
         # ── parameter sets ────────────────────────────────────────────────────
         self.varied_params = posterior.params.select(varied=True, derived=False)
         if not self.varied_params:
@@ -393,18 +431,14 @@ class BaseSampler(ABC):
         # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
         self.derived_params = posterior.params.select(derived=True) + posterior.params.select(solved=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)
-        self.nderived = int(sum(
-            int(np.prod(p.shape)) if p.shape else 1
-            for p in self.derived_params
-        ))
+        self.nderived = int(_cumsize_params(self.derived_params)[-1])
 
         # ── conditioner transform ─────────────────────────────────────────────
         if conditioner is None:
             conditioner = AffineConditioner()
         self.conditioner = conditioner
         self.conditioner.init(self.varied_params)
-        self._gauss_mu_orig = None  # sentinel: no Gaussian proposal
-        self._proposal_custom = None  # sentinel: no generic (logpdf/ppf object) proposal
+        self._proposal_custom = None  # sentinel: no proposal (the prior is the beta = 0 distribution)
 
         # ── MPI communicator ─────────────────────────────────────────────────
         self.mpicomm = mpicomm
@@ -414,7 +448,8 @@ class BaseSampler(ABC):
         # jax.jit(jax.vmap(...)) so the pool always receives a batched function.
         self.posterior = posterior
 
-        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size)
+        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size,
+                      enforce_batch_size=enforce_batch_size)
 
         # ── output_dir ────────────────────────────────────────────────────────
         if output_dir is not None:
@@ -459,112 +494,61 @@ class BaseSampler(ABC):
         Parameters
         ----------
         proposal : Covariance or object
-            Either a :class:`~desilike.samples.Covariance` (Gaussian proposal centred on
-            ``proposal.center``, see :meth:`_set_gaussian_proposal`), or any object with
+            A :class:`~desilike.samples.Covariance` is wrapped into a
+            :class:`~desilike.samplers.proposals.GaussianProposal` centred on
+            ``proposal.center``, with the parameters absent from it keeping their own prior.
+            Otherwise, any object with
 
             - ``logpdf(x)``: log-density of a flat ``(ndim,)`` point in original parameter
-              space (varied-parameter order); must be JAX-traceable,
-            - ``ppf(u)``: unit-cube ``(ndim,)`` to original parameter space (used by
-              nested samplers and PocoMC to draw the initial population).
+              space (varied-parameter order); must be JAX-traceable, and may be unnormalized
+              (the constant cancels in ``log_posterior - log_proposal``),
+
+            and at least one way of drawing from it:
+
+            - ``ppf(u)``: unit-cube ``(ndim,)`` to original parameter space (required by
+              nested samplers and PocoMC, which sample the initial population that way),
+            - ``rvs(size, rng)``: ``(size, ndim)`` draws in original parameter space, for
+              proposals with no closed-form inverse CDF -- a set of chain rows, say. Kernels
+              that need a ``ppf`` raise a clear error when only ``rvs`` is available; see
+              :meth:`prior_rvs`.
+        """
+        self._proposal_custom = self._prepare_proposal(proposal)
+
+    def _prepare_proposal(self, proposal):
+        """Validate *proposal* and bind it to :attr:`varied_params`; return it ready to draw from.
+
+        Split out of :meth:`_set_proposal` because binding and *using as the target* are two
+        different things: a population kernel wants both, while an ensemble kernel wants only the
+        first -- somewhere live to start, with its target left alone. The binding is not optional
+        for either. A proposal arrives knowing nothing of this sampler's parameters, so without
+        the ``init`` call below its ``params`` stay None and the first draw dies in ``ndim`` with
+        ``'NoneType' object is not iterable``, a long way from here.
         """
         from ..samples import Covariance as _Covariance
         if isinstance(proposal, _Covariance):
-            return self._set_gaussian_proposal(proposal)
-        for required in ('logpdf', 'ppf'):
-            if not callable(getattr(proposal, required, None)):
-                raise TypeError(f'proposal must be a Covariance or expose a callable {required!r}, '
-                                f'got {type(proposal)}')
-        self._proposal_custom = proposal
-
-    def _set_gaussian_proposal(self, proposal):
-        """Build a Gaussian proposal from a :class:`~desilike.samples.Covariance` object.
-
-        The proposal replaces the prior as the *starting / annealing* distribution handed
-        to population kernels (the beta = 0 distribution of the tempered path).  This does
-        **not** change the inferred posterior: kernels receive the likelihood as
-        ``log_posterior - log_proposal`` (see :meth:`_likelihood_logpdf_one`), so the
-        tempered target ``proposal * likelihood^beta`` equals the exact posterior at
-        beta = 1 for *any* proposal, and the kernel's evidence estimate remains the true
-        one.  The proposal only shapes the annealing path: a posterior-shaped Gaussian
-        (e.g. an inflated profiled covariance) shrinks the prior -> posterior annealing
-        distance by orders of magnitude.  The proposal must *over-cover* the posterior
-        (inflate by 1.5-2x); see :meth:`_set_proposal` for the measured failure of
-        under-dispersed proposals.
-
-        Parameters present in *proposal* get a joint multivariate-Gaussian centred on
-        ``proposal.center`` with covariance ``proposal.value``.  Parameters absent from
-        it keep their per-parameter prior (uniform / normal / ...).
-
-        Hard prior limits from each parameter's prior distribution are always enforced:
-        the proposal logpdf returns ``-inf`` outside those limits, and the PPF clips to
-        them so that ``ppf(0)`` / ``ppf(1)`` return finite hard bounds (used by PocoMC
-        and Dynesty to set the sampling volume).
-
-        Must be called *after* :meth:`BaseSampler.__init__` (depends on the conditioner).
-        Stores the Gaussian parameters in original (pre-conditioner) space so that
-        ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``conditioner.forward`` once.
-        """
-        from ..samples import Covariance as _Covariance
-        if not isinstance(proposal, _Covariance):
-            raise TypeError(f'proposal must be a Covariance instance, got {type(proposal)}')
-        prior = proposal
-
-        param_sizes_list = list(_param_sizes(self.varied_params))
-
-        # ── split varied params into Gaussian group and individual group ──────
-        gauss_param_sizes = []   # (param, size, col) for params in prior
-        indiv_param_sizes = []   # (param, size, col) for params not in prior
-        for param, size, col in param_sizes_list:
-            if param.name in prior:
-                gauss_param_sizes.append((param, size, col))
-            else:
-                indiv_param_sizes.append((param, size, col))
-
-        if not gauss_param_sizes:
-            raise ValueError('None of the varied parameters are present in the prior Covariance.')
-
-        # ── covariance and mean in original space ──────────────────────────────────────
-        gauss_params_list = [param for param, size, col in gauss_param_sizes]
-        gauss_prior = prior.select(gauss_params_list)
-        C_gauss_orig = gauss_prior.value  # (n_gauss, n_gauss)
-        mu_gauss_orig = gauss_prior.center  # n_gauss
-
-        # ── Cholesky of C_gauss_orig ──────────────────────────────────────────
-        try:
-            L_gauss = np.linalg.cholesky(C_gauss_orig)
-        except np.linalg.LinAlgError as exc:
-            raise ValueError('prior covariance is not positive-definite.') from exc
-        L_gauss_inv = np.linalg.inv(L_gauss)
-        precision = L_gauss_inv.T @ L_gauss_inv  # (n_gauss, n_gauss)
-        n_gauss = mu_gauss_orig.size
-        # log det = 2 * sum(log(diag(L)))
-        log_norm = 0.5 * n_gauss * np.log(2. * np.pi) + np.sum(np.log(np.diag(L_gauss)))
-
-        # ── flat column indices in the ndim vector for Gaussian params ────────
-        gauss_flat_cols = np.concatenate([np.arange(col, col + size)
-                                          for param, size, col in gauss_param_sizes]).astype('i4')
-
-        # Hard prior limits of the Gaussian-group params, for PPF clipping: the proposal
-        # must never emit a point outside the support -- the target density is zero there,
-        # and samplers that logit-transform bounded dimensions using these limits (PocoMC's
-        # scaler) turn out-of-bounds draws into NaNs that poison their preconditioner.
-        gauss_limits = np.array([np.asarray(param.prior.limits, dtype='f8')
-                                 for param, size, col in gauss_param_sizes
-                                 for _ in range(size)])
-        margin = 1e-7 * np.where(np.isfinite(gauss_limits[:, 1] - gauss_limits[:, 0]),
-                                 gauss_limits[:, 1] - gauss_limits[:, 0], 1.)
-
-        # ── store ─────────────────────────────────────────────────────────────
-        self._gauss_low_orig     = jnp.array(np.where(np.isfinite(gauss_limits[:, 0]),
-                                                      gauss_limits[:, 0] + margin, -np.inf))
-        self._gauss_high_orig    = jnp.array(np.where(np.isfinite(gauss_limits[:, 1]),
-                                                      gauss_limits[:, 1] - margin, np.inf))
-        self._gauss_mu_orig      = jnp.array(mu_gauss_orig)
-        self._gauss_L_orig       = jnp.array(L_gauss)
-        self._gauss_precision    = jnp.array(precision)
-        self._gauss_log_norm     = float(log_norm)
-        self._gauss_flat_cols    = gauss_flat_cols
-        self._indiv_param_sizes  = indiv_param_sizes
+            from .proposals import GaussianProposal, ProductProposal
+            if not any(param.name in proposal for param in self.varied_params):
+                raise ValueError('None of the varied parameters are present in the proposal Covariance.')
+            # The product fills in the parameters the covariance does not cover with their priors.
+            proposal = ProductProposal(GaussianProposal(proposal))
+        if not callable(getattr(proposal, 'logpdf', None)):
+            raise TypeError(f'proposal must be a Covariance or expose a callable {"logpdf"!r}, '
+                            f'got {type(proposal)}')
+        if not any(callable(getattr(proposal, name, None)) for name in ('ppf', 'rvs')):
+            raise TypeError(f'proposal must expose a callable {"ppf"!r} or {"rvs"!r}, got {type(proposal)}')
+        # Proposals from desilike.samplers.proposals bind themselves to the sampler's own
+        # parameter layout here, so they never have to guess the flat ordering.
+        init = getattr(proposal, 'init', None)
+        if callable(init):
+            init(self.varied_params)
+            # A proposal binds only the parameters it covers, so a partial one would leave the
+            # sampler feeding it vectors of the wrong width. Wrap it in a ProductProposal to
+            # give the rest their priors.
+            ndim = getattr(proposal, 'ndim', self.ndim)
+            if ndim != self.ndim:
+                raise ValueError(f'proposal {type(proposal).__name__} covers {ndim} of the '
+                                 f'{self.ndim} varied dimensions; wrap it in a ProductProposal.')
+        return proposal
 
     def set_rng(self, rng):
         """Set the random number generator."""
@@ -578,19 +562,19 @@ class BaseSampler(ABC):
     @property
     def ndim(self):
         """Total number of scalar dimensions across all varied parameters."""
-        return int(sum(
-            int(np.prod(param.shape)) if param.shape else 1
-            for param in self.varied_params
-        ))
+        return int(_cumsize_params(self.varied_params)[-1])
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         """Create the pool and register the batched evaluators.
 
         Pool-dispatched attributes set here:
         ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf``, ``posterior_logpdf_with_derived``,
         ``likelihood_logpdf``, ``likelihood_logpdf_with_derived``.
         """
-        self.pool = make_pool(mpicomm, batch_size=batch_size)
+        # `enforce_batch_size` pads the last chunk so the callable only ever sees one input
+        # shape; `batch_size` alone leaves the remainder varying with the task count.
+        self.pool = make_pool(mpicomm, batch_size=batch_size,
+                              enforce_batch_size=enforce_batch_size)
         specs = [('prior_ppf',                     self._prior_ppf_one,                       False),
                  ('prior_logpdf',                   self._prior_logpdf_one,                   False),
                  ('posterior_logpdf',               self._posterior_logpdf_one,               False),
@@ -612,72 +596,90 @@ class BaseSampler(ABC):
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
-        When a Gaussian proposal is set (via :meth:`_set_gaussian_proposal`), the first
-        ``n_gauss`` unit-cube dimensions are mapped through the unconstrained joint
-        Cholesky PPF of the Gaussian, and the remaining dimensions map each non-Gaussian
-        param through its individual prior PPF.  Without a Gaussian proposal, every param
-        uses its individual prior PPF.  Either way the result is transformed to the
-        sampler's conditioned working space via :meth:`AffineConditioner.inverse`.
+        When a proposal is set it supplies the PPF instead, over whichever parameters it
+        covers. Either way the result is transformed to the sampler's conditioned working
+        space via :meth:`AffineConditioner.inverse`.
         """
         if self._proposal_custom is not None:
-            return self.conditioner.inverse(jnp.asarray(self._proposal_custom.ppf(sample)))
-        if self._gauss_mu_orig is not None:
-            n_gauss = self._gauss_flat_cols.size
-            # Gaussian group: Cholesky PPF in original space (unconstrained).
-            # Clip z to a large finite range before the matmul to avoid 0*inf=NaN when
-            # L has zero entries (diagonal L) and u=0/1 gives z=±inf.
-            z = jnp.clip(jax.scipy.stats.norm.ppf(sample[:n_gauss]), -1e38, 1e38)
-            x_gauss = self._gauss_mu_orig + self._gauss_L_orig @ z
-            # Clip to the hard prior limits (see _set_gaussian_proposal): the support edge,
-            # not beyond it.
-            x_gauss = jnp.clip(x_gauss, self._gauss_low_orig, self._gauss_high_orig)
-            x_orig = jnp.zeros(self.ndim).at[self._gauss_flat_cols].set(x_gauss)
-            # Individual group: per-param PPF
-            u_col = n_gauss
-            for param, size, col in self._indiv_param_sizes:
-                u_chunk = sample[u_col:u_col + size]
-                x_orig = x_orig.at[col:col + size].set(jnp.atleast_1d(param.prior.ppf(u_chunk)))
-                u_col += size
-            return self.conditioner.inverse(x_orig)
-        parts = []
-        for param, size, col in _param_sizes(self.varied_params):
-            u_chunk = sample[col:col + size]
-            parts.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
+            ppf = getattr(self._proposal_custom, 'ppf', None)
+            if not callable(ppf):
+                raise NotImplementedError(
+                    f'proposal {type(self._proposal_custom).__name__} exposes no ppf, so it cannot be '
+                    'inverted from the unit cube. Use a kernel that draws through rvs (e.g. SMC).')
+            return self.conditioner.inverse(jnp.asarray(ppf(sample)))
+        cumsize = _cumsize_params(self.varied_params)
+        parts = [jnp.atleast_1d(param.prior.ppf(sample[cumsize[i]:cumsize[i + 1]]))
+                 for i, param in enumerate(self.varied_params)]
         return self.conditioner.inverse(jnp.concatenate(parts))
+
+    def prior_rvs(self, size, rng):
+        """Draw *size* points from the prior (or from the proposal, when one is set).
+
+        Returns points in the sampler's *rescaled* working space, so they can be fed
+        straight to the pooled evaluators. Draws come from the proposal's own ``rvs``
+        when it has one -- the only route for proposals with no closed-form inverse CDF,
+        such as a set of chain rows -- and otherwise from the unit cube through
+        :meth:`_prior_ppf_one`. Either way, points outside the hard prior box are
+        rejected and redrawn: the target density is zero there, and samplers that
+        logit-transform bounded dimensions turn such points into NaNs that poison their
+        preconditioner.
+
+        Parameters
+        ----------
+        size : int
+            Number of points to draw.
+        rng : numpy.random.Generator
+            Random-number generator.
+
+        Returns
+        -------
+        numpy.ndarray, shape ``(size, ndim)``
+        """
+        rvs = getattr(self._proposal_custom, 'rvs', None) if self._proposal_custom is not None else None
+        if callable(rvs):
+            def draw(ndraws):
+                draws = np.asarray(rvs(ndraws, rng))
+                if draws.shape != (ndraws, self.ndim):
+                    raise ValueError(f'proposal.rvs returned shape {draws.shape}, '
+                                     f'expected {(ndraws, self.ndim)}.')
+                return np.asarray(self.conditioner.inverse(draws))
+        else:
+            def draw(ndraws):
+                return np.asarray(self.prior_ppf(rng.random((ndraws, self.ndim))))
+
+        bounds = np.asarray(self.prior_bounds)
+        accepted, ndraws = [], 0
+        for _ in range(100):
+            candidates = draw(2 * size)
+            mask = np.all((candidates >= bounds[:, 0]) & (candidates <= bounds[:, 1]), axis=1)
+            accepted.append(candidates[mask])
+            ndraws += int(mask.sum())
+            if ndraws >= size:
+                # Shuffle before truncating: draws are over-generated, and some proposals
+                # return them in a meaningful order (systematic resampling of a chain hands
+                # back ascending indices), so keeping the first `size` would keep a slice of
+                # the chain rather than a sample of it.
+                candidates = np.concatenate(accepted)
+                return candidates[rng.permutation(len(candidates))[:size]]
+        raise RuntimeError(f'prior_rvs: only {ndraws} of {size} draws fell inside the prior bounds '
+                           'after 100 attempts.')
 
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        When a Gaussian proposal is set, evaluates the unconstrained multivariate-Gaussian
-        logpdf for the Gaussian-group params and sums the individual per-param logpdfs
-        for the remaining params.
-        Without a Gaussian proposal, evaluates each original prior's logpdf after mapping
-        to original space via :meth:`AffineConditioner.forward`.
+        When a proposal is set it supplies the density instead. Either way the sample is
+        mapped to original space via :meth:`AffineConditioner.forward` first.
         """
         x_orig = self.conditioner.forward(sample)
         if self._proposal_custom is not None:
             return self._proposal_custom.logpdf(x_orig)
-        if self._gauss_mu_orig is not None:
-            # Gaussian group: unconstrained multivariate Gaussian logpdf
-            x_gauss = x_orig[self._gauss_flat_cols]
-            d = x_gauss - self._gauss_mu_orig
-            log_gauss = -0.5 * (d @ self._gauss_precision @ d) - self._gauss_log_norm
-            # Individual group
-            result = log_gauss
-            for param, size, col in self._indiv_param_sizes:
-                if param.prior is None:
-                    continue
-                chunk = x_orig[col:col + size]
+        cumsize = _cumsize_params(self.varied_params)
+        result = jnp.array(0.)
+        for i, param in enumerate(self.varied_params):
+            if param.prior is not None:
+                chunk = x_orig[cumsize[i]:cumsize[i + 1]]
                 chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
                 result = result + param.prior.logpdf(chunk)
-            return result
-        result = jnp.array(0.)
-        for param, size, col in _param_sizes(self.varied_params):
-            if param.prior is None:
-                continue
-            chunk = x_orig[col:col + size]
-            chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
-            result = result + param.prior.logpdf(chunk)
         return result
 
     def _posterior_logpdf_one(self, sample):
@@ -699,36 +701,13 @@ class BaseSampler(ABC):
 
     def _likelihood_logpdf_one(self, sample):
         """Return ``log_likelihood`` for a single ``(ndim,)`` sample (no derived)."""
-        return self._posterior_logpdf_one(sample) - self._prior_logpdf_one(sample)
+        return _logp_difference(self._posterior_logpdf_one(sample), self._prior_logpdf_one(sample))
 
     def _likelihood_logpdf_with_derived_one(self, sample):
         """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample."""
         log_prior = self._prior_logpdf_one(sample)
         log_post, derived = self._posterior_logpdf_with_derived_one(sample)
-        return log_post - log_prior, derived
-
-    def _get_start(self, size=1):
-        """Return a dict ``{name: array}`` sampled from each parameter's ref.
-
-        Parameters
-        ----------
-        size : int
-            Number of draws.  When 1 the batch axis is squeezed away.
-
-        Returns
-        -------
-        dict
-        """
-        key = jax.random.PRNGKey(int(np.random.default_rng().integers(2**32)))
-        start = {}
-        for param in self.varied_params:
-            if param.ref is not None and param.ref.is_proper():
-                subkey, key = jax.random.split(key)
-                value = np.asarray(param.ref.sample(subkey, shape=(size,) + param.shape))
-            else:
-                value = np.broadcast_to(np.asarray(param.value), (size,) + param.shape)
-            start[param.name] = value.squeeze(0) if size == 1 else value
-        return start
+        return _logp_difference(log_post, log_prior), derived
 
     def array_to_samples(self, samples, derived, **kwargs):
         """Convert parameter arrays to a :class:`~desilike.samples.MCSamples`.
@@ -752,16 +731,22 @@ class BaseSampler(ABC):
         samples = np.asarray(self.conditioner.forward(samples))
         data = []
         # ── varied params ─────────────────────────────────────────────────────
-        for param, size, col in _param_sizes(self.varied_params):
-            slice_arr  = samples[..., col:col + size].reshape(samples.shape[:-1] + param.shape)
-            data.append(param.clone(value=slice_arr))
+        cumsize = _cumsize_params(self.varied_params)
+        # `copy` + `_value`, not `clone(value=...)`: clone round-trips through
+        # `__getstate__`, which serialises prior, ref and fd to dicts for `__init__` to
+        # rebuild. This runs once per parameter per step and was most of the step time.
+        for i, param in enumerate(self.varied_params):
+            slice_arr = samples[..., cumsize[i]:cumsize[i + 1]].reshape(samples.shape[:-1] + param.shape)
+            param = copy.copy(param)
+            param._value = slice_arr
+            data.append(param)
         # ── derived params ────────────────────────────────────────────────────
-        col = 0
-        for param in self.derived_params:
-            size = int(np.prod(param.shape)) if param.shape else 1
-            slice_arr  = derived[..., col:col + size].reshape(derived.shape[:-1] + param.shape)
-            data.append(param.clone(value=slice_arr))
-            col += size
+        cumsize = _cumsize_params(self.derived_params)
+        for i, param in enumerate(self.derived_params):
+            slice_arr = derived[..., cumsize[i]:cumsize[i + 1]].reshape(derived.shape[:-1] + param.shape)
+            param = copy.copy(param)
+            param._value = slice_arr
+            data.append(param)
 
         new_samples = MCSamples(data)
         for key, value in kwargs.items():
@@ -778,10 +763,14 @@ class BaseSampler(ABC):
     def read(self):
         """Read sampler state from disk."""
         if self.pool.main:
-            with open(self.output_dir / 'rng.json', 'r') as fstream:
+            with open(self.output_dir / 'rng.json') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
                 self.samples = MCSamples.read(self.output_dir / 'samples.h5')
+
+    @abstractmethod
+    def run(self, **kwargs):
+        """Draw samples; returns the collected :class:`MCSamples`."""
 
 
 # ── Static sampler ────────────────────────────────────────────────────────────
@@ -801,7 +790,10 @@ class StaticSampler(BaseSampler):
                  output_dir=None, conditioner=None, batch_size=None):
         self.kernel = kernel
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size if kernel is not None else False)
+        if self.kernel is not None:
+            self.kernel.rng = self.rng
 
     def get_samples(self, **kwargs):
         """Return an ``(n_samples, ndim)`` array of points in original parameter space."""
@@ -809,10 +801,22 @@ class StaticSampler(BaseSampler):
             return self.kernel.get_samples(self.varied_params, **kwargs)
         raise NotImplementedError('Subclasses must implement get_samples() or provide a kernel.')
 
-    def run(self, **kwargs):
-        """Evaluate the posterior on the sample grid and return a MCSamples."""
+    def run(self, reuse=None, **kwargs):
+        """Evaluate the posterior on the sample grid and return a MCSamples.
+
+        Parameters
+        ----------
+        reuse : bool or None, optional
+            Whether to return the samples already held by the sampler (read back from
+            ``output_dir``, or produced by an earlier :meth:`run`) instead of evaluating
+            again. ``None`` (default) reuses them only when this call passes no
+            run-time options, so that ``run(samples=other)`` re-evaluates rather than
+            silently returning a previous, unrelated result.
+        """
+        if reuse is None:
+            reuse = not kwargs
         if self.pool.main:
-            if self.samples is None:
+            if self.samples is None or not reuse:
                 # get_samples returns original-space points; the cores and
                 # array_to_samples work in the rescaled space, so map once here.
                 grid      = np.asarray(self.conditioner.inverse(self.get_samples(**kwargs)))
@@ -854,12 +858,12 @@ class MCMCSampler(BaseSampler):
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, rng=None,
                  mpicomm=None, output_dir=None, conditioner=None,
-                 batch_size=None):
+                 batch_size=None, proposal=None):
         """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
+        posterior : CompiledGraph or Calculator
+            Compiled pipeline returning the log-posterior.  A calculator is compiled here.
         kernel : Kernel
             Algorithm kernel, e.g. ``BlackjaxHMC()``, ``Emcee()``.
         nparallel : int or sequence
@@ -899,7 +903,17 @@ class MCMCSampler(BaseSampler):
         self._kernels = [kernel]
 
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size)
+        # For the INITIAL DRAW only, and stored apart from `_proposal_custom` on purpose. Setting
+        # that one would also redirect `prior_logpdf` and `prior_ppf` (see :meth:`_set_proposal`),
+        # which is sound only for a population kernel evaluating `log_posterior - log_proposal` --
+        # here it would change the target. What is wanted is narrower: somewhere live to start.
+        # Without it `initialize_samples` draws each parameter from its own `ref`, a product of
+        # one-dimensional marginals, and against an emulator whose support is a band across its
+        # box almost every draw lands in an empty corner: measured, 6.4% answered, and the run
+        # dies with 'Could not find finite posterior after 100 attempts'.
+        self._init_proposal = None if proposal is None else self._prepare_proposal(proposal)
 
         self.checks = []
         self._thinning = 1
@@ -930,13 +944,14 @@ class MCMCSampler(BaseSampler):
                 del self._saved_rng_states
             self.rng = self._group_rngs[0]
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         color = mpicomm.rank * self._ngroups // mpicomm.size
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
-        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size,
+                         enforce_batch_size=enforce_batch_size)
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
         self._igroup = color
@@ -978,13 +993,33 @@ class MCMCSampler(BaseSampler):
                     batch_shape = shape or (1,)
                     batch_samples = np.zeros(batch_shape + (self.ndim,))
                     key = jax.random.PRNGKey(int(rng_local.integers(2**32)))
-                    for param, size, col in _param_sizes(self.varied_params):
+                    cumsize = _cumsize_params(self.varied_params)
+                    rvs = getattr(self._init_proposal, 'rvs', None)
+                    if callable(rvs):
+                        # One correlated draw for every parameter at once, rather than a product
+                        # of marginals: the proposal knows the directions the parameters move
+                        # together in, which is exactly what a per-parameter `ref` cannot express.
+                        # Left in natural space, like the `param.ref` draws below, because the
+                        # single `conditioner.inverse` further down carries both to working space.
+                        # Transforming here as well applies it twice, which puts every draw
+                        # somewhere unrelated and reads as 'Could not find finite posterior'.
+                        ndraws = int(np.prod(batch_shape))
+                        drawn = np.asarray(rvs(ndraws, rng_local))
+                        if drawn.shape != (ndraws, self.ndim):
+                            raise ValueError(f'proposal.rvs returned shape {drawn.shape}, '
+                                             f'expected {(ndraws, self.ndim)}.')
+                        batch_samples = drawn.reshape(batch_shape + (self.ndim,))
+                        params_to_draw = []
+                    else:
+                        params_to_draw = list(enumerate(self.varied_params))
+                    for i, param in params_to_draw:
+                        sl = slice(cumsize[i], cumsize[i + 1])
                         if param.ref is not None and param.ref.is_proper():
                             key, subkey = jax.random.split(key)
                             drawn = np.asarray(param.ref.sample(subkey, shape=batch_shape))
-                            batch_samples[..., col:col + size] = drawn.reshape(batch_shape + (size,))
+                            batch_samples[..., sl] = drawn.reshape(batch_shape + (param.size,))
                         else:
-                            batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
+                            batch_samples[..., sl] = np.asarray(param.value).ravel()
 
                     batch_samples = np.asarray(self.conditioner.inverse(batch_samples))
 
@@ -1199,8 +1234,22 @@ class MCMCSampler(BaseSampler):
 
         if adaptation is not None:
             if self.pool.main:
+                saved = getattr(self, '_saved_kernel_states', {})
+                # Only reuse an adapted metric when the CHAINS were restored too.  The metric and
+                # step size are tuned to the typical set; applying them to a fresh dispersed
+                # `ref` draw, with adaptation now skipped, diverges (measured: Gelman-Rubin 1e29).
+                # A genuine resume always has both, so this only refuses the incoherent case.
+                resumed = getattr(self, '_resumed_samples', False)
                 for batch_idx in range(n_batches):
                     batch_start = batch_idx * self._batch_nparallel
+                    if not resumed and batch_idx in saved:
+                        self.logger.info('Saved kernel state found but chains were not resumed; '
+                                         're-adapting rather than starting from `ref` with a '
+                                         'metric tuned elsewhere.')
+                    if resumed and batch_idx in saved and self._kernels[batch_idx].set_state(saved[batch_idx]):
+                        self.logger.info('Reusing adapted kernel state from %s; skipping warmup.',
+                                         self.output_dir)
+                        continue
                     self._kernels[batch_idx].adapt(self._get_state(batch_start), **adaptation)
                 self.pool.stop_wait()
             else:
@@ -1278,6 +1327,13 @@ class MCMCSampler(BaseSampler):
                     json.dump(self._group_rngs[local_idx].bit_generator.state, fstream)
                 self._round_samples[local_idx].write(
                     self.output_dir / f'samples_{sample_id}.h5')
+            # Adapted kernel state (mass matrix, step size): saved so a resumed run reuses it
+            # instead of re-paying warmup, which dominates a gradient sampler's cost.
+            for batch_idx, kernel in enumerate(self._kernels):
+                state = kernel.get_state()
+                if state:
+                    with open(self.output_dir / f'kernel_state_{batch_idx}.pkl', 'wb') as fstream:
+                        pickle.dump(state, fstream)
         if self.mpicomm.rank == 0:
             with open(self.output_dir / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
@@ -1289,13 +1345,21 @@ class MCMCSampler(BaseSampler):
                 rng_path     = self.output_dir / f'rng_{sample_id}.json'
                 samples_path = self.output_dir / f'samples_{sample_id}.h5'
                 if rng_path.exists():
-                    with open(rng_path, 'r') as fstream:
+                    with open(rng_path) as fstream:
                         self._saved_rng_states[local_idx] = json.load(fstream)
                 if samples_path.exists():
                     self._round_samples[local_idx] = MCSamples.read(samples_path)
+                    self._resumed_samples = True
+        self._saved_kernel_states = {}
+        if self.pool.main:
+            for batch_idx in range(len(getattr(self, '_kernels', []) or [])):
+                path = self.output_dir / f'kernel_state_{batch_idx}.pkl'
+                if path.exists():
+                    with open(path, 'rb') as fstream:
+                        self._saved_kernel_states[batch_idx] = pickle.load(fstream)
         checks_path = self.output_dir / 'checks.json'
         if checks_path.exists():
-            with open(checks_path, 'r') as fstream:
+            with open(checks_path) as fstream:
                 self.checks = json.load(fstream)
 
 
@@ -1346,19 +1410,22 @@ class PopulationSampler(BaseSampler):
         if batch_size is None:
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
-                         conditioner=conditioner, batch_size=batch_size)
+                         conditioner=conditioner, batch_size=batch_size,
+                         enforce_batch_size=kernel.enforce_batch_size)
         if proposal is not None:
             self._set_proposal(proposal)
 
-        # The kernel checkpoint directory for the first (or only) local run.
+        # Where the kernel may checkpoint, for the first (or only) local run. Named, not
+        # created: a kernel that writes state makes it when it writes, so one that does not --
+        # SMC restarts from beta = 0 rather than an intermediate temperature -- leaves no empty
+        # directory beside its chain.
         kernel_output_dir = self._kernel_output_dir(0)
-        if kernel_output_dir is not None and self.pool.main:
-            kernel_output_dir.mkdir(parents=True, exist_ok=True)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
-            (self.prior_logpdf, self.prior_ppf, self.prior_bounds),
+            (self.prior_logpdf, self.prior_ppf, self.prior_rvs, self.prior_bounds),
             self.rng,
             pool=self.pool, ndim=self.ndim, output_dir=kernel_output_dir,
+            proposal=proposal,
         )
 
     def _kernel_output_dir(self, local_idx):
@@ -1373,13 +1440,14 @@ class PopulationSampler(BaseSampler):
         """Sample IDs assigned to this MPI group."""
         return self.sample_ids[self._group_start : self._group_start + self._runs_per_group]
 
-    def set_pool(self, mpicomm, batch_size=None):
+    def set_pool(self, mpicomm, batch_size=None, enforce_batch_size=False):
         color = mpicomm.rank * self._ngroups // mpicomm.size
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
-        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size,
+                         enforce_batch_size=enforce_batch_size)
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
         self._igroup = color
@@ -1414,8 +1482,6 @@ class PopulationSampler(BaseSampler):
                 self.kernel._rng = self._group_rngs[local_idx]
                 new_output_dir = self._kernel_output_dir(local_idx)
                 if new_output_dir is not None:
-                    if self.pool.main:
-                        new_output_dir.mkdir(parents=True, exist_ok=True)
                     self.kernel._output_dir = new_output_dir
 
             output = self.kernel.run(**kwargs)
@@ -1468,8 +1534,8 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
 
     Parameters
     ----------
-    posterior : CompiledGraph
-        Compiled pipeline returning the log-posterior scalar.
+    posterior : CompiledGraph or Calculator
+        Compiled pipeline returning the log-posterior scalar.  A calculator is compiled for you.
     kernel : Kernel, PopulationKernel, or StaticKernel
         Algorithm instance, e.g. ``BlackjaxHMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
         ``Dynesty(dynamic=True)``, ``Grid()``, ``QMC()``, ``Importance()``.
@@ -1507,7 +1573,14 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
         are unchanged for any proposal (kernels receive the likelihood as
         ``log_posterior - log_proposal``); the proposal only shortens the annealing
         path, and must over-cover the posterior (inflate a fitted covariance by
-        1.5-2x).  Ignored for all other kernel types.
+        1.5-2x).
+
+        Other kernel types receive it too, but only as a starting distribution: their
+        target is untouched, and it is `initialize_samples` alone that draws from it
+        (see :meth:`MCMCSampler.__init__`).  That matters against an emulator, whose
+        support is a band across its box while a per-parameter ``ref`` is a product of
+        marginals -- measured, 6.4% of a draw from the rectangle is answered, so an
+        ensemble kernel given no proposal dies at startup.
 
     Returns
     -------
@@ -1520,10 +1593,12 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, output_dir=None,
                    batch_size=batch_size, proposal=proposal)
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
-                   conditioner=conditioner)
+                   conditioner=conditioner, batch_size=batch_size)
+    # MCMCSampler and EnsembleSampler take the proposal too, but only to start from -- see
+    # `MCMCSampler.__init__`. It does not reach their target, which is what kept it out before.
     return cls(posterior, kernel=kernel, nparallel=nparallel,
                rng=rng, output_dir=output_dir, conditioner=conditioner,
-               batch_size=batch_size)
+               batch_size=batch_size, proposal=proposal)
 
 
 # Register here so kernel modules can look up these classes without a circular import.

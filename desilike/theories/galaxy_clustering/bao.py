@@ -133,7 +133,7 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
             Parameter('b1', value=1.5, prior=dict(limits=[0.2, 4.]),
                       ref=dict(limits=[1.4, 1.6]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
-                      ref=dict(limits=[0.9, 1.1]), fd_eps=0.02, latex=r'\delta\beta'),
+                      ref=dict(limits=[0.9, 1.1]), fd=dict(eps=0.02), latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
                       ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
             Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0.1, 10.]),
@@ -190,7 +190,7 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         f = self.dbeta * template.f
 
         # AP-distorted coordinates; shapes (n_k, n_mu).
-        jac, kap, muap = template.ap_k_mu(k, mu)
+        _jac, kap, muap = template.ap_k_mu(k, mu)
         pknowap = _interp_loglog(kap, template.k, template.pknow_dd)
         pkap = _interp_loglog(kap, template.k, template.pk_dd)
 
@@ -304,7 +304,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
             Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
                       ref=dict(limits=[1.5, 2.]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
-                      ref=dict(limits=[0.95, 1.05]), fd_eps=0.02, latex=r'\delta\beta'),
+                      ref=dict(limits=[0.95, 1.05]), fd=dict(eps=0.02), latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
                       ref=dict(limits=[0., 1.]), latex=r'\Sigma_s'),
             Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 4.]),
@@ -379,7 +379,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
 
         f = self.dbeta * template.f
 
-        jac, kap, muap = template.ap_k_mu(k, mu)
+        _jac, kap, muap = template.ap_k_mu(k, mu)
         pknow_ap = _interp_loglog(kap, template.k, template.pknow_dd)
         pk_ap = _interp_loglog(kap, template.k, template.pk_dd)
 
@@ -493,14 +493,14 @@ def _bb_spectrum_auto_params(ells, broadband):
                 fixed = (broadband == 'power3') and (pow not in (-2, -1, 0))
                 auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1.),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{pow}}}'))
     else:
         for ell in ells:
-            for ik in _BB_SPECTRUM_KERNEL_IKS:
-                auto_params.append(Parameter(f'al{ell}_{ik}', value=0.,
-                                             prior=dict(dist='norm', loc=0., scale=1e4),
-                                             ref=dict(dist='norm', loc=0., scale=1e-2),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+            auto_params.extend(Parameter(f'al{ell}_{ik}', value=0.,
+                                         prior=dict(dist='norm', loc=0., scale=1e4),
+                                         ref=dict(dist='norm', loc=0., scale=1e-2),
+                                         fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}')
+                               for ik in _BB_SPECTRUM_KERNEL_IKS)
     return auto_params
 
 
@@ -515,19 +515,19 @@ def _bb_correlation_auto_params(ells, broadband):
                         ((broadband == 'even-power') and (pow not in (0, 2)))
                 auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1.),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{pow}}}'))
     else:
         for ell in ells:
             for ik in _BB_CORRELATION_KERNEL_IKS:
                 fixed = (broadband == 'pcs2') and (ell == 0 or ik not in (0, 1))
                 auto_params.append(Parameter(f'al{ell}_{ik}', value=0., fixed=fixed,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-1),
-                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+                                             fd=dict(eps=0.005), latex=f'a_{{{ell},{ik}}}'))
         for ell in ells:
-            for pow in _BB_CORRELATION_BL_POWS:
-                auto_params.append(Parameter(f'bl{ell}_{pow}', value=0.,
-                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
-                                             fd_eps=0.005, latex=f'b_{{{ell},{pow}}}'))
+            auto_params.extend(Parameter(f'bl{ell}_{pow}', value=0.,
+                                         prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
+                                         fd=dict(eps=0.005), latex=f'b_{{{ell},{pow}}}')
+                               for pow in _BB_CORRELATION_BL_POWS)
     return auto_params
 
 
@@ -866,7 +866,7 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
 
         if 'power' in broadband or broadband == 'even-power':
             # Power-law: al params live on this class; pt is a bare PT.
-            # Store as ordered list; build_graph discovers them via self.bb_params.
+            # Store as ordered list; _trace_graph discovers them via self.bb_params.
             bb_vc = VariableCollection([p for p in vc if p.basename in bb_basenames])
             self.bb_params = list(bb_vc)
             if pt is None:
@@ -880,7 +880,7 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
             bl_vc = VariableCollection([p for p in vc if p.basename in bb_basenames and p.basename.startswith('bl')])
             self.pt = self._default_tracer_cls(broadband=broadband, tracers=tracers, pt=pt, params=al_vc + pt_vc, **kwargs)
             self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
-            # bl params: real-space correction; stored as list so build_graph discovers them.
+            # bl params: real-space correction; stored as list so _trace_graph discovers them.
             self.bl_params = list(bl_vc)
 
         if s is None:

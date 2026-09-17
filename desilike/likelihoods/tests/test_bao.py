@@ -12,7 +12,7 @@ import numpy as np
 import jax
 import pytest
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.bao import DESIDR2BAOLikelihood, _TRACER_FILES
 
@@ -23,8 +23,7 @@ def _write_mean_file(fn, rows):
     """Write a BAO mean-values file.  rows: list of (z, value, quantity)."""
     with open(fn, 'w') as f:
         f.write('# [z] [value at z] [quantity]\n')
-        for z_val, value, quantity in rows:
-            f.write(f'{z_val:.8f} {value:.10f} {quantity}\n')
+        f.writelines(f'{z_val:.8f} {value:.10f} {quantity}\n' for z_val, value, quantity in rows)
 
 
 def _write_cov_file(fn, matrix):
@@ -106,7 +105,7 @@ def test_jit_and_grad(tmp_path, zbins):
     _make_bao_files(tmp_path, specs)
 
     like = DESIDR2BAOLikelihood(zbins=zbins, data_dir=str(tmp_path), cosmo=_eis_cosmo())
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
 
     logpdf = pipe(defaults)
@@ -116,7 +115,7 @@ def test_jit_and_grad(tmp_path, zbins):
     assert np.isclose(float(logpdf), float(jit_logpdf))
 
     grad = jax.grad(pipe)(defaults)
-    assert all(np.isfinite(v) for v in grad.values()), 'Non-finite gradients'
+    assert all(np.all(np.isfinite(v)) for v in grad.values()), 'Non-finite gradients'
     # h and omega_cdm both affect distances and should give non-zero gradients.
     assert grad['h'] != 0., 'grad wrt h is zero'
     assert grad['omega_cdm'] != 0., 'grad wrt omega_cdm is zero'
@@ -136,7 +135,7 @@ def test_desi_dr2_bao_install(tmp_path, monkeypatch):
     DESIDR2BAOLikelihood.install(Installer())
 
     like = DESIDR2BAOLikelihood(cosmo=_eis_cosmo())
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'

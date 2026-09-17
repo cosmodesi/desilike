@@ -1,12 +1,13 @@
 """Planck NPIPE (PR4) CamSpec high-ell CMB likelihood."""
 
 import os
+import warnings
 
 import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import GaussianLikelihood
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 
 
 class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
@@ -81,10 +82,18 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
         return VariableCollection(params)
 
     def __init__(self, data_dir=None, cosmo=None, params=None):
+        cache_dir = None
         if data_dir is None:
             from desilike.install import Installer
-            data_dir = os.path.join(Installer().data_dir(self.installer_section), 'CamSpec_NPIPE')
-        self._load_data(data_dir)
+            installer = Installer()
+            # Read through the ``'ro'`` alias, cache on the canonical path. They are the same
+            # bytes by different mounts, and on Perlmutter the read-only one cannot be written
+            # to -- resolving both from `ro=True` made every variant here die with
+            # "OSError: [Errno 30] Read-only file system" on the precision cache below, after
+            # inverting the covariance (37 s for the full TT/TE/EE).
+            data_dir = os.path.join(installer.data_dir(self.installer_section, ro=True), 'CamSpec_NPIPE')
+            cache_dir = os.path.join(installer.data_dir(self.installer_section), 'CamSpec_NPIPE')
+        self._load_data(data_dir, cache_dir=cache_dir)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(engine='camb')
@@ -97,10 +106,10 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
     def __post_init__(self, *args, **kwargs):
         self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self.ellmax}]})
 
-    def _load_data(self, data_dir):
+    def _load_data(self, data_dir, cache_dir=None):
         input_data = np.loadtxt(os.path.join(data_dir, 'like_NPIPE_12.6_unified_spectra.txt'))
         flatdata, masks, index_ells, all_cls = [], [], {}, []
-        with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_data_ranges.txt'), 'r', encoding='utf-8-sig') as file:
+        with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_data_ranges.txt'), encoding='utf-8-sig') as file:
             for iline, line in enumerate(file):
                 if not line.strip():
                     continue
@@ -124,14 +133,14 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
                 if mask.any():
                     index_ells[cl] = tmp_ells[mask]
         if all_cls != self.all_cls:
-            raise ValueError('Unexpected spectra order in data_ranges file: {}'.format(all_cls))
+            raise ValueError(f'Unexpected spectra order in data_ranges file: {all_cls}')
         mask = np.concatenate(masks)
         nx = len(mask)
         with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_cov.bin'), 'rb') as file:
             covariance = np.fromfile(file, dtype=np.float32)
         if nx ** 2 != covariance.shape[0]:
-            raise ValueError('Covariance size {} does not match expected {}**2'.format(covariance.shape[0], nx))
-        self.flatdata = jnp.asarray(np.concatenate(flatdata)[mask])
+            raise ValueError(f'Covariance size {covariance.shape[0]} does not match expected {nx}**2')
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.concatenate(flatdata)[mask]))
         covariance = covariance.reshape(nx, nx)[np.ix_(mask, mask)].astype('f8')
         # Inverting the full (~11000x11000) matrix takes ~1 min; cache per (select_cls, ell_ranges).
         cache_key = '_'.join(self.select_cls)
@@ -140,14 +149,35 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
                 '{}_{}-{}'.format(cl, lo if lo is not None else '', hi if hi is not None else '')
                 for cl, (lo, hi) in sorted(self.ell_ranges.items())
             )
-        precision_fn = os.path.join(data_dir, 'precision_{}.npy'.format(cache_key))
+        # Two named float64 arrays, NOT `np.array([precision, covariance], dtype=object)`: with
+        # both operands the same shape that does not build a 2-element array of arrays, it
+        # broadcasts to a (2, n, n) object array boxing every one of n^2 floats. The file was
+        # 1.77 GB, took 9.4 s to unpickle, and `allclose` against an object-dtype array raises --
+        # swallowed here, so the cache never hit once and the covariance was re-inverted on every
+        # construction. '.npz' also means the old, unreadable '.npy' files are simply ignored.
+        basename = f'precision_{cache_key}.npz'
         try:
-            precision, cached_covariance = np.load(precision_fn, allow_pickle=True)
+            with np.load(os.path.join(data_dir, basename)) as cached:
+                precision, cached_covariance = cached['precision'], cached['covariance']
             if not np.allclose(covariance, cached_covariance):
                 raise ValueError
         except Exception:
             precision = np.linalg.inv(covariance)
-            np.save(precision_fn, np.array([precision, covariance], dtype=object))
+            # The cache is an optimisation, so failing to write it must not lose the inverse we
+            # already have: a read-only or full filesystem costs the inversion again next time,
+            # not the run. Written under a temporary name and renamed, so a reader never sees a
+            # half-written file and concurrent ranks cannot interleave.
+            precision_fn = os.path.join(cache_dir or data_dir, basename)
+            tmp_fn = f'{precision_fn}.tmp.{os.getpid()}'
+            try:
+                os.makedirs(os.path.dirname(precision_fn), exist_ok=True)
+                np.savez(tmp_fn, precision=precision, covariance=covariance)
+                os.replace(tmp_fn + '.npz', precision_fn)
+            except OSError as exc:
+                warnings.warn(f'could not cache the precision matrix at {precision_fn}: {exc}. The covariance '
+                              'will be inverted again on every construction.')
+                try: os.remove(tmp_fn + '.npz')
+                except OSError: pass
         self.precision = jnp.asarray(precision)
         self.index_ells = index_ells
         self.ellmax = max(max(ell) for ell in self.index_ells.values())
@@ -160,8 +190,8 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
 
     def _get_foregrounds(self):
         names = ['100', '143', '217', '143x217']
-        amp = jnp.array([self.params['amp_{}'.format(name)].value for name in names])
-        tilt = jnp.array([self.params['n_{}'.format(name)].value for name in names])
+        amp = jnp.array([self.params[f'amp_{name}'].value for name in names])
+        tilt = jnp.array([self.params[f'n_{name}'].value for name in names])
         return amp[:, None] * self._template_foreground_amp * jnp.exp(self._template_foreground_tilt * tilt[:, None])
 
     def _get_cals(self):
@@ -205,7 +235,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
 
         if installer.reinstall or not exists_path(os.path.join(data_dir, 'CamSpec_NPIPE')):
             zip_base = 'CamSpec_NPIPE.zip'
-            url = 'https://github.com/CobayaSampler/planck_native_data/releases/download/v1/{}'.format(zip_base)
+            url = f'https://github.com/CobayaSampler/planck_native_data/releases/download/v1/{zip_base}'
             zip_fn = os.path.join(data_dir, zip_base)
             download(url, zip_fn)
             extract(zip_fn, data_dir)
@@ -247,7 +277,7 @@ class TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood(_BasePlanckNPIPECamspecLi
     https://arxiv.org/abs/2205.10869
     """
     select_cls = ['143x143', '217x217', '143x217', 'TE', 'EE']
-    ell_ranges = {cl: (30, 600) for cl in select_cls}
+    ell_ranges = dict.fromkeys(select_cls, (30, 600))
 
 
 class TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood(_BasePlanckNPIPECamspecLikelihood):
@@ -323,7 +353,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
             self.ell_cuts = ell_cuts
         if data_file is None:
             from desilike.install import Installer
-            data_file = os.path.join(Installer().data_dir(self.installer_section),
+            data_file = os.path.join(Installer().data_dir(self.installer_section, ro=True),
                                      'CamSpec_NPIPE_cmb_sacc.fits')
         self._load_data(data_file)
         if cosmo is None:
@@ -364,7 +394,7 @@ class CamspecNPIPELiteLikelihood(GaussianLikelihood):
         covmat = sacc_data.covariance.covmat
         sub_cov = covmat[np.ix_(all_idx, all_idx)]
 
-        self.flatdata = jnp.asarray(np.concatenate([m['mu'] for m in spec_meta]))
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.concatenate([m['mu'] for m in spec_meta])))
         self.precision = jnp.asarray(np.linalg.inv(sub_cov))
         self._spec_meta = spec_meta
         self._ellmax = int(max(m['ell'].max() for m in spec_meta))

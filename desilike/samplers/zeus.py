@@ -26,6 +26,12 @@ class Zeus(Kernel):
     logger = logging.getLogger('Zeus')
     _sampler_cls = 'EnsembleSampler'
 
+    # The slice loop drops walkers from the batch as their slices get bracketed, so the
+    # posterior is called with a different number of rows on nearly every inner iteration.
+    # Against a jitted posterior that is one XLA compilation per distinct shape: measured at
+    # 15600 ms/step without padding and ~570 with, a 27x difference.
+    enforce_batch_size = True
+
     def __init__(self, nwalkers=None, **kwargs):
         """
         Parameters

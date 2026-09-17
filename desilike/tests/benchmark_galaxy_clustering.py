@@ -11,13 +11,13 @@ FOLPS full-shape:
     → FOLPSTracerSpectrum2Poles → Spectrum2PolesObservable
     → ObservablesGaussianLikelihood → Posterior.
 
-FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
+FOLPS full-shape with an emulator on FOLPSPTSpectrum2Poles:
     Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
     fitted once before timing.
 
-FOLPS eisenstein_hu vs TaylorEmulator (``folps_vs_emu``):
+FOLPS eisenstein_hu vs emulated (``folps_vs_emu``):
     Head-to-head: ``engine='eisenstein_hu'`` (JAX-native, no emulator) vs
-    ``engine='camb'`` + ``TaylorEmulator(order=1)`` on the PT sub-graph.
+    ``engine='camb'`` + ``an emulator (budget=1)`` on the PT sub-graph.
 
 COMET full-shape (GP-emulator-based):
     COMETTracerSpectrum2Poles (+ COMETTracerSpectrum3Poles, optionally) →
@@ -38,8 +38,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from desilike.base import compile, get_params, Posterior, Prior, replace, SumLikelihood
-from desilike import TaylorEmulator
+from desilike.base import build, get_params, Posterior, Prior, replace, SumLikelihood
+from desilike.emulators import Emulator, Space
 from desilike.theories import ACECosmology
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
@@ -75,7 +75,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 
     window = np.eye(n)
     rng = np.random.default_rng(42)
-    data = compile(theory)()
+    data = build(theory)()
     covariance = np.diag(np.full(n, 1e-6))
 
     observable = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells,
@@ -182,10 +182,10 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         theory.update(params=params)
 
         if emulator_order is not None:
-            print(f'  fitting TaylorEmulator (order={emulator_order}) on PT sub-graph …', end=' ', flush=True)
+            print(f'  fitting an emulator (budget={emulator_order}) on PT sub-graph …', end=' ', flush=True)
             t0 = time.perf_counter()
-            pt_emulator = TaylorEmulator(compile(theory.pt), order=emulator_order)
-            pt_emulator.fit()
+            pt_emulator = Emulator(theory.pt, Space(theory.pt))
+            pt_emulator.train(budget=emulator_order, verbose=False)
             print(f'done ({(time.perf_counter() - t0) * 1e3:.0f} ms)')
             replace(theory, theory.pt, pt_emulator.to_calculator())
 
@@ -267,7 +267,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     # Anchor mock data to the theory prediction at default parameters.  Using a fixed
     # absolute noise scale (1e2) with COMET amplitudes (~1e3-1e4) makes chi2 ride the
     # model amplitude to its prior boundary rather than recovering a meaningful best fit.
-    data2 = np.asarray(compile(theory)()).ravel()
+    data2 = np.asarray(build(theory)()).ravel()
     observable2 = Spectrum2PolesObservable(data=data2, theory=theory, k=k, ells=ells)
     observables = [observable2]
     covariances = [np.diag(800**2 * np.ones_like(data2))]
@@ -278,7 +278,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
         else:
             pt3 = COMETPTSpectrum3Poles(k=k3, z=z, ells=ells3, cosmo=cosmo)
             theory3 = COMETTracerSpectrum3Poles(k=k3, z=z, ells=ells3, prior_basis=prior_basis, pt=pt3)
-        data3 = np.asarray(compile(theory3)()).ravel()
+        data3 = np.asarray(build(theory3)()).ravel()
         observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
         observables.append(observable3)
         covariances.append(1000**2 * np.ones_like(data2))
@@ -369,7 +369,7 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
        profile_kwargs=None, **kwargs):
     """Compile and benchmark one pipeline variant."""
     print(f'\n=== {label} ===')
-    pipe = compile(build_fn())
+    pipe = build(build_fn())
 
     params = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
     solved_params = pipe.params.select(solved=True).names()
@@ -439,7 +439,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -448,7 +448,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_noemu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + TaylorEmulator(order=1)')
+        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + an emulator (budget=1)')
         print(f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -465,7 +465,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu_3poles' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -474,7 +474,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
     if 'folps_multi_emu' in test:
         tracers = TRACERS_FOLPS
         print(f'\n{"─" * 60}')
-        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + TaylorEmulator(order=1) on PT: '
+        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + an emulator (budget=1) on PT: '
             f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size per tracer={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -536,7 +536,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('direct (Pell, pt=False)', dict(direct=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -553,7 +553,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('shared PT, marg a0/a2/a4/NP0/NP20/NP22 (10 params)', dict(direct=False, marginalize=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -566,7 +566,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         print(f'COMET marg breakdown: primal vs JVP vs extra likelihood pass')
         print(f'ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points)')
         print(f'{"─" * 60}')
-        posterior = compile(build_posterior_comet(direct=False, marginalize=True))
+        posterior = build(build_posterior_comet(direct=False, marginalize=True))
         # Extract the group_fn from the first (and only) group
         for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
              group_theory_pipe, comp_meta, marg_local, best_local,
@@ -580,7 +580,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
                 p = dict(_params)
                 offset = 0
                 for name, size, shape in zip(_names, _sizes, _shapes):
-                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape or ())
                     offset += size
                 return _pipe(p)
 

@@ -10,6 +10,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from ..base import build, CompiledGraph
 from ..parameter import VariableCollection
 from ..samples import Profiles, Covariance
 from ..distributed import default_mpicomm, get_mpicomm
@@ -27,7 +28,7 @@ class Kernel:
 
     logger = logging.getLogger('Kernel')
 
-    #: Set ``True`` for gradient-based kernels; the profiler will then compile
+    #: Set ``True`` for gradient-based kernels; the profiler will then build
     #: ``jax.grad(chi2)`` and pass it to :meth:`run`.
     with_gradient: bool = False
 
@@ -38,7 +39,7 @@ class Kernel:
         available.  The default implementation does nothing.
         """
 
-    def run(self, state: 'ProfilerState', chi2, grad=None, **kwargs) -> 'ProfilerState':
+    def run(self, state: ProfilerState, chi2, grad=None, **kwargs) -> ProfilerState:
         """Run one optimisation.
 
         Parameters
@@ -171,7 +172,7 @@ def _pool_map(mpicomm, fn, items):
     return results
 
 
-def _state_to_profiles(state: ProfilerState, varied_params) -> 'Profiles | None':
+def _state_to_profiles(state: ProfilerState, varied_params) -> Profiles | None:
     """Convert a completed ProfilerState to a Profiles object (rescaled space)."""
     if state.best is None:
         return None
@@ -191,9 +192,9 @@ class Profiler:
 
     Parameters
     ----------
-    likelihood : CompiledGraph
+    likelihood : CompiledGraph or Calculator
         Compiled pipeline whose ``__call__(params_dict)`` returns the
-        log-posterior scalar.
+        log-posterior scalar.  A calculator is compiled here.
     kernel : Kernel
         Optimisation kernel (e.g. ``Minuit()``, ``Scipy()``, ``BOBYQA()``).
     rng : np.random.Generator or int, optional
@@ -235,7 +236,9 @@ class Profiler:
                  profiles=None, conditioner=None,
                  output_fn=None, mpicomm=None):
 
-        self.likelihood = likelihood
+        # a Calculator is built here; an already-built graph is taken as is, never rebuilt
+        self.likelihood = likelihood = (likelihood if isinstance(likelihood, CompiledGraph)
+                                        else build(likelihood))
         self.kernel     = kernel
         self.max_tries  = int(max_tries)
         self.output_fn    = output_fn
@@ -1328,7 +1331,7 @@ def _jit_and_grad(fn, with_gradient=False):
     fn : callable
         A JAX-traceable scalar function ``f(x) -> scalar``.
     with_gradient : bool
-        When ``True``, also compile ``jax.grad(fn)``; otherwise *grad_fn*
+        When ``True``, also build ``jax.grad(fn)``; otherwise *grad_fn*
         is ``None``.
 
     Returns

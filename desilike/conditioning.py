@@ -5,18 +5,7 @@ from __future__ import annotations
 import numpy as np
 import jax.numpy as jnp
 
-
-def _param_flat_iter(varied_params):
-    """Yield ``(param, size, col_start)`` for each parameter in *varied_params*.
-
-    *size* is the number of flat scalar elements; *col_start* is the offset
-    into the joint flat vector.
-    """
-    col = 0
-    for param in varied_params:
-        size = int(np.prod(param.shape)) if param.shape else 1
-        yield param, size, col
-        col += size
+from .parameter import _cumsize_params
 
 
 class AffineConditioner:
@@ -44,11 +33,11 @@ class AffineConditioner:
         self._varied_params = varied_params
 
         loc_parts = []
-        for param, size, col in _param_flat_iter(varied_params):
+        for param in varied_params:
             center = np.asarray(
                 param.value if param.value is not None else param.ref.center()).ravel()
-            if center.size == 1 and size > 1:
-                center = np.full(size, float(center[0]))
+            if center.size == 1 and param.size > 1:
+                center = np.full(param.size, float(center[0]))
             loc_parts.append(center.astype('f8'))
         self._loc = np.concatenate(loc_parts) if loc_parts else np.array([], dtype='f8')
 
@@ -59,26 +48,26 @@ class AffineConditioner:
             C_full = None
             if hasattr(self.covariance, 'select') and hasattr(self.covariance, 'value'):
                 # Covariance object (desilike.samples.Covariance)
-                param_sizes_list = list(_param_flat_iter(varied_params))
                 C_full = np.zeros((flat_size, flat_size), dtype='f8')
+                cumsize = _cumsize_params(varied_params)
                 in_cov_indices, params_in_cov = [], []
-                for param, size, col in param_sizes_list:
+                for i, param in enumerate(varied_params):
                     if param.name in self.covariance:
-                        in_cov_indices.extend(range(col, col + size))
+                        in_cov_indices.extend(range(cumsize[i], cumsize[i + 1]))
                         params_in_cov.append(param)
                 if params_in_cov:
                     sub = self.covariance.select(params_in_cov).value
                     ix = np.ix_(in_cov_indices, in_cov_indices)
                     C_full[ix] = sub
-                for param, size, col in param_sizes_list:
+                for i, param in enumerate(varied_params):
                     if param.name not in self.covariance:
                         std = param.ref.std()
                         if std is None or not np.isfinite(std) or std <= 0.:
                             raise ValueError(
                                 f'Parameter {param.name!r}: cannot determine scale from '
                                 f'ref.std()={std!r}.')
-                        for k in range(size):
-                            C_full[col + k, col + k] = float(std) ** 2
+                        for k in range(cumsize[i], cumsize[i + 1]):
+                            C_full[k, k] = float(std) ** 2
             elif self.covariance is not None:
                 C_full = np.asarray(self.covariance)
 
@@ -90,13 +79,13 @@ class AffineConditioner:
                     self._L_inv = jnp.array(np.linalg.inv(_L))
             else:
                 scale_parts = []
-                for param, size, col in _param_flat_iter(varied_params):
+                for param in varied_params:
                     std = param.ref.std()
                     if std is None or not np.isfinite(std) or std <= 0.:
                         raise ValueError(
                             f'Parameter {param.name!r}: cannot determine scale from '
                             f'ref.std()={std!r}.')
-                    scale_parts.append(np.full(size, float(std), dtype='f8'))
+                    scale_parts.append(np.full(param.size, float(std), dtype='f8'))
                 self._scale = np.concatenate(scale_parts) if scale_parts else np.array([], dtype='f8')
         else:
             self._scale = np.ones(flat_size, dtype='f8')
@@ -132,16 +121,19 @@ class AffineConditioner:
         if self._L is not None:
             flat = jnp.concatenate([
                 jnp.atleast_1d(jnp.ravel(jnp.asarray(sample[param.name])))
-                for param, size, col in _param_flat_iter(self._varied_params)])
+                for param in self._varied_params])
             flat = flat @ self._L.T + self._loc
             result = {}
-            for param, size, col in _param_flat_iter(self._varied_params):
-                v = flat[col:col + size]
+            cumsize = _cumsize_params(self._varied_params)
+            for i, param in enumerate(self._varied_params):
+                v = flat[cumsize[i]:cumsize[i + 1]]
                 result[param.name] = v.reshape(param.shape) if param.shape else v[0]
             return result
         result = {}
-        for param, size, col in _param_flat_iter(self._varied_params):
-            v = jnp.ravel(jnp.asarray(sample[param.name])) * self._scale[col:col + size] + self._loc[col:col + size]
+        cumsize = _cumsize_params(self._varied_params)
+        for i, param in enumerate(self._varied_params):
+            sl = slice(cumsize[i], cumsize[i + 1])
+            v = jnp.ravel(jnp.asarray(sample[param.name])) * self._scale[sl] + self._loc[sl]
             result[param.name] = v.reshape(param.shape) if param.shape else v[0]
         return result
 
@@ -149,16 +141,19 @@ class AffineConditioner:
         if self._L is not None:
             flat = jnp.concatenate([
                 jnp.atleast_1d(jnp.ravel(jnp.asarray(sample[param.name])))
-                for param, size, col in _param_flat_iter(self._varied_params)])
+                for param in self._varied_params])
             flat = (flat - self._loc) @ self._L_inv.T
             result = {}
-            for param, size, col in _param_flat_iter(self._varied_params):
-                v = flat[col:col + size]
+            cumsize = _cumsize_params(self._varied_params)
+            for i, param in enumerate(self._varied_params):
+                v = flat[cumsize[i]:cumsize[i + 1]]
                 result[param.name] = v.reshape(param.shape) if param.shape else v[0]
             return result
         result = {}
-        for param, size, col in _param_flat_iter(self._varied_params):
-            v = (jnp.ravel(jnp.asarray(sample[param.name])) - self._loc[col:col + size]) / self._scale[col:col + size]
+        cumsize = _cumsize_params(self._varied_params)
+        for i, param in enumerate(self._varied_params):
+            sl = slice(cumsize[i], cumsize[i + 1])
+            v = (jnp.ravel(jnp.asarray(sample[param.name])) - self._loc[sl]) / self._scale[sl]
             result[param.name] = v.reshape(param.shape) if param.shape else v[0]
         return result
 
@@ -166,9 +161,10 @@ class AffineConditioner:
         """Return ``(ndim, 2)`` lower/upper prior bounds in conditioned space."""
         lo_orig = np.full(self._loc.size, -np.inf)
         hi_orig = np.full(self._loc.size, np.inf)
-        for param, size, col in _param_flat_iter(self._varied_params):
+        cumsize = _cumsize_params(self._varied_params)
+        for i, param in enumerate(self._varied_params):
             if param.prior is not None:
-                lo_orig[col:col + size], hi_orig[col:col + size] = param.prior.limits
+                lo_orig[cumsize[i]:cumsize[i + 1]], hi_orig[cumsize[i]:cumsize[i + 1]] = param.prior.limits
         if self._L_inv is None:
             return np.column_stack([(lo_orig - self._loc) / self._scale,
                                     (hi_orig - self._loc) / self._scale])

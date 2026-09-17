@@ -7,6 +7,7 @@ import logging
 import warnings
 
 import numpy as np
+from scipy.linalg import eigvalsh
 
 from .samples import _vals, _normalise_params
 
@@ -48,9 +49,9 @@ def _inv(mat, check_valid='raise'):
         if check_valid == 'raise':
             raise exc
         elif check_valid == 'warn':
-            warnings.warn('Matrix inversion failed: {}'.format(exc))
+            warnings.warn(f'Matrix inversion failed: {exc}')
         elif check_valid != 'ignore':
-            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]')
+            raise ValueError('check_valid must be one of ["raise", "warn", "ignore"]') from exc
         return None
 
     # Accuracy check: mat @ invmat ≈ I
@@ -58,7 +59,7 @@ def _inv(mat, check_valid='raise'):
         tmp = mat.dot(invmat)
         ref = np.eye(tmp.shape[0], dtype=tmp.dtype)
         if not np.allclose(tmp, ref, rtol=1e-3, atol=1e-3):
-            msg = 'Numerically inaccurate inverse matrix, max absolute diff {:.6f}.'.format(np.max(np.abs(tmp - ref)))
+            msg = f'Numerically inaccurate inverse matrix, max absolute diff {np.max(np.abs(tmp - ref)):.6f}.'
             if check_valid == 'raise':
                 raise np.linalg.LinAlgError(msg)
             elif check_valid == 'warn':
@@ -111,14 +112,14 @@ def _iat_from_corr(corr, size, criterion, reliable, check_valid, param_name, **k
         toret    = 2.0 * np.sum(corr_sum) - 1.0 - corr_even[ix]
     else:
         raise ValueError(
-            'Unknown criterion {!r}; must be one of "min_corr", "sokal", "geyer"'.format(criterion)
+            f'Unknown criterion {criterion!r}; must be one of "min_corr", "sokal", "geyer"'
         )
 
     if reliable * toret > size:
         msg = (
-            'The chain is shorter than {:d} times the integrated autocorrelation '
-            'time for {!r}. Use this estimate with caution and run a longer chain!\n'
-            'N/{:d} = {:.0f};\ntau: {}'.format(reliable, param_name, reliable, size / reliable, toret)
+            f'The chain is shorter than {reliable:d} times the integrated autocorrelation '
+            f'time for {param_name!r}. Use this estimate with caution and run a longer chain!\n'
+            f'N/{reliable:d} = {size / reliable:.0f};\ntau: {toret}'
         )
         if check_valid == 'raise':
             raise ValueError(msg)
@@ -191,7 +192,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         if nsplits is None or nchains * nsplits < 2:
             raise ValueError(
                 'Provide at least 2 chains to estimate Gelman-Rubin, or specify '
-                'nsplits >= {:d}'.format(int(2.0 / nchains + 0.5))
+                f'nsplits >= {int(2.0 / nchains + 0.5):d}'
             )
         chains = [
             chain[islab * len(chain) // nsplits:(islab + 1) * len(chain) // nsplits]
@@ -201,7 +202,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
 
     sizes = [chain.size for chain in chains]
     if any(size < 2 for size in sizes):
-        raise ValueError('Not enough samples ({}) to estimate Gelman-Rubin'.format(sizes))
+        raise ValueError(f'Not enough samples ({sizes}) to estimate Gelman-Rubin')
 
     if params is None:
         params = _varied_names(chains[0])
@@ -234,17 +235,16 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     V = Wn + (nchains + 1.0) / nchains * B
 
     if method == 'eigen':
-        # Normalise by std for numerical stability
+        # Normalise by std for numerical stability, then solve the symmetric
+        # generalized eigenproblem V x = lambda W x directly.  inv(W) @ V is
+        # not symmetric in general and therefore cannot be passed to eigvalsh.
         stddev  = np.sqrt(np.diag(V).real)
         V_norm  = V / stddev[:, None] / stddev[None, :]
         Wn1_norm = Wn1 / stddev[:, None] / stddev[None, :]
-        invWn1  = _inv(Wn1_norm, check_valid=check_valid)
-        if invWn1 is None:
-            raise ValueError('Cannot compute inverse of within-chain covariance')
         try:
-            toret = np.linalg.eigvalsh(invWn1.dot(V_norm))
+            toret = eigvalsh(V_norm, Wn1_norm)
         except np.linalg.LinAlgError as exc:
-            raise ValueError('Eigenvalue decomposition failed') from exc
+            raise ValueError('Generalized eigenvalue decomposition failed') from exc
     else:
         toret = np.diag(V) / np.diag(Wn1)
 
@@ -382,8 +382,7 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     flat_chains = []
     for chain in chains:
         if chain.ndim == 2:
-            for walker_idx in range(chain.shape[1]):
-                flat_chains.append(chain[:, walker_idx])
+            flat_chains.extend(chain[:, walker_idx] for walker_idx in range(chain.shape[1]))
         else:
             flat_chains.append(chain)
     chains = flat_chains
@@ -407,9 +406,9 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     # Single parameter from here on
     sizes = [chain.size for chain in chains]
     if not all(size == sizes[0] for size in sizes):
-        raise ValueError('All chains must have the same length; found {}'.format(sizes))
+        raise ValueError(f'All chains must have the same length; found {sizes}')
     if any(size < 2 for size in sizes):
-        raise ValueError('Not enough samples ({}) to estimate IAT'.format(sizes))
+        raise ValueError(f'Not enough samples ({sizes}) to estimate IAT')
 
     size = chains[0].size
     corr = autocorrelation(chains, params)   # (size,) for scalar, (*var_shape, size) for non-scalar
@@ -448,11 +447,11 @@ def _autocorrelation_1d(x):
     x = np.atleast_1d(x)
     if x.ndim != 1:
         raise ValueError(
-            'Expected a 1-D array; got shape {}'.format(x.shape)
+            f'Expected a 1-D array; got shape {x.shape}'
         )
     if x.size < 2:
         raise ValueError(
-            'Need at least 2 samples to compute autocorrelation; got {:d}'.format(x.size)
+            f'Need at least 2 samples to compute autocorrelation; got {x.size:d}'
         )
 
     # Next power-of-2 length for zero-padding
@@ -526,7 +525,7 @@ def geweke(chains, params=None, first=0.1, last=0.5):
         nlast  = value_last.shape[0]
         if nfirst < 2 or nlast < 2:
             raise ValueError(
-                'Not enough samples ({:d}) to estimate Geweke statistics'.format(nsamples)
+                f'Not enough samples ({nsamples:d}) to estimate Geweke statistics'
             )
 
         w_first = aweight_first * fweight_first
@@ -555,3 +554,122 @@ def geweke(chains, params=None, first=0.1, last=0.5):
 
     # Stack along a new last axis: scalar → (nchains,); (*var_shape,) → (*var_shape, nchains).
     return np.stack(toret, axis=-1)
+
+
+# ── importance-sampling diagnostics ───────────────────────────────────────────
+
+def kish_ess(log_weights):
+    """Kish's effective sample size ``(sum w)^2 / sum w^2`` from log-weights.
+
+    Parameters
+    ----------
+    log_weights : array
+        Unnormalized log-weights; any additive constant cancels.
+
+    Returns
+    -------
+    float
+        Effective sample size, between 1 and ``log_weights.size``.
+    """
+    log_weights = np.asarray(log_weights, dtype='f8')
+    log_weights = log_weights[np.isfinite(log_weights)]
+    if not log_weights.size:
+        return 0.
+    weights = np.exp(log_weights - log_weights.max())
+    return float(weights.sum()**2 / (weights**2).sum())
+
+
+def systematic_resample(weights, nsamples, rng):
+    r"""Systematic resampling of *weights*, returning *nsamples* indices.
+
+    A single uniform draw :math:`u \sim \mathcal{U}(0, 1)` places a regular comb of
+    :math:`N` positions on the unit interval, and each position picks the index whose
+    normalized cumulative weight first exceeds it:
+
+    .. math::
+
+        p_k = \frac{u + k}{N}, \quad k = 0, \dots, N - 1, \qquad
+        i_k = \min \Big\{ i : \sum_{j \le i} \bar{w}_j \ge p_k \Big\},
+        \quad \bar{w}_j = \frac{w_j}{\sum_l w_l}.
+
+    A particle of normalized weight :math:`\bar{w}_i` therefore appears either
+    :math:`\lfloor N \bar{w}_i \rfloor` or :math:`\lceil N \bar{w}_i \rceil` times, never
+    more and never fewer -- the counts are exactly the multinomial ones rounded, with only
+    the single shared :math:`u` left random. That is the whole reason to prefer it:
+    unbiased like multinomial resampling, at the same cost, but with lower variance, which
+    makes it the standard choice inside sequential Monte Carlo.
+
+    Parameters
+    ----------
+    weights : array
+        Non-negative weights; normalized internally.
+    nsamples : int
+        Number of indices to draw.
+    rng : numpy.random.Generator
+        Random number generator, supplying the single uniform offset.
+
+    Returns
+    -------
+    numpy.ndarray, shape ``(nsamples,)``
+        Indices into *weights*.
+    """
+    weights = np.asarray(weights, dtype='f8')
+    total = weights.sum()
+    if not np.isfinite(total) or total <= 0.:
+        raise ValueError('weights must contain at least one positive finite value.')
+    positions = (rng.random() + np.arange(nsamples)) / nsamples
+    index = np.searchsorted(np.cumsum(weights / total), positions)
+    return np.clip(index, 0, weights.size - 1)
+
+
+def _gpd_shape(tail):
+    """Zhang & Stephens (2009) profile-likelihood estimate of the GPD shape parameter."""
+    ntail = tail.size
+    ngrid = 30 + int(np.sqrt(ntail))
+    grid = 1. - np.sqrt(ngrid / (np.arange(1, ngrid + 1) - 0.5))
+    grid /= 3. * tail[int(ntail / 4 + 0.5) - 1]
+    grid += 1. / tail[-1]
+    shapes = np.log1p(-grid[:, None] * tail).mean(axis=-1)
+    profile = ntail * (np.log(-grid / shapes) - shapes - 1.)
+    weights = 1. / np.exp(profile[:, None] - profile).sum(axis=-1)
+    theta = (grid * weights).sum() / weights.sum()
+    shape = np.log1p(-theta * tail).mean()
+    # Weakly informative prior on the shape, as in the reference implementation.
+    return (ntail * shape + 10. * 0.5) / (ntail + 10.)
+
+
+def pareto_khat(log_weights):
+    """Pareto-smoothed importance-sampling diagnostic k-hat.
+
+    A generalized-Pareto distribution is fitted to the upper tail of the weights;
+    its shape parameter k estimates the number of finite moments of the weight
+    distribution. ``k < 0.5`` is fine, ``0.5-0.7`` is usable, ``> 0.7`` means the
+    weight variance is effectively infinite and :func:`kish_ess` is optimistic --
+    the failure mode to watch when a proposal under-covers the target in the tails,
+    where a healthy-looking Kish ESS hides a broken correction.
+
+    .. rubric:: References
+    - Vehtari et al., https://arxiv.org/abs/1507.02646
+
+    Parameters
+    ----------
+    log_weights : array
+        Unnormalized log-weights.
+
+    Returns
+    -------
+    float
+        Estimated shape parameter, or ``nan`` when the tail is too short or
+        degenerate to fit.
+    """
+    log_weights = np.asarray(log_weights, dtype='f8')
+    log_weights = log_weights[np.isfinite(log_weights)]
+    nsamples = log_weights.size
+    ntail = int(min(nsamples / 5., 3. * np.sqrt(nsamples)))
+    if ntail < 5:
+        return np.nan
+    ordered = np.sort(log_weights - log_weights.max())
+    tail = np.exp(ordered[-ntail:]) - np.exp(ordered[-ntail - 1])
+    if not np.all(tail > 0):
+        return np.nan
+    return float(_gpd_shape(tail))

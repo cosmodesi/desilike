@@ -5,6 +5,7 @@ import os
 import numpy as np
 import jax.numpy as jnp
 
+from desilike.parameter import Variable
 from .base import BaseSNLikelihood
 
 
@@ -36,7 +37,7 @@ class PantheonPlusSHOESSNLikelihood(BaseSNLikelihood):
         zmask = (self.light_curve_params['zcmb'] > 0.01) | self.light_curve_params['is_calibrator']
         self.light_curve_params = {name: value[zmask] for name, value in self.light_curve_params.items()}
         self.covariance = self.covariance[np.ix_(zmask, zmask)]
-        self.flatdata = jnp.asarray(self.light_curve_params['mb'])
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.light_curve_params['mb']))
         self.precision = jnp.linalg.inv(jnp.asarray(self.covariance))
 
     def __post_init__(self, *args, **kwargs):

@@ -115,8 +115,8 @@ class StandAloneMHSampler:
 
     """
 
-    def __init__(self, posterior, fast=[], f_fast=1, f_drag=0, pool=None,
-                 rng=np.random.default_rng()):
+    def __init__(self, posterior, fast=None, f_fast=1, f_drag=0, pool=None,
+                 rng=None):
         """Initialize the sampler.
 
         Parameters
@@ -143,7 +143,7 @@ class StandAloneMHSampler:
 
         """
         self.posterior = posterior
-        self.fast = fast
+        self.fast = [] if fast is None else fast
         self.f_fast = int(f_fast)
         if self.f_fast < 1:
             raise ValueError("'f_fast' cannot be smaller than 1.")
@@ -154,7 +154,7 @@ class StandAloneMHSampler:
             self.map = map
         else:
             self.map = pool.map
-        self.rng = rng
+        self.rng = np.random.default_rng() if rng is None else rng
 
     def update(self, pos=None, log_p=None, blobs=None, cov=None):
         """Update the sampler's starting position and/or proposal.

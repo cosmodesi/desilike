@@ -37,6 +37,20 @@ jobs:
         # because they shared a `coverage combine`.  As two matrix legs they run concurrently, so
         # the check's wall clock is the slower of the two rather than their sum.
         suite: [serial, mpi]
+        include:
+          # desilike/theories is ~94% of the runtime and runs on one version only, so rather than
+          # sit in `serial` it gets legs of its own -- and separate legs mean separate runners.
+          # That matters for memory, not just speed: a process's footprint grows monotonically
+          # through a run as emulator state accumulates (measured 6.7 GB over
+          # test_full_shape_emulated.py, 13.4 GB over the larger test_full_shape.py), so the
+          # ceiling scales with how many theory tests one process has got through.  Splitting the
+          # work across runners lowers it; `pytest -n`, which was tried here, raises it -- two
+          # workers on one runner reached 23.7 GB against the 16 GB a runner has, and the leg died
+          # with the agent killed under it.  Each of these legs runs a subset of the suite that was
+          # green single-process before any of this, so none can need more than that already did.
+          - {os: ubuntu-latest, python-version: "3.13", suite: theories-full-shape}
+          - {os: ubuntu-latest, python-version: "3.13", suite: theories-emulated}
+          - {os: ubuntu-latest, python-version: "3.13", suite: theories-rest}
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.suite }} (${{ matrix.os }}, ${{ matrix.python-version }})
 
@@ -57,7 +71,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install 'ruff>=0.16,<0.17' pytest pytest-cov pytest-mpi pytest-timeout pytest-xdist
+        python -m pip install 'ruff>=0.16,<0.17' pytest pytest-cov pytest-mpi pytest-timeout
         if [ "$RUNNER_OS" == "Linux" ]; then
           sudo apt install libopenmpi-dev
         else
@@ -97,20 +111,25 @@ jobs:
         # the stack and names the line.  Both limits are ~10x the slowest test they cover, so
         # only a genuine hang can trip them.
         TIMEOUT_METHOD="--timeout-method=thread"
-        if [ "${{ matrix.suite }}" = "mpi" ]; then
-          # No xdist here: xdist forks its own workers per rank, which is not a thing to combine
-          # with mpirun.  The slowest test in this subset is ~30s, hence the tighter limit.
-          mpirun -n 2 bash -c "COVERAGE_FILE=.coverage.mpi.\$OMPI_COMM_WORLD_RANK python -m pytest --cov=desilike --durations=0 --with-mpi $MPI_TESTPATHS --timeout=600 $TIMEOUT_METHOD"
-        else
-          # `--dist load` spreads individual tests, not whole files: the two full_shape files are
-          # ~20 min each, so keeping a file on one worker would set the floor there.
-          # The slowest legitimate test is ~4 min, so --timeout=1800 is pure headroom.
-          IGNORE=""
-          if [ "${{ matrix.python-version }}" != "${{ env.COVERAGE_PYTHON }}" ]; then
-            IGNORE="--ignore=desilike/theories"
-          fi
-          COVERAGE_FILE=.coverage.serial python -m pytest --cov=desilike --durations=0 \
-            -n auto --dist load $IGNORE --timeout=1800 $TIMEOUT_METHOD
+        SHAPE=desilike/theories/tests/test_full_shape.py
+        EMULATED=desilike/theories/tests/test_full_shape_emulated.py
+        # Every leg runs one process.  `pytest -n` is deliberately absent: the runner has 2 cores,
+        # so it was worth 2x at best, and it doubled a footprint that already grows through a run
+        # -- see the note on the theories legs above.  Parallelism comes from the legs instead.
+        # The slowest legitimate test is ~4 min, so --timeout=1800 is pure headroom.
+        case "${{ matrix.suite }}" in
+          mpi)
+            # The slowest test in this subset is ~30s, hence the tighter limit.
+            mpirun -n 2 bash -c "COVERAGE_FILE=.coverage.mpi.\$OMPI_COMM_WORLD_RANK python -m pytest --cov=desilike --durations=0 --with-mpi $MPI_TESTPATHS --timeout=600 $TIMEOUT_METHOD"
+            ;;
+          theories-full-shape) TARGET="$SHAPE" ;;
+          theories-emulated)   TARGET="$EMULATED" ;;
+          theories-rest)       TARGET="desilike/theories --ignore=$SHAPE --ignore=$EMULATED" ;;
+          serial)              TARGET="--ignore=desilike/theories" ;;
+        esac
+        if [ "${{ matrix.suite }}" != "mpi" ]; then
+          COVERAGE_FILE=.coverage.${{ matrix.suite }} python -m pytest --cov=desilike --durations=0 \
+            $TARGET --timeout=1800 $TIMEOUT_METHOD
         fi
     - name: Upload coverage data
       # Only the reported version's data is kept; the other legs run a subset and would dilute it.

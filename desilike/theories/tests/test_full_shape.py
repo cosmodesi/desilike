@@ -505,9 +505,9 @@ class TestPyBird:
         assert base.shape == (len(theory.ells), len(k))
         _check_sensitivity(run, base, 'PyBirdTracerSpectrum2Poles', b1=2.0)
 
-        for eft_basis in ['westcoast', 'eastcoast']:
-            theory = PyBirdTracerSpectrum2Poles(k=k, eft_basis=eft_basis)
-            _check(_compile(theory)(), f'PyBirdTracerSpectrum2Poles ({eft_basis})')
+        for prior_basis in ['westcoast', 'eastcoast']:
+            theory = PyBirdTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            _check(_compile(theory)(), f'PyBirdTracerSpectrum2Poles ({prior_basis})')
 
     def test_tracer_correlation(self):
         """PyBirdTracerCorrelation2Poles: shape and b1 sensitivity."""

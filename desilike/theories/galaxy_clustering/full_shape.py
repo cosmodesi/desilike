@@ -1481,9 +1481,16 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     PyBird tracer power spectrum multipoles.
 
     Westcoast uses b2p4/b2m4 and ce0/cemono/cequad. Eastcoast uses
-    b2t/b2g/b3g, dimensional counterterms c0/c2/c4 and dimensionless Pshot/a0/a2.
+    b2t/b2g/db3g, dimensional counterterms c0/c2/c4 and dimensionless Pshot/a0/a2.
+    Its sampled db3g has a zero-centred unit-width Gaussian prior, with
+    b3g = db3g + 23/42 (b1 - 1) evaluated using the current b1.
+    DESI uses b1/b2/dbk2/dbtd and dimensional counterterms alpha0/alpha2/alpha4.
+    Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
+    bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
+    These shifts use the current b1.
+    DESI stochastic terms are [sn0 + sn2 fsat sigv^2 k^2 mu^2] / nbar.
     Stochastic terms are normalized by nbar and km in _bias_coefficients.
-    The PT basis is always eftoflss, independently of this tracer's eft_basis.
+    The PT basis is always eftoflss, independently of this tracer's prior_basis.
 
     Parameters
     ----------
@@ -1491,20 +1498,23 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     pt : PyBirdPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    eft_basis : str, default='eftoflss'
-        One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``.
+    prior_basis : str, default='eftoflss'
+        One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'DESI'``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
     km, kr : float or pair of floats, default=0.7, 0.25
         Tracer scales for counterterm and stochastic normalization. A pair gives
         one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
+    fsat, sigv : float, default=None
+        DESI stochastic normalization; defaults are 0.1 and 5.
+        Cross spectra use one pair-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
-    def _auto_params(cls, eft_basis):
-        """Return default auto_params list for the given EFT basis (shared with Correlation variant)."""
-        eft = eft_basis or 'eftoflss'
-        if eft == 'eftoflss':
+    def _auto_params(cls, prior_basis):
+        """Return default auto_params list for the given prior basis (shared with Correlation variant)."""
+        prior_basis = prior_basis or 'eftoflss'
+        if prior_basis == 'eftoflss':
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
                 Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
@@ -1524,7 +1534,28 @@ class PyBirdTracerSpectrum2Poles(Calculator):
                 Parameter('ce2', value=0., prior=None, fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_2'),
             ]
-        elif eft == 'westcoast':
+        elif prior_basis == 'DESI':
+            bias = [
+                Parameter('b1', value=1.6, prior=dict(limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+                Parameter('dbk2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_{K^2}'),
+                Parameter('dbtd', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_\mathrm{td}'),
+            ]
+            counterterms = [
+                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_0'),
+                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_2'),
+                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_4'),
+            ]
+            stochastic = [
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+            ]
+        elif prior_basis == 'westcoast':
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
                 Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}'),
@@ -1544,14 +1575,14 @@ class PyBirdTracerSpectrum2Poles(Calculator):
                 Parameter('cequad', value=0., prior=None, fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_{\mathrm{quad}}'),
             ]
-        elif eft == 'eastcoast':
+        elif prior_basis == 'eastcoast':
             # 2112.04515 Eq(11, 12)
-            b1ref = 1.6  # center on varied b1?
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
                 Parameter('b2t', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}'),
-                Parameter('b2g', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}'),
-                Parameter('b3g', value=0., prior=dict(dist='norm', loc=23/42*(b1ref-1), scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}'),
+                Parameter('b2g', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'b_{\mathcal{G}_2}'),
+                Parameter('db3g', value=0., prior=dict(dist='norm', loc=0., scale=1.),
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_{\Gamma_3}'),
             ]
             counterterms = [
                 Parameter('c0', value=0., prior=dict(dist='norm', loc=0., scale=30.), fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_0'),
@@ -1565,36 +1596,38 @@ class PyBirdTracerSpectrum2Poles(Calculator):
                 Parameter('a2', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='a_2'),
             ]
         else:
-            raise ValueError(f'Unknown PyBird eft_basis: {eft_basis!r}')
+            raise ValueError(f'Unknown PyBird prior_basis: {prior_basis!r}')
         return bias + counterterms + stochastic
 
     @staticmethod
-    def _stochastic_names(eft_basis):
-        if eft_basis == 'westcoast':
+    def _stochastic_names(prior_basis):
+        if prior_basis == 'DESI':
+            return ('sn0', 'sn2')
+        if prior_basis == 'westcoast':
             return ('ce0', 'cemono', 'cequad')
-        if eft_basis == 'eastcoast':
+        if prior_basis == 'eastcoast':
             return ('Pshot', 'a0', 'a2')
         return ('ce0', 'ce1', 'ce2')
 
     @classmethod
-    def propose_params(cls, tracers=None, eft_basis='eftoflss', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='eftoflss', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
         ----------
         tracers : str, (str, str), or None, default=None
-        eft_basis : str, default='eftoflss'
+        prior_basis : str, default='eftoflss'
 
         Returns
         -------
         VariableCollection
         """
-        return propose_params_multitracer(cls._auto_params(eft_basis), tracers, stochastic=cls._stochastic_names(eft_basis), cross=True)
+        return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=cls._stochastic_names(prior_basis), cross=True)
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, **kwargs):
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -1602,7 +1635,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
-        self._eft_basis = eft_basis if eft_basis is not None else 'eftoflss'
+        self._prior_basis = prior_basis or 'eftoflss'
         if pt is None:
             pt = PyBirdPTSpectrum2Poles(**kwargs)
         self.pt = pt
@@ -1610,10 +1643,14 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
+        if self._prior_basis == 'DESI':
+            settings = get_physical_stochastic_settings()
+            self._fsat = float(fsat) if fsat is not None else settings['fsat']
+            self._sigv = float(sigv) if sigv is not None else settings['sigv']
         if isinstance(self.b1, tuple):
             self.km = km if isinstance(km, tuple) else (float(km),) * 2
             self.kr = kr if isinstance(kr, tuple) else (float(kr),) * 2
@@ -1627,20 +1664,21 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         shared stochastic parameters are scalars and are not indexed by idx.
 
         km, kr and nbar normalization is applied in _bias_coefficients.
-        eftoflss/westcoast return field-level cct, cr1, cr2. Eastcoast returns
+        eftoflss/westcoast/DESI return field-level cct, cr1, cr2. Eastcoast returns
         ct0, ct2, ct4 (tilde c0, c2, c4), the power-level coefficients of
         -2 [ct0 + f ct2 mu^2 + f^2 ct4 mu^4] k^2 P11.
-        ce0, ce1, ce2 multiply [1, (k/km)^2, f (k/km)^2 mu^2] / nbar.
+        All bases return ce0, ce1, ce2 multiplying [1, (k/km)^2, f (k/km)^2 mu^2] / nbar.
+        DESI absorbs fsat, sigv and the pair's km product into ce2; this conversion requires f != 0.
         Eastcoast a0 and a2 instead use fixed knl=0.45 h/Mpc; their conversion
         compensates for the km normalization applied in _bias_coefficients.
         """
         def get(name):
             val = getattr(self, name)
             return val[idx] if (idx is not None and isinstance(val, tuple)) else val
-        eft_basis = self._eft_basis
+        prior_basis = self._prior_basis
         b1 = get('b1')
 
-        if eft_basis == 'eftoflss':
+        if prior_basis == 'eftoflss':
             # galaxy biases
             b2, b3, b4 = get('b2'), get('b3'), get('b4')
             # counterterms
@@ -1648,7 +1686,28 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             # stochastic terms
             ce0, ce1, ce2 = get('ce0'), get('ce1'), get('ce2')
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
-        elif eft_basis == 'westcoast':
+        elif prior_basis == 'DESI':
+            # Sample zero-centred deviations; shift to Eulerian biases using the current b1.
+            bk2 = get('dbk2') - 2. / 7. * (b1 - 1.)
+            btd = get('dbtd') + 23. / 42. * (b1 - 1.)
+            b2 = b1 + 7. / 2. * bk2
+            b3 = b1 + 15. * bk2 + 6. * btd
+            b4 = 0.5 * get('b2') - 17. / 6. * bk2
+            # EFT auto counterterms are 2 (b1 + f mu^2) (cct/km^2 + cr1/kr^2 mu^2 + cr2/kr^2 mu^4) k^2 P_lin
+            # DESI counterterms are (b1 + f mu^2) (b1 alpha0 + f alpha2 mu^2 + f alpha4 mu^4) k^2 P_lin
+            # The 1/2 factors reproduce the DESI expression; km and kr cancel in _bias_coefficients.
+            km = self.km[idx] if idx is not None else self.km
+            kr = self.kr[idx] if idx is not None else self.kr
+            cct = 0.5 * b1 * get('alpha0') * km**2
+            cr1 = 0.5 * f * get('alpha2') * kr**2
+            cr2 = 0.5 * f * get('alpha4') * kr**2
+            # Cancel the pair's km normalization and the EFT stochastic growth-rate factor.
+            km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
+            ce0 = get('sn0')
+            ce1 = 0.
+            ce2 = get('sn2') * self._fsat * self._sigv**2 * km2 / f
+            return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
+        elif prior_basis == 'westcoast':
             # galaxy biases
             b2 = (get('b2p4') + get('b2m4')) / 2.**0.5
             b4 = (get('b2p4') - get('b2m4')) / 2.**0.5
@@ -1660,9 +1719,11 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             ce1 = get('cemono') - 0.5 * get('cequad')
             ce2 = 1.5 * get('cequad') / f
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
-        elif eft_basis == 'eastcoast':
+        elif prior_basis == 'eastcoast':
             # galaxy biases: 2208.05929 Eq(1)
-            b2g, b2t, b3g = get('b2g'), get('b2t'), get('b3g')
+            b2g, b2t = get('b2g'), get('b2t')
+            # Sample the deviation from the relation evaluated at the current b1.
+            b3g = get('db3g') + 23. / 42. * (b1 - 1.)
             b2 = b1 + 7./2.*b2g
             b3 = b1 + 15.*b2g + 6.*b3g
             b4 = 0.5*b2t - 7./2.*b2g
@@ -1683,7 +1744,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             ce2 = get('a2') * km2 / (f * knl**2)
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, ct0=ct0, ct2=ct2, ct4=ct4, ce0=ce0, ce1=ce1, ce2=ce2)
         else:
-            raise ValueError(f'Unknown PyBird eft_basis: {eft_basis!r}')
+            raise ValueError(f'Unknown PyBird prior_basis: {prior_basis!r}')
 
     def _bias_coefficients(self, f):
         """Coefficients in fixed eftoflss table order; auto uses equal X and Y biases."""
@@ -1707,7 +1768,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         # For auto spectra these arise from expanding 2 (b1 + f mu^2) times the
         # three normalized counterterms; six coefficients do not mean six free parameters.
         # Eastcoast uses only the first three columns, so its remaining coefficients are zero.
-        if self._eft_basis == 'eastcoast':
+        if self._prior_basis == 'eastcoast':
             ct0X, ct2X, ct4X = biasX['ct0'], biasX['ct2'], biasX['ct4']
             ct0Y, ct2Y, ct4Y = biasY['ct0'], biasY['ct2'], biasY['ct4']
             bct = -jnp.array([ct0X + ct0Y, f * (ct2X + ct2Y), f**2 * (ct4X + ct4Y), 0., 0., 0.])
@@ -1878,16 +1939,20 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     pt : PyBirdPTCorrelation2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    eft_basis : str, default='eftoflss'
+    prior_basis : str, default='eftoflss'
+        Same choices and parameter conventions as PyBirdTracerSpectrum2Poles.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
     km, kr : float or pair of floats, default=0.7, 0.25
         Tracer scales for counterterm and stochastic normalization. A pair gives
         one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
+    fsat, sigv : float, default=None
+        DESI stochastic normalization; defaults are 0.1 and 5 Mpc/h, as in FOLPS physical.
+        Cross spectra use one pair-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, eft_basis='eftoflss'):
+    def propose_params(cls, tracers=None, prior_basis='eftoflss'):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Cross-correlations are not supported for the correlation function; use a single tracer name.
@@ -1895,19 +1960,19 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         Parameters
         ----------
         tracers : str or None, default=None
-        eft_basis : str, default='eftoflss'
+        prior_basis : str, default='eftoflss'
 
         Returns
         -------
         VariableCollection
         """
-        return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(eft_basis),
-                                           tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(eft_basis))  # no cross
+        return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(prior_basis),
+                                           tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(prior_basis))  # no cross
 
-    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, **kwargs):
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -1915,7 +1980,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
         self.ells = tuple(ells)
-        self._eft_basis = eft_basis if eft_basis is not None else 'eftoflss'
+        self._prior_basis = prior_basis if prior_basis is not None else 'eftoflss'
         if pt is None:
             pt = PyBirdPTCorrelation2Poles(**kwargs)
         self.pt = pt
@@ -1923,10 +1988,14 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, **kwargs):
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
+        if self._prior_basis == 'DESI':
+            settings = get_physical_stochastic_settings()
+            self._fsat = float(fsat) if fsat is not None else settings['fsat']
+            self._sigv = float(sigv) if sigv is not None else settings['sigv']
         self.km = float(km)
         self.kr = float(kr)
 

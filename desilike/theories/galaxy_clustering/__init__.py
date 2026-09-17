@@ -15,5 +15,16 @@ from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, Kai
                          FOLPSPTSpectrum3Poles, FOLPSTracerSpectrum3Poles, RedshiftSmearing,
                          FKPTJAXPTSpectrum2Poles, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
                          JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
-from .density_split_matter import DensitySplitMatterPowerSpectrumMultipoles
+from .density_split_matter import (DensitySplitMatterPowerSpectrumMultipoles,
+                                   DensitySplitPairPowerSpectrumMultipoles,
+                                   DensitySplitPowerSpectrumKernels, MatterPowerTheory,
+                                   SmoothedAPMatterPowerTheory, APDensitySplitMatterPowerSpectrumMultipoles)
 from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles
+
+from .density_split_matter import DensitySplitOneLoopPowerSpectrumKernels
+
+from .density_split_matter import DensitySplitResponsePowerSpectrumKernels
+
+from .density_split_matter import DensitySplitResponsePowerSpectrumBasis, response_residual_templates
+
+from .density_split_matter import WindowedDensitySplitResponseBasis, ResponseMatterPowerSpectrumMultipoles

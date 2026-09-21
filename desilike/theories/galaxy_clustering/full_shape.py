@@ -1440,6 +1440,10 @@ class PyBirdPTSpectrum2Poles(Calculator):
         if self._with_ap:
             self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
         self._projection.xdata(self._pt)
+        self.sigma8 = self.template.sigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
 
     def tree_flatten(self):
         _z = jnp.zeros((len(self.ells), 1, len(self.k)))
@@ -1448,7 +1452,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
         Pctl = jnp.asarray(self._pt.Pctl)
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _z
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _z
-        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, jnp.asarray(self._pt.f)],
+        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, jnp.asarray(self._pt.f),
+                 self.sigma8, self.sigma8_fid, self.qpar, self.qper],
                 {'k': self.k, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
                  'eft_basis': self._pt.eft_basis,
                  'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
@@ -1458,7 +1463,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
         from pybird.bird import Bird
         obj = object.__new__(cls)
         pt = Bird.__new__(Bird)
-        pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol, pt.f = children
+        (pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol, pt.f,
+         obj.sigma8, obj.sigma8_fid, obj.qpar, obj.qper) = children
         pt.eft_basis = aux['eft_basis']
         pt.with_stoch = aux['with_stoch']
         pt.with_nnlo_counterterm = aux['with_nnlo']
@@ -1500,6 +1506,11 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='eftoflss'
         One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'DESI'``.
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default=None
+        DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
+        dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
     km, kr : float or pair of floats, default=0.7, 0.25
@@ -1625,7 +1636,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=cls._stochastic_names(prior_basis), cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1644,9 +1655,12 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
+        self._rescaling = rescaling if self._prior_basis == 'DESI' else None
+        if self._rescaling not in (None, 'sigma8', 'AP', 'sigma8+AP'):
+            raise ValueError(f'Unknown parameter rescaling method: {rescaling!r}')
         if self._prior_basis == 'DESI':
             settings = get_physical_stochastic_settings()
             self._fsat = float(fsat) if fsat is not None else settings['fsat']
@@ -1657,6 +1671,26 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         else:
             self.km = float(km)
             self.kr = float(kr)
+
+    def _rescale_params(self, b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2):
+        """Rescale DESI parameters before shifting the coevolution centres or changing basis.
+
+        S = sigma8(z) / sigma8_fid(z); A_AP = 1 / (qper**2 * qpar).
+        The AP factor uses the template dilation, independently of PT's with_ap.
+        Counterterms scale as 1 / (S**2 * A_AP), stochastic terms as 1 / A_AP.
+        """
+        S = self.pt.sigma8 / self.pt.sigma8_fid if self._rescaling in ('sigma8', 'sigma8+AP') else 1.
+        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._rescaling in ('AP', 'sigma8+AP') else 1.
+        b1 = b1 / (S * A_AP**0.5)
+        b2 = b2 / (S**2 * A_AP**0.5)
+        dbk2 = dbk2 / (S**2 * A_AP**0.5)
+        dbtd = dbtd / (S**4 * A_AP)
+        alpha0 = alpha0 / (A_AP * S**2)
+        alpha2 = alpha2 / (A_AP * S**2)
+        alpha4 = alpha4 / (A_AP * S**2)
+        sn0 = sn0 / A_AP
+        sn2 = sn2 / A_AP
+        return b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2
 
     def _build_params(self, f, idx=None):
         """Return scalar bias, counterterm and stochastic parameters for one tracer. For cross-spectra,
@@ -1687,25 +1721,28 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             ce0, ce1, ce2 = get('ce0'), get('ce1'), get('ce2')
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
         elif prior_basis == 'DESI':
-            # Sample zero-centred deviations; shift to Eulerian biases using the current b1.
-            bk2 = get('dbk2') - 2. / 7. * (b1 - 1.)
-            btd = get('dbtd') + 23. / 42. * (b1 - 1.)
+            b1, b2_desi, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2 = self._rescale_params(
+                b1, get('b2'), get('dbk2'), get('dbtd'),
+                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'), get('sn2'))
+            # Shift the rescaled deviations using the rescaled Eulerian b1.
+            bk2 = dbk2 - 2. / 7. * (b1 - 1.)
+            btd = dbtd + 23. / 42. * (b1 - 1.)
             b2 = b1 + 7. / 2. * bk2
             b3 = b1 + 15. * bk2 + 6. * btd
-            b4 = 0.5 * get('b2') - 17. / 6. * bk2
+            b4 = 0.5 * b2_desi - 17. / 6. * bk2
             # EFT auto counterterms are 2 (b1 + f mu^2) (cct/km^2 + cr1/kr^2 mu^2 + cr2/kr^2 mu^4) k^2 P_lin
             # DESI counterterms are (b1 + f mu^2) (b1 alpha0 + f alpha2 mu^2 + f alpha4 mu^4) k^2 P_lin
             # The 1/2 factors reproduce the DESI expression; km and kr cancel in _bias_coefficients.
             km = self.km[idx] if idx is not None else self.km
             kr = self.kr[idx] if idx is not None else self.kr
-            cct = 0.5 * b1 * get('alpha0') * km**2
-            cr1 = 0.5 * f * get('alpha2') * kr**2
-            cr2 = 0.5 * f * get('alpha4') * kr**2
+            cct = 0.5 * b1 * alpha0 * km**2
+            cr1 = 0.5 * f * alpha2 * kr**2
+            cr2 = 0.5 * f * alpha4 * kr**2
             # Cancel the pair's km normalization and the EFT stochastic growth-rate factor.
             km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
-            ce0 = get('sn0')
+            ce0 = sn0
             ce1 = 0.
-            ce2 = get('sn2') * self._fsat * self._sigv**2 * km2 / f
+            ce2 = sn2 * self._fsat * self._sigv**2 * km2 / f
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
         elif prior_basis == 'westcoast':
             # galaxy biases
@@ -1882,6 +1919,10 @@ class PyBirdPTCorrelation2Poles(Calculator):
         if self._with_ap:
             self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
         self._projection.xdata(self._pt)
+        self.sigma8 = self.template.sigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
 
     def tree_flatten(self):
         # Expose both Cf and Ps loop arrays: setreduceCflb ends with a call to
@@ -1899,7 +1940,8 @@ class PyBirdPTCorrelation2Poles(Calculator):
         _zp = jnp.zeros((len(self.ells), 1, P11l.shape[-1]))
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _zp
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _zp
-        return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol],
+        return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol,
+                 self.sigma8, self.sigma8_fid, self.qpar, self.qper],
                 {'s': self.s, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
                  'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
                  'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
@@ -1910,7 +1952,8 @@ class PyBirdPTCorrelation2Poles(Calculator):
         obj = object.__new__(cls)
         pt = Bird.__new__(Bird)
         (pt.C11l, pt.Cloopl, pt.Cctl, pt.Cstl, pt.Cnnlol,
-         pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol) = children
+         pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol,
+         obj.sigma8, obj.sigma8_fid, obj.qpar, obj.qper) = children
         pt.f = aux['f']
         pt.eft_basis = aux['eft_basis']
         pt.with_stoch = aux['with_stoch']
@@ -1941,6 +1984,11 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='eftoflss'
         Same choices and parameter conventions as PyBirdTracerSpectrum2Poles.
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default=None
+        DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
+        dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
     km, kr : float or pair of floats, default=0.7, 0.25
@@ -1970,7 +2018,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
                                            tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(prior_basis))  # no cross
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1989,9 +2037,12 @@ class PyBirdTracerCorrelation2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, **kwargs):
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
+        self._rescaling = rescaling if self._prior_basis == 'DESI' else None
+        if self._rescaling not in (None, 'sigma8', 'AP', 'sigma8+AP'):
+            raise ValueError(f'Unknown parameter rescaling method: {rescaling!r}')
         if self._prior_basis == 'DESI':
             settings = get_physical_stochastic_settings()
             self._fsat = float(fsat) if fsat is not None else settings['fsat']
@@ -2000,6 +2051,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         self.kr = float(kr)
 
     _stochastic_names = staticmethod(PyBirdTracerSpectrum2Poles._stochastic_names)
+    _rescale_params = PyBirdTracerSpectrum2Poles._rescale_params
     _build_params = PyBirdTracerSpectrum2Poles._build_params
     _bias_coefficients = PyBirdTracerSpectrum2Poles._bias_coefficients
     _contract = PyBirdTracerSpectrum2Poles._contract

@@ -1504,9 +1504,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     pt : PyBirdPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    prior_basis : str, default='eftoflss'
+    prior_basis : str, default='DESI'
         One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'DESI'``.
-    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default=None
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
         DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
         dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
         alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
@@ -1621,13 +1621,13 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return ('ce0', 'ce1', 'ce2')
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='eftoflss', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='DESI', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
         ----------
         tracers : str, (str, str), or None, default=None
-        prior_basis : str, default='eftoflss'
+        prior_basis : str, default='DESI'
 
         Returns
         -------
@@ -1635,8 +1635,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         """
         return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=cls._stochastic_names(prior_basis), cross=True)
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 rescaling='sigma8+AP', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1654,8 +1655,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling='sigma8+AP', **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
         self._rescaling = rescaling if self._prior_basis == 'DESI' else None
@@ -1982,9 +1983,9 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     pt : PyBirdPTCorrelation2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    prior_basis : str, default='eftoflss'
+    prior_basis : str, default='DESI'
         Same choices and parameter conventions as PyBirdTracerSpectrum2Poles.
-    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default=None
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
         DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
         dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
         alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
@@ -2000,7 +2001,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='eftoflss'):
+    def propose_params(cls, tracers=None, prior_basis='DESI'):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Cross-correlations are not supported for the correlation function; use a single tracer name.
@@ -2008,7 +2009,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         Parameters
         ----------
         tracers : str or None, default=None
-        prior_basis : str, default='eftoflss'
+        prior_basis : str, default='DESI'
 
         Returns
         -------
@@ -2017,8 +2018,9 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(prior_basis),
                                            tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(prior_basis))  # no cross
 
-    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 rescaling='sigma8+AP', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2036,8 +2038,8 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='eftoflss',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling=None, **kwargs):
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling='sigma8+AP', **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
         self._rescaling = rescaling if self._prior_basis == 'DESI' else None

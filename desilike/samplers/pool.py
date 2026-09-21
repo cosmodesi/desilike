@@ -61,6 +61,13 @@ def _apply_batched(function, tasks, batch_size, pad=False):
         evaluations per call. Ignored unless *batch_size* is a positive integer, which is the
         only case where there is a fixed width to pad to.
     """
+    # A worker's round-robin slice is empty whenever there are fewer tasks than ranks, which
+    # `initialize_samples` hits on every call (it draws a single position) and zeus hits once
+    # its slice loop is down to one active walker.  Without this guard `np.stack([])` raises
+    # inside `MPIPool.wait`, the worker leaves its receive loop, and the main rank blocks in
+    # `recv` for a result that never comes.
+    if len(tasks) == 0:
+        return []
     if batch_size == 0:
         return list(builtins.map(function, tasks))
     if batch_size is None:
@@ -173,8 +180,8 @@ class MPIPool:
         try:
             from mpi4py import MPI
             self.MPI = MPI
-        except ImportError:
-            raise RuntimeError('MPI environment not found!')
+        except ImportError as exc:
+            raise RuntimeError('MPI environment not found!') from exc
         if comm is None:
             comm = self.MPI.COMM_WORLD
         self.comm = comm

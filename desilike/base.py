@@ -174,7 +174,7 @@ class Calculator(Node):
         # replaced, so they are invalidated here, and say so (with this call site) when next used.
         _invalidate_owners(self, f'{type(self).__name__} was reconfigured')
         old_args, old_kwargs = self._init
-        merged_args = args if args else old_args
+        merged_args = args or old_args
         merged_kwargs = {**old_kwargs, **kwargs}
         self.__init__(*merged_args, **merged_kwargs)
 
@@ -225,7 +225,7 @@ class Calculator(Node):
         which extra node dependencies (passed through ``to_calculator(**kwargs)``) that routing
         needs.  See ``FOLPSPTSpectrum2Poles.get_emulator_cls`` for the motivating case.
         """
-        return None
+        return
 
     def __call__(self):
         raise NotImplementedError
@@ -378,12 +378,10 @@ class Prior(Calculator):
         params = []
         for arg in args:
             if isinstance(arg, VariableCollection):
-                for p in arg:
-                    params.append(p)
+                params.extend(arg)
             else:
                 params.append(arg)
-        for p in kwargs.values():
-            params.append(p)
+        params.extend(kwargs.values())
         # Parameters only.  `Prior(get_params(likelihood))` is on the critical path of every
         # run and hands over every Variable the graph has, including the likelihoods' data
         # vectors, which have neither a prior nor a `fixed` flag to read.  A plain Variable
@@ -434,8 +432,7 @@ def _transitive_param_names(node: Calculator, pipe: 'CompiledGraph') -> set:
         visited_ids.add(nid)
         for p in pipe._node_var_deps.get(nid, []):
             param_names.add(p.name)
-        for dep in pipe._node_calc_deps.get(nid, []):
-            stack.append(dep)
+        stack.extend(pipe._node_calc_deps.get(nid, []))
     return param_names
 
 
@@ -532,7 +529,7 @@ def plan_marginalisation(components, solved_params, stage_i_ids_of):
             dof_offsets.append(offset)
             offset += sizes[g]
 
-        def dofs_of(selected):
+        def dofs_of(selected, dof_offsets=dof_offsets, global_idx=global_idx):
             """DOF indices of the selected global params, in this block's numbering."""
             return np.array([dof_offsets[j] + k for j, g in enumerate(global_idx)
                              if g in selected for k in range(sizes[g])], dtype=int)
@@ -686,7 +683,7 @@ class Posterior(Calculator):
                     'solved parameters.'
                 )
 
-            alpha_names_set = set(p.name for p in self._solved_params)
+            alpha_names_set = {p.name for p in self._solved_params}
             non_gaussian_comps = []
             for ng in non_gaussians:
                 # A view over the one context rather than a fresh build, which would reconfigure
@@ -826,7 +823,7 @@ class Posterior(Calculator):
                     block.prior_center, stage_i_pipe, stage_i_ids))
 
 
-        _prior_params = [p for p in get_params(prior)]
+        _prior_params = list(get_params(prior))
         _prior_ref = prior
         self._prior = build(prior, output=lambda: (_prior_ref.logpdf, [p.value for p in _prior_params]))
         self._prior_param_names = [p.name for p in _prior_params]
@@ -856,7 +853,7 @@ class Posterior(Calculator):
         # Per-group: independent block solve of size n_g × n_g.
         for group in self._groups:
             (group_alpha_names, group_alpha_sizes, group_alpha_shapes, group_theory_pipe,
-             comp_meta, marg_local, best_local, prior_prec, prior_center,
+             comp_meta, _marg_local, best_local, prior_prec, prior_center,
              stage_i_pipe, stage_i_ids) = group
             # n_g: total DOF across all alpha params in this group (sum of per-param sizes).
             n_g = sum(group_alpha_sizes)
@@ -872,7 +869,7 @@ class Posterior(Calculator):
                 p = dict(_params)
                 offset = 0
                 for name, size, shape in zip(_names, _sizes, _shapes):
-                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape or ())
                     offset += size
                 return p
 
@@ -936,7 +933,7 @@ class Posterior(Calculator):
             dof_off = 0
             for name, size, shape in zip(group_alpha_names, group_alpha_sizes, group_alpha_shapes):
                 chunk = delta_alpha[dof_off:dof_off + size]
-                solved_values[name] = jnp.asarray(params[name]) + chunk.reshape(shape if shape else ())
+                solved_values[name] = jnp.asarray(params[name]) + chunk.reshape(shape or ())
                 dof_off += size
 
             # Volume factor: only 'marg' DOFs contribute; the 'best' block is profiled
@@ -1091,7 +1088,7 @@ def _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights, divisor=None):
         accumulated = None
         for node_idx in range(n_nodes):
             weight = weights[node_idx]
-            contribution = jax.tree_util.tree_map(lambda x: weight * x,
+            contribution = jax.tree_util.tree_map(lambda x, w=weight: w * x,
                                                   fn({**p_dict, name: node_values[node_idx]}))
             if accumulated is None:
                 accumulated = contribution
@@ -1118,7 +1115,7 @@ def _fd_stencil_sum(fn, p_dict, name, p0, node_values, weights, divisor=None):
         values = jax.vmap(eval_along)(basis)
         weight_column = weights[:, node_idx]
         scaled = jax.tree_util.tree_map(
-            lambda x: x * weight_column.reshape((flat_size,) + (1,) * (x.ndim - 1)), values)
+            lambda x, wc=weight_column: x * wc.reshape((flat_size,) + (1,) * (x.ndim - 1)), values)
         if accumulated is None:
             accumulated = scaled
         else:
@@ -1240,8 +1237,8 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None, transf
     base_lo = -np.inf if _prior_lo is None else _prior_lo + nside * eps_below
     base_hi = np.inf if _prior_hi is None else _prior_hi - nside * eps_above
     if base_lo > base_hi:
-        raise ValueError('cannot fit the order-{:d} stencil for {} (steps {}, {}) within prior limits {}; '
-                         'decrease fd_eps or widen the prior'.format(k, name, eps_below, eps_above, prior_limits))
+        raise ValueError(f'cannot fit the order-{k:d} stencil for {name} (steps {eps_below}, {eps_above}) within prior limits {prior_limits}; '
+                         'decrease fd_eps or widen the prior')
 
     def _node_weights(p0, p_base):
         """Interpolation weights w such that f^(k)(p0) = sum_j w_j f(node_j) / h_k.
@@ -1309,7 +1306,7 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
         dep_schema.append((dep, len(dep_children_flat), dep_treedef, dep_aux))
 
     own_children_raw, _ = node.tree_flatten()
-    own_children, own_treedef = jax.tree_util.tree_flatten(own_children_raw)
+    own_children, _own_treedef = jax.tree_util.tree_flatten(own_children_raw)
     dep_sdt = tuple(jax.ShapeDtypeStruct(np.asarray(c).shape, np.asarray(c).dtype) for c in own_children)
 
     # __call__ may return None (outputs live in attributes) or self (the populated
@@ -1664,8 +1661,8 @@ def _build_graph_call_fn(pipeline):
                     fi, fi_derived, _ = call_fn(tuple(shifted), jax_p)
                     df = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df, fi)
                     df_derived = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df_derived, fi_derived)
-                tangent_val = jax.tree_util.tree_map(lambda t, d, vv=v_ij: t + vv * d / eps_avg, tangent_val, df)
-                tangent_derived = jax.tree_util.tree_map(lambda a, b: a + v_ij * b / eps_avg, tangent_derived, df_derived)
+                tangent_val = jax.tree_util.tree_map(lambda t, d, vv=v_ij, ee=eps_avg: t + vv * d / ee, tangent_val, df)
+                tangent_derived = jax.tree_util.tree_map(lambda a, b, vv=v_ij, ee=eps_avg: a + vv * b / ee, tangent_derived, df_derived)
 
         # ── JAX tangent for jax_params ────────────────────────────────────────
         # Forward-mode AD through the JAX sub-graph; External outputs frozen at
@@ -1812,9 +1809,7 @@ class CompiledGraph:
 
         ext_reach = set()
         for node in reversed(self.nodes):
-            if node._is_external:
-                ext_reach.add(id(node))
-            elif any(id(ds) in ext_reach for ds in downstream_of[id(node)]):
+            if node._is_external or any(id(ds) in ext_reach for ds in downstream_of[id(node)]):
                 ext_reach.add(id(node))
 
         fd_param_names = {p.name for node in self.nodes if id(node) in ext_reach for p in self._node_var_deps[id(node)]}
@@ -1875,7 +1870,7 @@ class CompiledGraph:
         detail = []
         for name in unknown:
             close = difflib.get_close_matches(name, available, n=3, cutoff=0.5)
-            detail.append(repr(name) + (' (did you mean {}?)'.format(close) if close else ''))
+            detail.append(repr(name) + (f' (did you mean {close}?)' if close else ''))
         raise ValueError('{} pipeline has no parameter {}. It would otherwise be silently '
                          'ignored and the parameter left at its default. Available: {}'.format(
                              type(self.root).__name__, '; '.join(detail), sorted(available)))
@@ -2017,7 +2012,7 @@ def _iter_nodes(calc, level=None, exclude=None, filter=None):
     yield from _walk(calc, 0)
 
 
-def replace(node, old, new, level: int=None):
+def replace(node, old, new, level: int | None=None):
     """Replace, in *node* and its (transitive) Calculator dependencies, every Node
     matched by *old* with *new*.
 
@@ -2177,7 +2172,7 @@ def _init_graph(node, level=None, fresh=False, bind=None):
     return _remap(node)
 
 
-def share_params(calculators, names=None, level: int=None):
+def share_params(calculators, names=None, level: int | None=None):
     """Share Parameter objects across *calculators* so that same-named parameters
     become a single object — one prior and one value when they are compiled together.
 
@@ -2360,7 +2355,7 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
     if isinstance(node_or_graph, CompiledGraph):
         return node_or_graph.params
     ctx = _trace_graph(node_or_graph)
-    nodes_in_scope = set(id(n) for n in _iter_nodes(node_or_graph, level=level))
+    nodes_in_scope = {id(n) for n in _iter_nodes(node_or_graph, level=level)}
     result = VariableCollection()
     seen_ids = set()
     for node in ctx.node_order:
@@ -2376,7 +2371,7 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
 
 
 
-def build(root: Calculator, output: Callable=None, input: Callable=None) -> CompiledGraph:
+def build(root: Calculator, output: Callable | None=None, input: Callable | None=None) -> CompiledGraph:
     """Trace root's dependency graph and return a CompiledGraph.
 
     Phase 1 (_trace_graph): discovers deps by scanning the constructed nodes' public attributes.
@@ -2662,7 +2657,7 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
             return {}
         if isinstance(value, dict):
             return {(k.name if isinstance(k, Variable) else str(k)): v for k, v in value.items()}
-        return {n: value for n in names}
+        return dict.fromkeys(names, value)
 
     def _to_name(key):
         return key.name if isinstance(key, Variable) else str(key)
@@ -2704,7 +2699,7 @@ def differentiate(graph, order, params=None, fd=None, fd_acc=None, fd_eps=None, 
             for order_name, order_k in order_dict.items():
                 max_fd_order[order_name] = max(max_fd_order.get(order_name, 0), order_k)
     else:
-        max_fd_order = {name: total_order for name in names}
+        max_fd_order = dict.fromkeys(names, total_order)
 
     # ── validate ──────────────────────────────────────────────────────────────
     known = set(graph._fd_names) | set(graph._jax_names)

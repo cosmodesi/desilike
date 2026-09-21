@@ -23,8 +23,7 @@ def _write_mean_file(fn, rows):
     """Write a BAO mean-values file.  rows: list of (z, value, quantity)."""
     with open(fn, 'w') as f:
         f.write('# [z] [value at z] [quantity]\n')
-        for z_val, value, quantity in rows:
-            f.write(f'{z_val:.8f} {value:.10f} {quantity}\n')
+        f.writelines(f'{z_val:.8f} {value:.10f} {quantity}\n' for z_val, value, quantity in rows)
 
 
 def _write_cov_file(fn, matrix):

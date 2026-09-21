@@ -34,10 +34,10 @@ def _make_profiles(n_runs=3, n_params=4, n_scan=101, n_contour=21):
     }
 
     x = np.linspace(-1., 1., n_scan)
-    profile = {n: (x, -0.5 * x ** 2) for n in pnames}
+    profile = dict.fromkeys(pnames, (x, -0.5 * x ** 2))
 
     grid_x = np.linspace(-1., 1., 5)
-    grid = {n: grid_x for n in pnames}
+    grid = dict.fromkeys(pnames, grid_x)
     grid['logpdf'] = -0.5 * grid_x ** 2
 
     t = np.linspace(0., 2. * np.pi, n_contour)
@@ -297,7 +297,7 @@ def test_select_filters_slots():
     assert sub.logpdf is not None  # always carried over unchanged
     assert set(sub.error) == {'p0', 'p1'}
     # contour pairs restricted to selected names
-    for cl, pairs in sub.contour.items():
+    for pairs in sub.contour.values():
         for p1, p2 in pairs:
             assert p1 in {'p0', 'p1'} and p2 in {'p0', 'p1'}
     # original is untouched
@@ -331,7 +331,7 @@ def test_repr():
 
 def test_eq_self():
     p = _make_profiles(n_runs=2)
-    assert p == p
+    assert p == p  # noqa: PLR0124 -- this is the point of the test
 
 
 def test_eq_copy():
@@ -426,7 +426,7 @@ def test_to_stats_subset_params():
 def test_to_stats_quantities():
     pytest.importorskip('tabulate')
     p = _make_profiles(n_runs=3)
-    rows, headers = p.to_stats(quantities=['best'], tablefmt='list')
+    _rows, headers = p.to_stats(quantities=['best'], tablefmt='list')
     assert 'error' not in headers
     assert 'interval' not in headers
 

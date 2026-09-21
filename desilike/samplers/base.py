@@ -221,7 +221,7 @@ class Kernel:
         resumed run should not have to re-derive.  Kernels that adapt a metric override this
         (and :meth:`set_state`) to round-trip it through the output directory.
         """
-        return None
+        return
 
     def set_state(self, state):
         """Restore state written by :meth:`get_state`; return True if adaptation can be skipped."""
@@ -763,10 +763,14 @@ class BaseSampler(ABC):
     def read(self):
         """Read sampler state from disk."""
         if self.pool.main:
-            with open(self.output_dir / 'rng.json', 'r') as fstream:
+            with open(self.output_dir / 'rng.json') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
                 self.samples = MCSamples.read(self.output_dir / 'samples.h5')
+
+    @abstractmethod
+    def run(self, **kwargs):
+        """Draw samples; returns the collected :class:`MCSamples`."""
 
 
 # ── Static sampler ────────────────────────────────────────────────────────────
@@ -1341,7 +1345,7 @@ class MCMCSampler(BaseSampler):
                 rng_path     = self.output_dir / f'rng_{sample_id}.json'
                 samples_path = self.output_dir / f'samples_{sample_id}.h5'
                 if rng_path.exists():
-                    with open(rng_path, 'r') as fstream:
+                    with open(rng_path) as fstream:
                         self._saved_rng_states[local_idx] = json.load(fstream)
                 if samples_path.exists():
                     self._round_samples[local_idx] = MCSamples.read(samples_path)
@@ -1355,7 +1359,7 @@ class MCMCSampler(BaseSampler):
                         self._saved_kernel_states[batch_idx] = pickle.load(fstream)
         checks_path = self.output_dir / 'checks.json'
         if checks_path.exists():
-            with open(checks_path, 'r') as fstream:
+            with open(checks_path) as fstream:
                 self.checks = json.load(fstream)
 
 

@@ -25,7 +25,7 @@ class _Prior:
 
     def logpdf(self, x):
         x = np.asarray(x)
-        log_p = np.asarray([result for result in self._logpdf(x)])
+        log_p = np.asarray(list(self._logpdf(x)))
         in_bounds = np.all((x >= self._bounds[:, 0]) & (x <= self._bounds[:, 1]), axis=1)
         log_p[~in_bounds] = -np.inf
         return log_p
@@ -264,7 +264,7 @@ class PocoMC(PopulationKernel):
                 if device is None:
                     device = _default_device()
                     if device is not None:
-                        self.logger.info('JAX is on GPU, placing the normalizing flow on {}.'.format(device))
+                        self.logger.info(f'JAX is on GPU, placing the normalizing flow on {device}.')
                 if device is None:
                     self._sampler = _pocomc.Sampler(**init_kwargs)
                 else:

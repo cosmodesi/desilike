@@ -387,7 +387,7 @@ class CobayaLikelihood(Likelihood):
                 if name == 'Cl':
                     self._ellmax = max(self._ellmax or 0, ellmax)
                     cosmo_requirements.setdefault('harmonic.lensed_cl', []).append({'ellmax': self._ellmax})
-                    if set(spec.lower() for spec in value).intersection({'pp', 'tp', 'ep', 'pt', 'pe'}):
+                    if {spec.lower() for spec in value}.intersection({'pp', 'tp', 'ep', 'pt', 'pe'}):
                         self._need_lens_potential = True
                         cosmo_requirements.setdefault('harmonic.lens_potential_cl', []).append({'ellmax': self._ellmax})
                 else:

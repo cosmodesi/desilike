@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-import desilike.samplers as samplers
+from desilike import samplers
 from desilike.samples import MCSamples
 from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter
@@ -19,6 +19,13 @@ _b_grid = np.linspace(-0.7, 1.9, 99)
 # under-sampled.  A min_steps floor guarantees enough effective samples for the accuracy
 # assertions, independent of how quickly the chain "looks" converged.
 _MCMC_MIN_STEPS = dict(min_steps=3000)
+# How many standard errors the sampled covariance may sit from the analytic one.
+# Five, not three: ~112 of these assertions run per CI (14 kernels x 3 tests x 4 versions), so at
+# three sigma one fails somewhere about half the time -- it first showed up as `mhmcmc` on 3.11.
+# Over 40 seeds the largest deviation had median 0.92 and maximum 2.86, so `cov_err` tracks the
+# real scatter and only the threshold was tight.  `cov_err` is ~14% of the diagonal, so this is a
+# smoke test for a broken kernel either way: it now catches a covariance wrong by ~70%, not ~42%.
+_COV_NSIGMA = 5.
 _BLACKJAX_ADAPTATION = dict(adaptation=dict(steps=500))
 
 SAMPLER = dict(
@@ -127,6 +134,23 @@ def likelihood():
     return make_likelihood()
 
 
+def _assert_covariance(cov_samples, cov_expected):
+    """Assert the sampled covariance matches *cov_expected*, and say by how much when it does not.
+
+    A bare `assert np.allclose(...)` reports `assert False` and nothing else, which cannot tell a
+    tail draw apart from a broken kernel -- the distinction that decides whether the threshold or
+    the sampler is at fault.  The deviation in units of `cov_err` is exactly that number.
+    """
+    cov_expected = np.asarray(cov_expected)
+    cov_samples = np.asarray(cov_samples)
+    cov_err = np.sqrt((cov_expected**2 + np.outer(np.diag(cov_expected), np.diag(cov_expected))) / 100)
+    nsigma = np.abs(cov_samples - cov_expected) / cov_err
+    assert nsigma.max() < _COV_NSIGMA, (
+        f'sampled covariance is {nsigma.max():.2f} cov_err from the analytic one, limit is '
+        f'{_COV_NSIGMA:.0f}; sampled={cov_samples.tolist()}, expected={cov_expected.tolist()}')
+
+
+
 # ── Accuracy ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.mpi
@@ -144,9 +168,7 @@ def test_kernel_accuracy(likelihood, key):
         assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
         cov_samples = results.covariance(['a', 'b'])
         cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
-        cov_err = np.sqrt(
-            (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-        assert np.allclose(cov_samples, cov, atol=3 * cov_err)
+        _assert_covariance(cov_samples, cov)
 
 
 @pytest.mark.mpi_skip
@@ -175,8 +197,7 @@ def test_kernel_rescale(likelihood, key):
         assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
         cov_samples = results.covariance(['a', 'b'])
         cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
-        cov_err = np.sqrt((cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-        assert np.allclose(cov_samples, cov, atol=3 * cov_err)
+        _assert_covariance(cov_samples, cov)
 
 
 # ── Derived / solved parameters ───────────────────────────────────────────────
@@ -840,8 +861,7 @@ def test_static_kernel_grid(likelihood):
         mean_samples = results.mean(['a', 'b'])
         assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
         cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
-        cov_err = np.sqrt((cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-        assert np.allclose(results.covariance(['a', 'b']), cov, atol=3 * cov_err)
+        _assert_covariance(results.covariance(['a', 'b']), cov)
 
 
 @pytest.mark.mpi
@@ -854,8 +874,7 @@ def test_static_kernel_qmc(likelihood):
         mean_samples = results.mean(['a', 'b'])
         assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
         cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
-        cov_err = np.sqrt((cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-        assert np.allclose(results.covariance(['a', 'b']), cov, atol=3 * cov_err)
+        _assert_covariance(results.covariance(['a', 'b']), cov)
 
 
 @pytest.mark.mpi

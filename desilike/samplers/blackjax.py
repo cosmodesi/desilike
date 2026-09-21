@@ -397,11 +397,11 @@ class BlackjaxMCLMC(_BlackJAXKernel):
         # Fail here, where the cause is nameable, instead of deep inside the integrator.
         if not np.isfinite(L) or L <= 0. or not np.isfinite(step_size) or step_size <= 0.:
             raise ValueError(
-                'MCLMC adaptation returned L={:.3g}, step_size={:.3g}. This is what a hard -inf '
+                f'MCLMC adaptation returned L={L:.3g}, step_size={step_size:.3g}. This is what a hard -inf '
                 'boundary in the posterior does to it -- the energy error is undefined at the '
                 'wall and the tuner collapses. Restrict the priors so the sampled region has no '
                 'cliff (e.g. to an emulator\'s trained box), or use a kernel that screens '
-                'impossible points (emcee, pocoMC, nautilus) instead.'.format(L, step_size))
+                'impossible points (emcee, pocoMC, nautilus) instead.')
         self.kernel_args.update(dict(L=L, step_size=step_size))
         adapted_mass_matrix = np.asarray(getattr(params, _mass_matrix_kwarg))
         self._kernel = self._kernel_cls(

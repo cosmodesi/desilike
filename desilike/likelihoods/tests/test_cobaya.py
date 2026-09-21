@@ -37,7 +37,7 @@ from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.cobaya import wrap_cobaya_likelihood
 
 cobaya = pytest.importorskip('cobaya')
-from cobaya.likelihood import Likelihood as CobayaBaseLikelihood# noqa: E402
+from cobaya.likelihood import Likelihood as CobayaBaseLikelihood  # noqa: E402
 
 
 _ELLMAX = 30
@@ -338,7 +338,7 @@ def test_matches_full_native_cobaya_pipeline(tmp_path):
     pytest.importorskip('camb')
     from cobaya.model import get_model
 
-    planck_Camspec_NPIPE_lite, fits_path, packages_path, info_yaml = _setup_camspec_lite(tmp_path)
+    planck_Camspec_NPIPE_lite, _fits_path, packages_path, info_yaml = _setup_camspec_lite(tmp_path)
 
     fiducial = ('DESI', dict(lensing=True, ellmax_cl=_CAMSPEC_ELLMAX_CL, non_linear='mead'))
     like_wrapped = wrap_cobaya_likelihood(planck_Camspec_NPIPE_lite, info=info_yaml, packages_path=str(packages_path),

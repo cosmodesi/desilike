@@ -21,6 +21,7 @@ import os
 import warnings
 
 import itertools
+import contextlib
 
 import numpy as np
 from scipy import constants
@@ -37,6 +38,30 @@ from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
 from ...emulators.api import CalculatorEmulator, DERIVED
 from ._multitracer import propose_params_multitracer, assign_params
+
+
+@contextlib.contextmanager
+def _pybird_jax():
+    """Assemble pybird's biased spectra on JAX arrays.
+
+    pybird takes its array library from ``pybird.module`` at import time, and numpy is what
+    desilike wants for all of it but this step: the PT tables are built once, per instance,
+    while the bias assembly sees traced parameters and would raise
+    TracerArrayConversionError on ``array(...)``.  pybird's own switch
+    (``pybird.config.set_jax_enabled``) is global and would put the table construction --
+    FFTLog, resummation -- in JAX too, which costs minutes per build.  These are the three
+    array functions ``setBias``, ``setreducePslb`` and ``setreduceCflb`` call.
+    """
+    import pybird.bird as bird_module
+    names = ('array', 'einsum', 'zeros_like')
+    saved = {name: getattr(bird_module, name) for name in names}
+    for name in names:
+        setattr(bird_module, name, getattr(jnp, name))
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(bird_module, name, value)
 
 
 def _import_folps():
@@ -239,8 +264,8 @@ def get_physical_stochastic_settings(tracer=None):
                     'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5}}
         try:
             settings = settings[tracer]
-        except KeyError:
-            raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
+        except KeyError as exc:
+            raise ValueError(f'unknown tracer: {tracer}, please use any of {list(settings.keys())}') from exc
     else:
         settings = {'fsat': 0.1, 'sigv': 5.}
     return settings
@@ -964,7 +989,7 @@ class LPTVelocileptorsPTSpectrum2Poles(Calculator):
         # Non-node setup only.
         self.nmu = int(mu)
         self._options = {name: kwargs.get(name, val) for name, val in self._lpt_defaults.items()}
-        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads'))
 
     def __call__(self):
         from scipy.interpolate import interp1d as _interp1d
@@ -1183,7 +1208,7 @@ class REPTVelocileptorsPTSpectrum2Poles(Calculator):
         # Non-node setup only.
         self.nmu = int(mu)
         self._options = {name: kwargs.get(name, val) for name, val in self._rept_defaults.items()}
-        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads'))
 
     def __call__(self):
         from scipy.interpolate import interp1d as _interp1d
@@ -1196,7 +1221,7 @@ class REPTVelocileptorsPTSpectrum2Poles(Calculator):
         log10_fk = np.log10(np.clip(np.asarray(self.template.fk), 1e-30, None))
         fk = 10.**_interp1d(log10_ktempl, log10_fk, kind='cubic', fill_value='extrapolate', assume_sorted=True)(np.log10(pt.kv))
         pks = pt.compute_redshift_space_power_multipoles_tables(fk, apar=float(self.template.qpar), aperp=float(self.template.qper), ngauss=self.nmu)[1:]
-        pktable_kv = np.array([pks[list([0, 2, 4]).index(ell)] for ell in self.ells])  # (n_ells, n_kv, 19)
+        pktable_kv = np.array([pks[[0, 2, 4].index(ell)] for ell in self.ells])  # (n_ells, n_kv, 19)
         self.table = _interp1d(pt.kv, pktable_kv, kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
         self.qpar = float(self.template.qpar)
         self.qper = float(self.template.qper)
@@ -1896,7 +1921,11 @@ class PyBirdPTCorrelation2Poles(Calculator):
         from pybird.nonlinear import NonLinear
         from pybird.resum import Resum
         from pybird.projection import Projection
-        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=self.km, kr=self.kr, nd=1e-4,
+        # Nl=3, whatever was asked for: pybird's IR resummation in configuration space
+        # (`Resum.Ps2Cf`) contracts a damping window hardcoded to the three multipoles
+        # (0, 2, 4) against co.Nl, so it only runs at Nl = 3 -- pybird's own default of 2
+        # included.  Compute all three and keep the ones wanted, in the tracer below.
+        self._co = Common(Nl=3, kmin=1e-3, kmax=0.25, km=self.km, kr=self.kr, nd=1e-4,
                           eft_basis='eftoflss', halohalo=True, with_cf=True, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
@@ -1929,7 +1958,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
         # Expose both Cf and Ps loop arrays: setreduceCflb ends with a call to
         # setreducePslb (NNLO bookkeeping), which needs the P-arrays even though
         # the tracer only reads fullCf.
-        _zc = jnp.zeros((len(self.ells), 1, len(self.s)))
+        _zc = jnp.zeros((self._co.Nl, 1, len(self.s)))
         C11l = jnp.asarray(self._pt.C11l)
         Cloopl = jnp.asarray(self._pt.Cloopl)
         Cctl = jnp.asarray(self._pt.Cctl)
@@ -1938,7 +1967,7 @@ class PyBirdPTCorrelation2Poles(Calculator):
         P11l = jnp.asarray(self._pt.P11l)
         Ploopl = jnp.asarray(self._pt.Ploopl)
         Pctl = jnp.asarray(self._pt.Pctl)
-        _zp = jnp.zeros((len(self.ells), 1, P11l.shape[-1]))
+        _zp = jnp.zeros((self._co.Nl, 1, P11l.shape[-1]))
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _zp
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _zp
         return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol,
@@ -2059,7 +2088,8 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     _contract = PyBirdTracerSpectrum2Poles._contract
 
     def __call__(self):
-        self.poles = self._contract('C')
+        # pybird always computed (0, 2, 4) here -- see the Nl=3 note in PyBirdPTCorrelation2Poles.
+        self.poles = self._contract('C')[:len(self.ells)]
         return self.poles
 
     def tree_flatten(self):
@@ -2332,7 +2362,34 @@ class FOLPSPTSpectrum2Poles(Calculator):
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
-def _resolve_spectrum3_multipoles(multipoles):
+def _format_spectrum3_ells(ells, basis=None):
+    """Return ``(ells, basis)``, the basis inferred from the shape of *ells* when not given.
+
+    The same convention as jaxpower's ``_format_ells``: the Sugiyama basis indexes multipoles by
+    a ``(l1, l2, L)`` triplet and its wavenumbers by a ``(k1, k2)`` pair, the Scoccimarro basis
+    by a single integer and a ``(k1, k2, k3)`` triangle.  Inferring rather than asking is what
+    lets :class:`~desilike.observables.galaxy_clustering.Spectrum3PolesObservable` switch the
+    theory over on its own: it passes the window's own ``ells`` straight through.
+    """
+    ells = [ells] if np.ndim(ells) == 0 else list(ells)
+    inferred = 'sugiyama' if np.ndim(ells[0]) else 'scoccimarro'
+    if basis is None:
+        basis = inferred
+    elif inferred not in str(basis):
+        # The one spelling this cannot read: :class:`GeoFPTAXTracerSpectrum3Poles` names its
+        # Scoccimarro multipoles with triplets too, ``(0, 0, 0)``, ``(2, 0, 0)``, ``(0, 2, 0)``,
+        # ``(0, 0, 2)``, which is ambiguous against the Sugiyama ones and additionally encodes
+        # the leg the expansion is about.  Here it is always the third leg, jaxpower's.
+        raise ValueError(f'basis={basis!r} does not match ells={ells}, which are {inferred}. In the '
+                         'scoccimarro basis the multipoles are plain integers, as jaxpower names '
+                         'them, and are taken about the third leg; to expand about another leg, '
+                         'permute the columns of k instead')
+    if 'scoccimarro' in basis:
+        return tuple(int(ell) for ell in ells), 'scoccimarro'
+    return tuple(tuple(int(e) for e in ell) for ell in ells), 'sugiyama'
+
+
+def _resolve_spectrum3_multipoles(multipoles, basis='sugiyama'):
     """Map requested bispectrum multipole names onto the ones folps computes.
 
     Returns ``(folps_multipoles, provided)``: the list to ask folps for, and, per requested
@@ -2340,6 +2397,12 @@ def _resolve_spectrum3_multipoles(multipoles):
     index-swapped partner (that entry is then zero).  Note the swap transposes a 1-D array,
     i.e. it is a no-op, so it is correct only on the ``k1 == k2`` diagonal.
     """
+    if 'scoccimarro' in basis:
+        # No index-swapped partner to look for: one integer, not an (l1, l2) pair.
+        available = ['B0', 'B2', 'B4']
+        provided = [(multipole, False) if multipole in available else (False, False)
+                    for multipole in multipoles]
+        return [multipole for multipole, _ in provided if multipole], provided
     available = ['B000', 'B110', 'B220', 'B112', 'B202', 'B022', 'B222']
     folps_multipoles, provided = [], []
     for multipole in multipoles:
@@ -2778,16 +2841,17 @@ class FOLPSTracerCorrelation2Poles(Calculator):
 
 #@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
 def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
-                              f0, qpar, qper, multipoles=['B000', 'B202'],
+                              f0, qpar, qper, multipoles=('B000', 'B202'),
                               precision=(4, 16, 4), damping='lor',
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
-                              renormalized=True, use_fk=False, redshift_smearing=None):
+                              renormalized=True, use_fk=False, redshift_smearing=None,
+                              basis='sugiyama'):
     folpsv2 = _import_folps()
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
-    ells, provided = _resolve_spectrum3_multipoles(multipoles)
+    ells, provided = _resolve_spectrum3_multipoles(multipoles, basis=basis)
 
     BispectrumClass = (
         folpsv2.BispectrumCalculator_fk
@@ -2802,7 +2866,31 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
         _patch_folps_bispectrum()
         bispectrum._redshift_smearing = redshift_smearing
 
-    if use_fk:
+    if 'scoccimarro' in basis:
+        # folps expands in the mu of its FIRST leg; jaxpower's estimator puts the Y_lm on the
+        # third (`meshes[2]`), and the Scoccimarro binning sorts k1 <= k2 <= k3, so that is a
+        # different leg and every ell > 0 would disagree.  Rotate the triplet: the bispectrum is
+        # symmetric under permutations, and folps rebuilds the internal angle x12 from whichever
+        # triplet it is handed, so this only moves which leg the Legendre expansion is about.
+        k1k2 = jnp.asarray(k1k2)[:, [2, 0, 1]]
+        # `renormalized` has no counterpart here: the (2l + 1) / 2 factors are always applied.
+        raw = bispectrum.Scoccimarro_Bell(
+            k1k2,
+            f0,
+            bpars,
+            qpar,
+            qper,
+            k_pkl_pklnw_fk,
+            precision=precision,
+            damping=damping,
+            multipoles=ells,
+            bias_scheme=bias_scheme,
+            interpolation_method=interpolation_method,
+        )
+        # Scoccimarro_Bell returns (B0, B2, B4, x), with None in the slots it was not asked for.
+        slots = {'B0': 0, 'B2': 1, 'B4': 2}
+        result = [raw[slots[ell]] for ell in ells]
+    elif use_fk:
         result = bispectrum.Sugiyama_Bell(
             f0,
             bpars,
@@ -2855,9 +2943,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
     Parameters
     ----------
-    k : array, shape (N, 2), default=None
-        Output ``(k1, k2)`` wavenumber pairs [h/Mpc].  Defaults to a diagonal grid
-        ``k1 == k2`` over ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
+    k : array, shape (N, 2) or (N, 3), default=None
+        Output wavenumbers [h/Mpc]: ``(k1, k2)`` pairs in the Sugiyama basis, ``(k1, k2, k3)``
+        triangles in the Scoccimarro one.  Defaults to a diagonal grid ``k1 == k2`` over
+        ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
     pt : FOLPSPTSpectrum3Poles, default=None
         PT calculator providing ``sigma8``, ``fsigma8``, ``qpar``, ``qper`` and the
         underlying template.  Defaults to a new :class:`FOLPSPTSpectrum3Poles`, which computes
@@ -2865,9 +2954,23 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         calculator with a power spectrum theory instead.
     template : template calculator, default=None
         Forwarded to ``pt`` if given.  Defaults to :class:`DirectSpectrum2Template`.
-    ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
-        Bispectrum multipole triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0),
-        (2,2,0), (2,0,2), (0,2,2), (1,1,2), (2,2,2).
+    ells : tuple, default=((0, 0, 0), (2, 0, 2))
+        Bispectrum multipoles, **and** the basis they are expressed in, since the two conventions
+        index them differently -- as jaxpower's estimator does:
+
+        - Sugiyama: triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0), (2,2,0), (2,0,2),
+          (0,2,2), (1,1,2), (2,2,2); ``k`` is then ``(k1, k2)`` pairs.
+        - Scoccimarro: plain integers, the Legendre order of the expansion about the
+          line of sight.  Available: 0, 2, 4; ``k`` is then ``(k1, k2, k3)`` triangles.
+
+        So a Scoccimarro window drives the theory into the Scoccimarro basis by itself:
+        :class:`~desilike.observables.galaxy_clustering.Spectrum3PolesObservable` passes its
+        ``ells`` straight through.  Note :class:`GeoFPTAXTracerSpectrum3Poles` spells its own
+        Scoccimarro multipoles as triplets instead, which is ambiguous against the Sugiyama ones;
+        this class takes jaxpower's integers.
+    basis : str, default=None
+        ``'sugiyama'`` or ``'scoccimarro'``, to assert what ``ells`` already says rather than to
+        change it.
     prior_basis : str, default='physical_aap'
         Bias / counterterm / stochastic parameterization:
 
@@ -2884,7 +2987,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     model : str, default='FOLPSD'
     damping : str, default='lor'
     precision : tuple, default=(4, 16, 4)
-        Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.
+        Gauss-Legendre orders ``(Nphi, Nx, Nmu)`` for the angular integration.  The Scoccimarro
+        basis has no ``Nx`` axis -- the triangle fixes that angle -- so it takes ``(Nphi, Nmu)``,
+        and a 3-tuple given there drops its middle entry.  The measurements below are for the
+        Sugiyama basis; the two shared axes are the ones they find already converged.
 
         The three axes are not equally hard.  Scored in :math:`\Delta\chi^2` through the real
         LRG3 window and the joint P+B covariance, against a converged ``(20, 40, 40)`` rule and
@@ -2982,17 +3088,21 @@ class FOLPSTracerSpectrum3Poles(Calculator):
 
     def __init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
                  prior_basis='physical_aap', redshift_smearing=None, tracers=None, params=None,
-                 **kwargs):
+                 basis=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
         self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
+        self.ells, self._basis = _format_spectrum3_ells(ells, basis=basis)
+        ndim = 3 if self._basis == 'scoccimarro' else 2
         if k is None:
-            k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+            k = np.column_stack([np.linspace(0.01, 0.1, 11)] * ndim)
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
-        self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
+        if self.k.shape[-1] != ndim:
+            raise ValueError(f'the {self._basis} basis takes k of shape (N, {ndim:d}), '
+                             f'got {self.k.shape}')
         if pt is None:
             pt = FOLPSPTSpectrum3Poles(**kwargs)
         self.pt = pt
@@ -3003,16 +3113,29 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                       prior_basis='physical_aap', fsat=None, sigv=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(4, 16, 4),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
-                      tracers=None, **kwargs):
+                      tracers=None, basis=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        precision = tuple(precision)
+        if self._basis == 'scoccimarro':
+            if len(precision) == 3:
+                # A 3-tuple is a Sugiyama (Nphi, Nx, Nmu), which says nothing about this basis:
+                # there is no Nx axis (the triangle fixes that angle), and carrying its Nmu over
+                # would be actively wrong -- the default Nmu = 4 is *degenerate* for ell = 4, the
+                # Gauss-Legendre nodes being the roots of P_Nmu, so that projection comes out
+                # identically zero rather than merely inaccurate.  Use folps' own default.
+                precision = (10, 10)
+            if precision[-1] <= max(self.ells):
+                raise ValueError(f'precision={precision} cannot give ell = {max(self.ells):d}: the '
+                                 f'{precision[-1]:d} Gauss-Legendre nodes are the roots of '
+                                 f'P_{precision[-1]:d}, so that projection is identically zero')
         self._options = dict(model=str(model), damping=str(damping),
-                             precision=tuple(precision), renormalized=bool(renormalized),
-                             interpolation_method=str(interpolation_method))
+                             precision=precision, renormalized=bool(renormalized),
+                             interpolation_method=str(interpolation_method), basis=self._basis)
 
     def __call__(self):
         sigma8 = self.pt.sigma8
@@ -3052,7 +3175,10 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             pars = [1. + b1L, b2L, bsL, c1, c2,
                     self.snb0.value / self._nbar, self.sn0.value / self._nbar, self.X_FoG.value]
 
-        multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
+        if self._basis == 'scoccimarro':
+            multipoles = tuple(f'B{ell:d}' for ell in self.ells)
+        else:
+            multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
         options = dict(self._options)
         self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme,
@@ -4654,7 +4780,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
                                        ) / self._sigma8_fid
         canonical = self._get_canonical_params(rescale_counterterms=False)
-        pell_params = {k: v for k, v in cosmo_params.items()}
+        pell_params = dict(cosmo_params.items())
         for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
             pell_params[name] = _wrap(canonical[name])
         if avir is not None:
@@ -5104,7 +5230,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         self.A = self._md.sigmaR_fixed(8.0, dict(cosmo_params, z=float(self.z)), self._de_model,
                                        ) / self._sigma8_fid
         canonical = self._get_canonical_params()
-        bell_params = {k: v for k, v in cosmo_params.items()}
+        bell_params = dict(cosmo_params.items())
         bell_params['z'] = float(self.z)
         for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'):
             bell_params[name] = _wrap(canonical[name])
@@ -5441,22 +5567,21 @@ class _ScaledEmulator(CalculatorEmulator):
             scalars_budget = 2
         self.set_graph_scalars()
         trained = super().train(*args, **kwargs)
-        if self.input_scalars is None:
-            if self._emulator_cls_scalars is not None:
-                from ...emulators.api import Emulator as _build
+        if self.input_scalars is None and self._emulator_cls_scalars is not None:
+            from ...emulators.api import Emulator as _build
 
-                self.logger.info('training the run-time scalar provider, over the full space')
-                provider = self._emulator_cls_scalars.calculator_from_template(
-                    self.calculator.template)
-                # The full space: which of it the provider actually expands is the provider's
-                # own business (`ScalingScalarsEmulator.select_params` leaves w0/wa to its
-                # analytic core), not something the caller should reach in and decide.
-                emulator = _build(provider, self.space,
-                                  cls=self._emulator_cls_scalars).train(budget=scalars_budget)
-                # The fitted provider is what travels in the state; the graph runs over the
-                # calculator it gives back, so predictions cost no Boltzmann call.
-                self._state_scalars = emulator.__getstate__()
-                self.graph_scalars = _compile_scalars(emulator.to_calculator())
+            self.logger.info('training the run-time scalar provider, over the full space')
+            provider = self._emulator_cls_scalars.calculator_from_template(
+                self.calculator.template)
+            # The full space: which of it the provider actually expands is the provider's
+            # own business (`ScalingScalarsEmulator.select_params` leaves w0/wa to its
+            # analytic core), not something the caller should reach in and decide.
+            emulator = _build(provider, self.space,
+                              cls=self._emulator_cls_scalars).train(budget=scalars_budget)
+            # The fitted provider is what travels in the state; the graph runs over the
+            # calculator it gives back, so predictions cost no Boltzmann call.
+            self._state_scalars = emulator.__getstate__()
+            self.graph_scalars = _compile_scalars(emulator.to_calculator())
         return trained
 
     def set_graph_scalars(self):
@@ -5760,8 +5885,8 @@ class FOLPSDEmulator(_ScaledEmulator):
         degrees = dict(zip(table, table_degrees(table, 1)))
         degrees.update(zip(table_now, table_degrees(table_now, 3)))
         # the k row each column is sampled on: the kTout row of its own table
-        k = {name: table[0] for name in table}
-        k.update({name: table_now[0] for name in table_now})
+        k = dict.fromkeys(table, table[0])
+        k.update(dict.fromkeys(table_now, table_now[0]))
         layout = {name: name for name in ('kap', 'muap', 'jac', 'f', 'f0', 'qpar', 'qper',
                                           'sigma8', 'fsigma8', 'sigma8_fid')}
         layout.update(k=k, degrees=degrees, f0_entries=(table[-1], table_now[-1]))
@@ -5925,8 +6050,8 @@ class FKPTEmulator(FOLPSDEmulator):
         # transform carries them through untouched
         degrees.update({name: 0 for name in names
                         if name.startswith('kernel_constants.')})
-        k_rows = {name: table_w[0] for name in table_w}
-        k_rows.update({name: table_now[0] for name in table_now})
+        k_rows = dict.fromkeys(table_w, table_w[0])
+        k_rows.update(dict.fromkeys(table_now, table_now[0]))
         layout = {name: name for name in self._SCALARS}
         layout.update(degrees=degrees, k=k_rows,
                       # the trailing column of each table is f0, degree 0 and rescaled by the

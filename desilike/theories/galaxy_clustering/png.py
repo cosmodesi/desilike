@@ -142,16 +142,23 @@ class PNGTracerSpectrum2Poles(Calculator):
             Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
                       ref=dict(dist='norm', loc=0., scale=0.1), fd=dict(eps=0.05), latex='s_{n,0}'),
         ]
+        # samgolds: tnl_exc_loc = the local tauNL Suyama-Yamaguchi excess, tauNL - (6/5 fnl_loc)^2. This is implemented as an
+        # excess because, for fnl!=0, the model already contains the fnl^2 bphi^2 alpha^2 term, which corresponds to (6/5)fNL^2.
+        # Therefore, if you vary both fnl and tnl_exc_loc, you need to convert tnl_exc_loc to tnl by adding (6/5 fnl_loc)^2.
+        tnl_param = Parameter('tnl_exc_loc', value=0., fixed=True, prior=dict(limits=[-1e6, 1e6]),
+                              ref=dict(limits=[-1000., 1000.]), fd=dict(eps=100.), latex=r'\tau_{\mathrm{NL}}^{\mathrm{exc}}')
         if mode == 'b-p':
             auto_params += [
                 Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
                           ref=dict(limits=[-10., 10.]), fd=dict(eps=1.), latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                tnl_param,
                 Parameter('p', value=1., prior=dict(limits=[0., 3.]), ref=dict(limits=[0.5, 1.5]), fd=dict(eps=0.1), latex='p'),
             ]
         elif mode == 'bphi':
             auto_params += [
                 Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
                           ref=dict(limits=[-10., 10.]), fd=dict(eps=1.), latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                tnl_param,
                 Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]), ref=dict(limits=[3., 4.]), fd=dict(eps=0.1), latex=r'b_{\phi}'),
             ]
         else:
@@ -159,7 +166,7 @@ class PNGTracerSpectrum2Poles(Calculator):
                 Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
                           ref=dict(limits=[-50., 50.]), fd=dict(eps=1.), latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}'),
             ]
-        return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
+        return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc', 'tnl_exc_loc'), cross=True)  # samgolds: tnl_exc_loc 
 
     def __init__(self, k=None, ells=(0, 2), method='prim', mu=10, mode='b-p',
                  tracers=None, nbar=1e-4, params=None, template=None):
@@ -219,10 +226,12 @@ class PNGTracerSpectrum2Poles(Calculator):
         if isinstance(self.b1, tuple):  # cross-spectrum
             b1_X, b1_Y = self.b1
             sigmas_X, sigmas_Y = self.sigmas
+            bphi_X = bphi_Y = None  # samgolds: PNG bias bphi, needed by the tauNL term. Defaults to None in 'bfnl' mode 
             if self._mode == 'b-p':
                 p_X, p_Y = self.p
-                bfnl_loc_X = 2. * _delta_c * (b1_X - p_X) * self.fnl_loc
-                bfnl_loc_Y = 2. * _delta_c * (b1_Y - p_Y) * self.fnl_loc
+                bphi_X, bphi_Y = 2. * _delta_c * (b1_X - p_X), 2. * _delta_c * (b1_Y - p_Y)
+                bfnl_loc_X = bphi_X * self.fnl_loc
+                bfnl_loc_Y = bphi_Y * self.fnl_loc
             elif self._mode == 'bphi':
                 bphi_X, bphi_Y = self.bphi
                 bfnl_loc_X = bphi_X * self.fnl_loc
@@ -234,18 +243,29 @@ class PNGTracerSpectrum2Poles(Calculator):
             fog_X = 1. / (1. + sigmas_X**2 * kap**2 * muap**2 / 2.)
             fog_Y = 1. / (1. + sigmas_Y**2 * kap**2 * muap**2 / 2.)
             pkmu = fog_X * fog_Y * (b_eff_X + f * muap**2) * (b_eff_Y + f * muap**2) * pk_dd
+            if getattr(self, 'drop_fnl_squared', False):  # samgolds: diagnostic, model linear in fNL (no bfnl_X bfnl_Y alpha^2 term)
+                pkmu = pkmu - fog_X * fog_Y * bfnl_loc_X * bfnl_loc_Y * alpha**2 * pk_dd
+            if bphi_X is not None:  # samgolds: local tauNL (SY excess), see, e.g., Ferraro & Smith 2014 eq. 8
+                pkmu = pkmu + fog_X * fog_Y * (25. / 36.) * self.tnl_exc_loc * bphi_X * bphi_Y * alpha**2 * pk_dd
         else:
+            bphi = None  # samgolds: as above
             if self._mode == 'b-p':
-                bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
+                bphi = 2. * _delta_c * (self.b1 - self.p)
+                bfnl_loc = bphi * self.fnl_loc
             elif self._mode == 'bphi':
-                bfnl_loc = self.bphi * self.fnl_loc
+                bphi = self.bphi
+                bfnl_loc = bphi * self.fnl_loc
             else:  # 'bfnl'
                 bfnl_loc = self.bfnl_loc
             b_eff = self.b1 + bfnl_loc * alpha
             fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.)**2
             pkmu = fog * (b_eff + f * muap**2)**2 * pk_dd
+            if getattr(self, 'drop_fnl_squared', False):  # samgolds: diagnostic, model linear in fNL (no bfnl^2 alpha^2 term)
+                pkmu = pkmu - fog * (bfnl_loc * alpha)**2 * pk_dd
+            if bphi is not None:  # samgolds: local tauNL (SY excess)
+                pkmu = pkmu + fog * (25. / 36.) * self.tnl_exc_loc * bphi**2 * alpha**2 * pk_dd
 
-        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
+        sn =jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
         self.poles = self._to_poles(pkmu) + sn
         return self.poles
 

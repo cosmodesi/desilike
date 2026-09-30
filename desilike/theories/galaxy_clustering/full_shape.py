@@ -1507,6 +1507,35 @@ class PyBirdPTSpectrum2Poles(Calculator):
         return obj
 
 
+def _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f):
+    """Convert auto pair-level counterterms to cross pair-level coefficients through mu^4.
+
+    Here pair level means power-spectrum level: the inputs describe the XX and YY auto
+    pairs, not the XY cross pair. auto_X/Y contain (t0, t2, t4), including signs and f
+    factors, with T_X = t0 + t2 mu^2 + t4 mu^4; the common k^2 P_lin is omitted below.
+
+    First recover the field-level parameterization F_X = d0X + d2X mu^2 + d4X mu^4 by matching
+    [2 Z_X F_X]_{<=mu^4} = T_X, where Z_X = b1X + f mu^2; do the same for Y.
+    Next pair each field-level parameterization with the OTHER tracer's Z1: Z_X F_Y + Z_Y F_X.
+    Finally return its mu^0, mu^2 and mu^4 coefficients for the XY pair. Averaging
+    T_X and T_Y would instead keep each correction paired with its OWN tracer's Z1.
+
+    The inverse is defined only through mu^4, not by the full ratio T_X / (2 Z_X).
+    The generated mu^6 term is discarded before multipole projection, as in the auto model.
+    Equal tracers recover the input auto coefficients. Both b1X and b1Y must be nonzero;
+    at b1 = 0 a general pair-level polynomial has no such field-level inverse.
+    """
+    d0X = auto_X[0] / (2. * b1X)
+    d2X = (auto_X[1] / 2. - f * d0X) / b1X
+    d4X = (auto_X[2] / 2. - f * d2X) / b1X
+    d0Y = auto_Y[0] / (2. * b1Y)
+    d2Y = (auto_Y[1] / 2. - f * d0Y) / b1Y
+    d4Y = (auto_Y[2] / 2. - f * d2Y) / b1Y
+    return (b1Y * d0X + b1X * d0Y,
+            b1Y * d2X + b1X * d2Y + f * (d0X + d0Y),
+            b1Y * d4X + b1X * d4Y + f * (d2X + d2Y))
+
+
 class PyBirdTracerSpectrum2Poles(Calculator):
     r"""
     PyBird tracer power spectrum multipoles.
@@ -1515,6 +1544,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     b2t/b2g/db3g, dimensional counterterms c0/c2/c4 and dimensionless Pshot/a0/a2.
     Its sampled db3g has a zero-centred unit-width Gaussian prior, with
     b3g = db3g + 23/42 (b1 - 1) evaluated using the current b1.
+    Eastcoast parameterizes counterterms at pair level (the auto XX or YY power spectrum).
+    In cross mode, recover each field-level parameterization, pair it with the OTHER tracer's Z1,
+    then truncate at mu^4 to obtain XY pair-level coefficients; both b1 must be nonzero.
     DESI uses b1/b2/dbk2/dbtd and dimensional counterterms alpha0/alpha2/alpha4.
     Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
     bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
@@ -1725,8 +1757,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
 
         km, kr and nbar normalization is applied in _bias_coefficients.
         eftoflss/westcoast/DESI return field-level cct, cr1, cr2. Eastcoast returns
-        ct0, ct2, ct4 (tilde c0, c2, c4), the power-level coefficients of
-        -2 [ct0 + f ct2 mu^2 + f^2 ct4 mu^4] k^2 P11.
+        ct0, ct2, ct4 (tilde c0, c2, c4), which parameterize each tracer's AUTO pair-level
+        counterterm -2 [ct0 + f ct2 mu^2 + f^2 ct4 mu^4] k^2 P11. In cross mode these
+        are not yet XY coefficients: _bias_coefficients recovers and cross-pairs the fields.
         All bases return ce0, ce1, ce2 multiplying [1, (k/km)^2, f (k/km)^2 mu^2] / nbar.
         DESI absorbs fsat, sigv and the pair's km product into ce2; this conversion requires f != 0.
         Eastcoast a0 and a2 instead use fixed knl=0.45 h/Mpc; their conversion
@@ -1834,7 +1867,19 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if self._prior_basis == 'eastcoast':
             ct0X, ct2X, ct4X = biasX['ct0'], biasX['ct2'], biasX['ct4']
             ct0Y, ct2Y, ct4Y = biasY['ct0'], biasY['ct2'], biasY['ct4']
-            bct = -jnp.array([ct0X + ct0Y, f * (ct2X + ct2Y), f**2 * (ct4X + ct4Y), 0., 0., 0.])
+            if isinstance(self.b1, tuple):
+                # Eastcoast parameterizes counterterm at pair level:
+                # -2 (ct0 + f ct2 mu^2 + f^2 ct4 mu^4).
+                # Simply averaging two eastcoast counterterm parameters in the cross mode is incorrect.
+                # The following recovers the field level parameter, pair it with the OTHER tracer's Z1,
+                # then truncate at mu^4 as in the auto model.
+                auto_X = (-2. * ct0X, -2. * f * ct2X, -2. * f**2 * ct4X)
+                auto_Y = (-2. * ct0Y, -2. * f * ct2Y, -2. * f**2 * ct4Y)
+                ct0, ct2, ct4 = _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f)
+                bct = jnp.array([ct0, ct2, ct4, 0., 0., 0.])
+            else:
+                # Keep the original auto expression, including its well-defined b1 = 0 limit.
+                bct = -2. * jnp.array([ct0X, f * ct2X, f**2 * ct4X, 0., 0., 0.])
         else:
             cctX, cr1X, cr2X = biasX['cct'], biasX['cr1'], biasX['cr2']
             cctY, cr1Y, cr2Y = biasY['cct'], biasY['cr1'], biasY['cr2']

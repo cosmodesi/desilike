@@ -1508,7 +1508,7 @@ class PyBirdPTSpectrum2Poles(Calculator):
 
 
 def _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f):
-    """Convert auto pair-level counterterms to cross pair-level coefficients through mu^4.
+    """Convert auto spectrum-level counterterms to cross spectrum-level coefficients up to mu^4.
 
     Here pair level means power-spectrum level: the inputs describe the XX and YY auto
     pairs, not the XY cross pair. auto_X/Y contain (t0, t2, t4), including signs and f
@@ -1523,7 +1523,7 @@ def _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f):
     The inverse is defined only through mu^4, not by the full ratio T_X / (2 Z_X).
     The generated mu^6 term is discarded before multipole projection, as in the auto model.
     Equal tracers recover the input auto coefficients. Both b1X and b1Y must be nonzero;
-    at b1 = 0 a general pair-level polynomial has no such field-level inverse.
+    at b1 = 0 a general spectrum-level polynomial has no such field-level inverse.
     """
     d0X = auto_X[0] / (2. * b1X)
     d2X = (auto_X[1] / 2. - f * d0X) / b1X
@@ -1544,9 +1544,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     b2t/b2g/db3g, dimensional counterterms c0/c2/c4 and dimensionless Pshot/a0/a2.
     Its sampled db3g has a zero-centred unit-width Gaussian prior, with
     b3g = db3g + 23/42 (b1 - 1) evaluated using the current b1.
-    Eastcoast parameterizes counterterms at pair level (the auto XX or YY power spectrum).
+    Eastcoast parameterizes counterterms at spectrum level (the auto XX or YY power spectrum).
     In cross mode, recover each field-level parameterization, pair it with the OTHER tracer's Z1,
-    then truncate at mu^4 to obtain XY pair-level coefficients; both b1 must be nonzero.
+    then truncate at mu^4 to obtain XY spectrum-level coefficients; both b1 must be nonzero.
     DESI uses b1/b2/dbk2/dbtd and dimensional counterterms alpha0/alpha2/alpha4.
     Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
     bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
@@ -1573,9 +1573,13 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     km, kr : float or pair of floats, default=0.7, 0.25
         Tracer scales for counterterm and stochastic normalization. A pair gives
         one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
+    cross_sharing_mode : {'bias', 'bias+ctr'}, default='bias+ctr'
+        'bias+ctr' shares cross bias and counterterm parameters with autos.
+        'bias' shares only bias; cross counterterm parameters are independent of autos.
+        Cross stochastic parameters are never shared with autos.
     fsat, sigv : float, default=None
         DESI stochastic normalization; defaults are 0.1 and 5.
-        Cross spectra use one pair-level fsat and sigv, passed explicitly if needed.
+        Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
@@ -1678,7 +1682,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return ('ce0', 'ce1', 'ce2')
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='DESI', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='DESI', cross_sharing_mode='bias+ctr', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
@@ -1690,13 +1694,24 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         -------
         VariableCollection
         """
-        return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=cls._stochastic_names(prior_basis), cross=True)
+        if cross_sharing_mode not in ('bias', 'bias+ctr'):
+            raise ValueError(f'Unknown PyBird cross_sharing_mode: {cross_sharing_mode!r}')
+        not_shared = cls._stochastic_names(prior_basis)
+        if 'ctr' not in cross_sharing_mode:
+            # The helper's stochastic argument selects cross parameters that are not shared with autos.
+            if prior_basis == 'DESI':
+                not_shared += ('alpha0', 'alpha2', 'alpha4')
+            elif prior_basis == 'eastcoast':
+                not_shared += ('c0', 'c2', 'c4')
+            else:
+                not_shared += ('cct', 'cr1', 'cr2')
+        return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=not_shared, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
                  nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
-                 rescaling='sigma8+AP', **kwargs):
+                 rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_sharing_mode=cross_sharing_mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -1713,8 +1728,10 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling='sigma8+AP', **kwargs):
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                      rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Non-node setup only.
+        self._cross_sharing_mode = cross_sharing_mode
         self._nbar = float(nbar)
         self._rescaling = rescaling if self._prior_basis == 'DESI' else None
         if self._rescaling not in (None, 'sigma8', 'AP', 'sigma8+AP'):
@@ -1753,13 +1770,14 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     def _build_params(self, f, idx=None):
         """Return scalar bias, counterterm and stochastic parameters for one tracer. For cross-spectra,
         ``idx`` in ``{0, 1}`` selects tracer X or Y from the tuple-valued (per-tracer) bias attributes;
-        shared stochastic parameters are scalars and are not indexed by idx.
+        Cross stochastic parameters and counterterms not shared with autos are scalars, not indexed by idx.
 
         km, kr and nbar normalization is applied in _bias_coefficients.
         eftoflss/westcoast/DESI return field-level cct, cr1, cr2. Eastcoast returns
-        ct0, ct2, ct4 (tilde c0, c2, c4), which parameterize each tracer's AUTO pair-level
+        ct0, ct2, ct4 (tilde c0, c2, c4), which parameterize each tracer's AUTO spectrum-level
         counterterm -2 [ct0 + f ct2 mu^2 + f^2 ct4 mu^4] k^2 P11. In cross mode these
-        are not yet XY coefficients: _bias_coefficients recovers and cross-pairs the fields.
+        are not yet XY coefficients when shared with autos: _bias_coefficients recovers and cross-pairs
+        the fields.
         All bases return ce0, ce1, ce2 multiplying [1, (k/km)^2, f (k/km)^2 mu^2] / nbar.
         DESI absorbs fsat, sigv and the pair's km product into ce2; this conversion requires f != 0.
         Eastcoast a0 and a2 instead use fixed knl=0.45 h/Mpc; their conversion
@@ -1867,8 +1885,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         if self._prior_basis == 'eastcoast':
             ct0X, ct2X, ct4X = biasX['ct0'], biasX['ct2'], biasX['ct4']
             ct0Y, ct2Y, ct4Y = biasY['ct0'], biasY['ct2'], biasY['ct4']
-            if isinstance(self.b1, tuple):
-                # Eastcoast parameterizes counterterm at pair level:
+            if isinstance(self.b1, tuple) and 'ctr' in self._cross_sharing_mode:
+                # Eastcoast parameterizes counterterm at spectrum level:
                 # -2 (ct0 + f ct2 mu^2 + f^2 ct4 mu^4).
                 # Simply averaging two eastcoast counterterm parameters in the cross mode is incorrect.
                 # The following recovers the field level parameter, pair it with the OTHER tracer's Z1,
@@ -1878,7 +1896,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
                 ct0, ct2, ct4 = _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f)
                 bct = jnp.array([ct0, ct2, ct4, 0., 0., 0.])
             else:
-                # Keep the original auto expression, including its well-defined b1 = 0 limit.
+                # Auto or independent cross spectrum-level coefficients: no field inversion or b1 division.
                 bct = -2. * jnp.array([ct0X, f * ct2X, f**2 * ct4X, 0., 0., 0.])
         else:
             cctX, cr1X, cr2X = biasX['cct'], biasX['cr1'], biasX['cr2']
@@ -2071,7 +2089,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
     fsat, sigv : float, default=None
         DESI stochastic normalization; defaults are 0.1 and 5 Mpc/h, as in FOLPS physical.
-        Cross spectra use one pair-level fsat and sigv, passed explicitly if needed.
+        Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
@@ -2365,7 +2383,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
         emulated) — no access to ``self.template``.
         ``pars_b`` selects a cross spectrum; both tracer vectors use ``bias_scheme``.
-        ``cross_nuisance`` contains the already-combined Folps power-level coefficients,
+        ``cross_nuisance`` contains the already-combined Folps spectrum-level coefficients,
         stochastic normalization and single pair FoG parameter. In 'geometric' mode,
         FoG parameters are read from the two tracer vectors instead.
 
@@ -2389,7 +2407,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
             if redshift_smearing is not None:
                 raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
             pars_b = folps_rsdmps.set_bias_scheme(pars=pars_b, bias_scheme=bias_scheme)
-            # cross_nuisance is already in Folps' power-level convention; only convert the two bias vectors.
+            # cross_nuisance is already in Folps' spectrum-level convention; only convert the two bias vectors.
             cross_options = dict(pars_b=pars_b, cross_nuisance=cross_nuisance,
                                  cross_damping_mode=cross_damping_mode)
         pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS, **cross_options)
@@ -2639,7 +2657,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``get_physical_stochastic_settings()['sigv']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
-        Cross spectra use one explicit pair-level nbar, fsat and sigv.
+        Cross spectra use one explicit spectrum-level nbar, fsat and sigv.
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
 
@@ -2649,10 +2667,11 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``1/mu``. At the default the residual is a few :math:`10^{-4}` of :math:`P_0`.
     damping : str, default='lor'
         Damping kernel for the Finger-of-God effect: 'exp', 'lor' or 'vdg'.
-    cross_damping_mode : str, default='single'
-        ``'single'`` uses an independent pair X_FoG (e.g. LRGxELG.X_FoG).
-        ``'geometric'`` uses each tracer's X_FoG, shared with its auto spectrum
-        (e.g. LRG.X_FoG and ELG.X_FoG), with cross damping sqrt(W_A * W_B).
+    cross_sharing_mode : str, default='bias+ctr'
+        ``'bias'`` shares cross bias parameters with autos; cross counterterms and X_FoG are not shared.
+        ``'bias+ctr'`` also shares counterterms with autos; cross X_FoG is not shared.
+        ``'bias+ctr+damping'`` additionally shares each tracer's auto X_FoG,
+        with geometric cross damping sqrt(W_A * W_B). Cross stochastic parameters are never shared with autos.
     redshift_smearing : callable or None, default=None
         Damping from residual redshift errors: the jax-traceable single-field characteristic
         function :math:`D(k\mu)`, wrapped in a :class:`RedshiftSmearing` (see there for the
@@ -2690,7 +2709,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='physical_aap', cross_damping_mode='single', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='physical_aap', cross_sharing_mode='bias+ctr', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
@@ -2698,17 +2717,20 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         tracers : str, (str, str), or None, default=None
         prior_basis : str, default='physical_aap'
             One of ``'standard'``, ``'physical'``, ``'physical_aap'``, ``'tcm_chudaykin_aap'``.
-        cross_damping_mode : str, default='single'
-            ``'single'`` gives the pair its own X_FoG; ``'geometric'`` shares each tracer's auto X_FoG.
+        cross_sharing_mode : str, default='bias+ctr'
+            ``'bias'`` shares biases only; ``'bias+ctr'`` also shares counterterms.
+            ``'bias+ctr+damping'`` additionally shares each tracer's X_FoG and uses geometric damping.
 
         Returns
         -------
         VariableCollection
         """
+        if 'cross_damping_mode' in kwargs:
+            raise TypeError('Use cross_sharing_mode instead of the removed cross_damping_mode tracer option')
         if prior_basis not in _FOLPS_PRIOR_BASES:
             raise ValueError(f"Unknown prior_basis={prior_basis!r}; valid: {list(_FOLPS_PRIOR_BASES)}.")
-        if cross_damping_mode not in ('single', 'geometric'):
-            raise ValueError(f"cross_damping_mode must be 'single' or 'geometric', got {cross_damping_mode!r}")
+        if cross_sharing_mode not in ('bias', 'bias+ctr', 'bias+ctr+damping'):
+            raise ValueError(f'Unknown FOLPS cross_sharing_mode: {cross_sharing_mode!r}')
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
@@ -2740,15 +2762,23 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
             ]
-        stochastic = ('sn0', 'sn2', 'X_FoG') if cross_damping_mode == 'single' else ('sn0', 'sn2')
-        return propose_params_multitracer(auto_params, tracers, stochastic=stochastic, cross=True)
+        not_shared = ('sn0', 'sn2')
+        if 'damping' not in cross_sharing_mode:
+            not_shared += ('X_FoG',)
+        if 'ctr' not in cross_sharing_mode:
+            # The helper's stochastic argument selects cross parameters that are not shared with autos.
+            not_shared += ('alpha0', 'alpha2', 'alpha4', 'ct')
+        return propose_params_multitracer(auto_params, tracers, stochastic=not_shared, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, cross_damping_mode='single',
+                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, cross_sharing_mode='bias+ctr',
                  **kwargs):
+        # Reject the removed option rather than silently forwarding it to PT through **kwargs.
+        if 'cross_damping_mode' in kwargs:
+            raise TypeError('Use cross_sharing_mode instead of the removed cross_damping_mode tracer option')
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_damping_mode=cross_damping_mode)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_sharing_mode=cross_sharing_mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -2768,12 +2798,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      use_GTNS=None, redshift_smearing=None, tracers=None, cross_damping_mode='single',
+                      use_GTNS=None, redshift_smearing=None, tracers=None, cross_sharing_mode='bias+ctr',
                       **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
-        self._cross_damping_mode = cross_damping_mode
+        self._cross_sharing_mode = cross_sharing_mode
+        self._cross_damping_mode = 'geometric' if 'damping' in cross_sharing_mode else 'single'
         if damping_method in ('tree', 'tree-gtns'):
             raise ValueError(f"damping_method={damping_method!r} is deprecated; use 'tree+loop+ctr' (GTNS removed)")
         if damping_method not in (None, 'loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn', 'all'):
@@ -2791,13 +2822,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
     def _build_params(self, idx=None):
-        """Convert one tracer to Folps' auto parameter vector; cross assembly happens later.
+        """Convert parameters for one tracer to the Folps parameter vector.
 
-        In every basis, the returned alpha0/alpha2/alpha4 are AUTO pair-level coefficients
+        In every basis, the returned alpha0/alpha2/alpha4 are spectrum-level coefficients
         of (alpha0 + alpha2 mu^2 + alpha4 mu^4) k^2 P_lin. Physical-basis field inputs
         are combined with that tracer's own Z1 here; standard/class-PT inputs already
-        parameterize auto power. _cross_nuisance constructs the XY coefficients.
-        Cross stochastic parameters stay scalar and already belong to the XY pair.
+        use a spectrum-level parameterization. For auto spectra or cross counterterms
+        shared with autos, these are auto coefficients. _cross_nuisance constructs the XY coefficients.
         """
 
         def get(name):
@@ -2859,11 +2890,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         return pars, bias_scheme
 
     def _cross_nuisance(self, pars_a, pars_b):
-        """Build Folps' cross pair-level counterterms from per-tracer field-level parameterizations.
+        """Build Folps' cross spectrum-level counterterms from per-tracer field-level parameterizations.
 
         Physical-basis field inputs are read directly from the tracer parameters;
         standard/class-PT field-level parameterizations are recovered from the auto vectors.
-        Both branches cross-pair the fields and retain only mu^0, mu^2 and mu^4.
+        Shared counterterms cross-pair the fields and retain only mu^0, mu^2 and mu^4.
+        Independent physical counterterms use the same field inputs on both legs; independent
+        standard/class-PT counterterms directly specify XY power and bypass the field inversion.
         Append the XY stochastic terms and the pair FoG slot (unused in geometric mode).
         """
         # XXX: average the higher order counterterm here, to check
@@ -2872,9 +2905,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             A = self.pt.sigma8 / self.pt.sigma8_fid
             A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.
             norm = A**2 * A_AP
-            a0a, a0b = (param.value / norm for param in self.alpha0)
-            a2a, a2b = (param.value / norm for param in self.alpha2)
-            a4a, a4b = (param.value / norm for param in self.alpha4)
+            def get_values(params, norm):
+                params = params if isinstance(params, tuple) else (params,) * 2
+                return tuple(param.value / norm for param in params)
+
+            a0a, a0b = get_values(self.alpha0, norm)
+            a2a, a2b = get_values(self.alpha2, norm)
+            a4a, a4b = get_values(self.alpha4, norm)
             b1a, b1b = pars_a[0], pars_b[0]
             f = self.pt.fsigma8 / self.pt.sigma8
             # Physical inputs directly specify the field-level parameterization F_X = C_X / 2,
@@ -2885,11 +2922,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha0 = b1a * b1b * (a0a + a0b) / 2.
             alpha2 = f * (b1a * a2b + b1b * a2a + b1a * a0a + b1b * a0b) / 2.
             alpha4 = (f**2 * (a2a + a2b) + f * (b1a * a4b + b1b * a4a)) / 2.
+        elif 'ctr' not in self._cross_sharing_mode:
+            # Independent standard/class-PT parameters already describe XY power after basis conversion.
+            # Do not reinterpret them as two auto spectra or invert their field-level parameterizations.
+            alpha0, alpha2, alpha4 = pars_a[4:7]
         else:
-            # Standard/class-PT parameterize counterterms at auto pair level (AA and BB).
+            # Standard/class-PT parameterize counterterms at auto spectrum level (AA and BB).
             # pars_a/b already contain the signs, f factors and parameter rescaling.
             # Recover each field-level parameterization through mu^4, pair it with the OTHER tracer's
-            # Z1, then truncate at mu^4 to obtain the AB pair-level coefficients.
+            # Z1, then truncate at mu^4 to obtain the AB spectrum-level coefficients.
             # Simply averaging the two auto coefficients does not perform this cross pairing.
             # The inverse uses the rescaled Eulerian b1 in each vector, not the sampled b1.
             f = self.pt.fsigma8 / self.pt.sigma8
@@ -2940,6 +2981,8 @@ class FOLPSTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='physical_aap'
         See :class:`FOLPSTracerSpectrum2Poles`.
+    cross_sharing_mode : str, default='bias+ctr'
+        Forwarded to :class:`FOLPSTracerSpectrum2Poles`; supports the same three sharing modes.
     fsat, sigv, nbar : forwarded to :class:`FOLPSTracerSpectrum2Poles`.
     """
 

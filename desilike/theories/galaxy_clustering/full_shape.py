@@ -2358,11 +2358,16 @@ class FOLPSPTSpectrum2Poles(Calculator):
         return FOLPSDEmulator
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
-                                           redshift_smearing=None):
+                                           redshift_smearing=None, *, pars_b=None, cross_nuisance=None,
+                                           cross_damping_mode='single'):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
         emulated) — no access to ``self.template``.
+        ``pars_b`` selects a cross spectrum; both tracer vectors use ``bias_scheme``.
+        ``cross_nuisance`` contains the already-combined Folps power-level coefficients,
+        stochastic normalization and single pair FoG parameter. In 'geometric' mode,
+        FoG parameters are read from the two tracer vectors instead.
 
         ``redshift_smearing`` is a callable returning the single-field characteristic function
         D(k mu) of the line-of-sight displacement; P(k, mu) is damped by its **square**, since
@@ -2379,7 +2384,15 @@ class FOLPSPTSpectrum2Poles(Calculator):
         _folps_module.use_TNS_model_status = self._remove_DeltaP
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS)
+        cross_options = {}
+        if pars_b is not None:
+            if redshift_smearing is not None:
+                raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
+            pars_b = folps_rsdmps.set_bias_scheme(pars=pars_b, bias_scheme=bias_scheme)
+            # cross_nuisance is already in Folps' power-level convention; only convert the two bias vectors.
+            cross_options = dict(pars_b=pars_b, cross_nuisance=cross_nuisance,
+                                 cross_damping_mode=cross_damping_mode)
+        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS, **cross_options)
         if redshift_smearing is not None:
             # observed (pre-AP) k, mu: the displacement is dv / (aH)_fid, in the fiducial frame
             # the catalogue was built in, not in the AP-distorted frame kap, muap.
@@ -2602,6 +2615,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     Parameters
     ----------
+    tracers : str, (str, str), or None, default=None
+        Passing a pair uses the cross spectrum model. Cross redshift smearing is not supported yet.
     k : array, default=None
     pt : FOLPSPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
@@ -2624,6 +2639,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``get_physical_stochastic_settings()['sigv']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
+        Cross spectra use one explicit pair-level nbar, fsat and sigv.
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
 
@@ -2633,6 +2649,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``1/mu``. At the default the residual is a few :math:`10^{-4}` of :math:`P_0`.
     damping : str, default='lor'
         Damping kernel for the Finger-of-God effect: 'exp', 'lor' or 'vdg'.
+    cross_damping_mode : str, default='single'
+        ``'single'`` uses an independent pair X_FoG (e.g. LRGxELG.X_FoG).
+        ``'geometric'`` uses each tracer's X_FoG, shared with its auto spectrum
+        (e.g. LRG.X_FoG and ELG.X_FoG), with cross damping sqrt(W_A * W_B).
     redshift_smearing : callable or None, default=None
         Damping from residual redshift errors: the jax-traceable single-field characteristic
         function :math:`D(k\mu)`, wrapped in a :class:`RedshiftSmearing` (see there for the
@@ -2670,7 +2690,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='physical_aap', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='physical_aap', cross_damping_mode='single', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
@@ -2678,6 +2698,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         tracers : str, (str, str), or None, default=None
         prior_basis : str, default='physical_aap'
             One of ``'standard'``, ``'physical'``, ``'physical_aap'``, ``'tcm_chudaykin_aap'``.
+        cross_damping_mode : str, default='single'
+            ``'single'`` gives the pair its own X_FoG; ``'geometric'`` shares each tracer's auto X_FoG.
 
         Returns
         -------
@@ -2685,6 +2707,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         """
         if prior_basis not in _FOLPS_PRIOR_BASES:
             raise ValueError(f"Unknown prior_basis={prior_basis!r}; valid: {list(_FOLPS_PRIOR_BASES)}.")
+        if cross_damping_mode not in ('single', 'geometric'):
+            raise ValueError(f"cross_damping_mode must be 'single' or 'geometric', got {cross_damping_mode!r}")
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
@@ -2716,17 +2740,20 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
             ]
-        return propose_params_multitracer(auto_params, tracers)
+        stochastic = ('sn0', 'sn2', 'X_FoG') if cross_damping_mode == 'single' else ('sn0', 'sn2')
+        return propose_params_multitracer(auto_params, tracers, stochastic=stochastic, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None,
+                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, cross_damping_mode='single',
                  **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_damping_mode=cross_damping_mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
+        if isinstance(self.b1, tuple) and redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
         self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -2741,11 +2768,12 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      use_GTNS=None, redshift_smearing=None, tracers=None,
+                      use_GTNS=None, redshift_smearing=None, tracers=None, cross_damping_mode='single',
                       **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
+        self._cross_damping_mode = cross_damping_mode
         if damping_method in ('tree', 'tree-gtns'):
             raise ValueError(f"damping_method={damping_method!r} is deprecated; use 'tree+loop+ctr' (GTNS removed)")
         if damping_method not in (None, 'loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn', 'all'):
@@ -2762,7 +2790,22 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
-    def __call__(self):
+    def _build_params(self, idx=None):
+        """Convert one tracer to Folps' auto parameter vector; cross assembly happens later.
+
+        In every basis, the returned alpha0/alpha2/alpha4 are AUTO pair-level coefficients
+        of (alpha0 + alpha2 mu^2 + alpha4 mu^4) k^2 P_lin. Physical-basis field inputs
+        are combined with that tracer's own Z1 here; standard/class-PT inputs already
+        parameterize auto power. _cross_nuisance constructs the XY coefficients.
+        Cross stochastic parameters stay scalar and already belong to the XY pair.
+        """
+
+        def get(name):
+            param = getattr(self, name)
+            if isinstance(param, tuple):
+                param = param[idx]
+            return param.value
+
         sigma8 = self.pt.sigma8
         fsigma8 = self.pt.fsigma8
         f = fsigma8 / sigma8
@@ -2774,48 +2817,100 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
         bias_scheme = 'folps'
         if self._prior_basis == 'standard':
-            b1, b2, bs, b3 = self.b1.value, self.b2.value, self.bs.value, self.b3.value
-            alpha0, alpha2, alpha4, ct = self.alpha0.value, self.alpha2.value, self.alpha4.value, self.ct.value
-            sn0, sn2, X_FoG = self.sn0.value, self.sn2.value, self.X_FoG.value
+            b1, b2, bs, b3 = get('b1'), get('b2'), get('bs'), get('b3')
+            alpha0, alpha2, alpha4, ct = get('alpha0'), get('alpha2'), get('alpha4'), get('ct')
+            sn0, sn2, X_FoG = get('sn0'), get('sn2'), get('X_FoG')
             pars = [b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG]
 
         elif self._prior_basis in ['physical', 'physical_aap']:  # physical basis with AP rescaling
             if 'aap' not in self._prior_basis: A_AP = 1.
-            b1L = self.b1.value / (A * A_AP**0.5) - 1.
-            b2L = self.b2.value / (A**2 * A_AP**0.5)
+            b1L = get('b1') / (A * A_AP**0.5) - 1.
+            b2L = get('b2') / (A**2 * A_AP**0.5)
             b1E = 1. + b1L
             b2E = b2L
-            bK2 = self.bs.value / (A**2 * A_AP**0.5) - 2. / 7. * b1L
-            btd = self.b3.value / (A**4 * A_AP) + 23. / 42. * b1L
+            bK2 = get('bs') / (A**2 * A_AP**0.5) - 2. / 7. * b1L
+            btd = get('b3') / (A**4 * A_AP) + 23. / 42. * b1L
             bsE = 2. * bK2
             b3E = 64. / 105. * (-5. / 4. * bsE - btd)
-            a0t, a2t, a4t = self.alpha0.value / (A**2 * A_AP), self.alpha2.value / (A**2 * A_AP), self.alpha4.value / (A**2 * A_AP)
+            a0t, a2t, a4t = get('alpha0') / (A**2 * A_AP), get('alpha2') / (A**2 * A_AP), get('alpha4') / (A**2 * A_AP)
             alpha0 = b1E**2 * a0t
             alpha2 = b1E * f * (a0t + a2t)
             alpha4 = f**2 * a2t + b1E * f * a4t
-            sn0 = self.sn0.value / A_AP / self._nbar
-            sn2 = self.sn2.value / A_AP / self._nbar * self._fsat * self._sigv**2
-            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct.value,
-                               sn0, sn2, 1., self.X_FoG.value]
+            sn0 = get('sn0') / A_AP / self._nbar
+            sn2 = get('sn2') / A_AP / self._nbar * self._fsat * self._sigv**2
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, get('ct'),
+                               sn0, sn2, 1., get('X_FoG')]
 
         else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis
             bias_scheme = 'classpt'
-            b1L = self.b1.value / A - 1.
-            b2L = self.b2.value / A**2
-            bsL = self.bs.value / A**2
-            b3 = self.b3.value / A
-            c0, c2, c4 = self.alpha0.value / (A**2 * A_AP), self.alpha2.value / (A**2 * A_AP), self.alpha4.value / (A**2 * A_AP)
+            b1L = get('b1') / A - 1.
+            b2L = get('b2') / A**2
+            bsL = get('bs') / A**2
+            b3 = get('b3') / A
+            c0, c2, c4 = get('alpha0') / (A**2 * A_AP), get('alpha2') / (A**2 * A_AP), get('alpha4') / (A**2 * A_AP)
             ct0 = -2. / 105. * (105. * c0 - 35. * c2 * f + 9. * c4 * f**2)
             ct2 = -2. / 7. * f * (7. * c2 - 6. * f * c4)
             ct4 = -2. * f**2 * c4
-            sn0 = self.sn0.value / self._nbar
-            sn2 = self.sn2.value / self._nbar * self._fsat * self._sigv**2
+            sn0 = get('sn0') / self._nbar
+            sn2 = get('sn2') / self._nbar * self._fsat * self._sigv**2
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
-                               sn0, sn2, 1., self.X_FoG.value]
+                               sn0, sn2, 1., get('X_FoG')]
 
+        return pars, bias_scheme
+
+    def _cross_nuisance(self, pars_a, pars_b):
+        """Build Folps' cross pair-level counterterms from per-tracer field-level parameterizations.
+
+        Physical-basis field inputs are read directly from the tracer parameters;
+        standard/class-PT field-level parameterizations are recovered from the auto vectors.
+        Both branches cross-pair the fields and retain only mu^0, mu^2 and mu^4.
+        Append the XY stochastic terms and the pair FoG slot (unused in geometric mode).
+        """
+        # XXX: average the higher order counterterm here, to check
+        ct = (pars_a[7] + pars_b[7]) / 2.
+        if self._prior_basis in ('physical', 'physical_aap'):
+            A = self.pt.sigma8 / self.pt.sigma8_fid
+            A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.
+            norm = A**2 * A_AP
+            a0a, a0b = (param.value / norm for param in self.alpha0)
+            a2a, a2b = (param.value / norm for param in self.alpha2)
+            a4a, a4b = (param.value / norm for param in self.alpha4)
+            b1a, b1b = pars_a[0], pars_b[0]
+            f = self.pt.fsigma8 / self.pt.sigma8
+            # Physical inputs directly specify the field-level parameterization F_X = C_X / 2,
+            # with C_X = b1_X a0_X + f a2_X mu^2 + f a4_X mu^4. Cross-pair as
+            # Z1_A F_B + Z1_B F_A = 1/2 [Z1_A C_B + Z1_B C_A], then truncate at mu^4.
+            # Read the field inputs directly, not the already-combined auto coefficients
+            # in pars_a/b; unlike the inverse below, this does not require division by b1.
+            alpha0 = b1a * b1b * (a0a + a0b) / 2.
+            alpha2 = f * (b1a * a2b + b1b * a2a + b1a * a0a + b1b * a0b) / 2.
+            alpha4 = (f**2 * (a2a + a2b) + f * (b1a * a4b + b1b * a4a)) / 2.
+        else:
+            # Standard/class-PT parameterize counterterms at auto pair level (AA and BB).
+            # pars_a/b already contain the signs, f factors and parameter rescaling.
+            # Recover each field-level parameterization through mu^4, pair it with the OTHER tracer's
+            # Z1, then truncate at mu^4 to obtain the AB pair-level coefficients.
+            # Simply averaging the two auto coefficients does not perform this cross pairing.
+            # The inverse uses the rescaled Eulerian b1 in each vector, not the sampled b1.
+            f = self.pt.fsigma8 / self.pt.sigma8
+            alpha0, alpha2, alpha4 = _cross_counterterms_mu4(pars_a[4:7], pars_b[4:7], pars_a[0], pars_b[0], f)
+        # Both vectors contain the same pair sn0, sn2 and 1/nbar. Geometric damping
+        # reads X_FoG from each tracer vector; Folps ignores the pair FoG slot in that mode.
+        X_FoG = pars_a[-1] if self._cross_damping_mode == 'single' else 0.
+        return [alpha0, alpha2, alpha4, ct, *pars_a[8:11], X_FoG]
+
+    def __call__(self):
+        cross_options = {}
+        if isinstance(self.b1, tuple):
+            pars, bias_scheme = self._build_params(idx=0)
+            pars_b, _ = self._build_params(idx=1)
+            cross_options = dict(pars_b=pars_b, cross_nuisance=self._cross_nuisance(pars, pars_b),
+                                 cross_damping_mode=self._cross_damping_mode)
+        else:
+            pars, bias_scheme = self._build_params()
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
-                                                                redshift_smearing=redshift_smearing)
+                                                                redshift_smearing=redshift_smearing, **cross_options)
         return self.poles
 
 
@@ -5875,19 +5970,27 @@ class FOLPSDEmulator(_ScaledEmulator):
                   for name in self._nuisance_names]
         order = self._nuisance_names
 
-        def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, **kwargs):
+        def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, *, pars_b=None,
+                                               cross_nuisance=None, **kwargs):
             folpsv2 = _import_folps()
-            pars = list(folpsv2.RSDMultipolesPowerSpectrumCalculator(
-                model='FOLPSD').set_bias_scheme(pars=pars, bias_scheme=bias_scheme))
-            if len(pars) != len(order):
-                raise ValueError(
-                    f'folps returned {len(pars)} nuisance parameters, expected {len(order)} '
-                    f'{order}. The s-powers are matched to that ordering; applying them to a '
-                    f'different one would rescale the wrong terms silently.')
+            calculator = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
             scale = self.emulator_params[h_name].value / h_fid
-            pars = [par / scale**power if power else par for par, power in zip(pars, powers)]
+            vectors = [pars] if pars_b is None else [pars, pars_b]
+            converted = []
+            for vector in vectors:
+                vector = list(calculator.set_bias_scheme(pars=vector, bias_scheme=bias_scheme))
+                if len(vector) != len(order):
+                    raise ValueError(f'folps returned {len(vector)} nuisance parameters, expected {len(order)} {order}')
+                converted.append([par / scale**power if power else par for par, power in zip(vector, powers)])
+            cross_options = {}
+            if pars_b is not None:
+                # Pair nuisance is already in Folps convention; its 8 entries omit the four biases.
+                if len(cross_nuisance) != 8:
+                    raise ValueError('cross_nuisance must contain 8 Folps parameters')
+                pair = [par / scale**power if power else par for par, power in zip(cross_nuisance, powers[4:])]
+                cross_options = dict(pars_b=converted[1], cross_nuisance=pair)
             return FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles(
-                self, pars, 'folps', damping, **kwargs)
+                self, converted[0], 'folps', damping, **cross_options, **kwargs)
 
         return {'combine_bias_terms_spectrum2_poles': combine_bias_terms_spectrum2_poles}
 

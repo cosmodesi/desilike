@@ -39,6 +39,7 @@ SAMPLER = dict(
     hmc=lambda: samplers.BlackjaxHMC(num_integration_steps=10),
     nuts=lambda: samplers.BlackjaxNUTS(),
     mclmc=lambda: samplers.BlackjaxMCLMC(),
+    laps=lambda: samplers.BlackjaxLAPS(nwalkers=64),
     numpyro_nuts=lambda: samplers.NumpyroNUTS(),
     numpyro_hmc=lambda: samplers.NumpyroHMC(),
     numpyro_barker=lambda: samplers.NumpyroBarkerMH(),
@@ -52,7 +53,7 @@ SAMPLER = dict(
 # (same behavior as the legacy NumpyroSASampler, which is not in test_accuracy).
 SAMPLER_RUNS = dict(numpyro_sa=lambda: samplers.NumpyroSA())
 OPTIONAL_DEPS = dict(
-    emcee='emcee', zeus='zeus', hmc='blackjax', nuts='blackjax', mclmc='blackjax',
+    emcee='emcee', zeus='zeus', hmc='blackjax', nuts='blackjax', mclmc='blackjax', laps='blackjax.adaptation.laps',
     numpyro_nuts='numpyro', numpyro_hmc='numpyro', numpyro_barker='numpyro',
     numpyro_sa='numpyro', numpyro_aies='numpyro', numpyro_ess='numpyro',
     dynesty='dynesty', nautilus='nautilus', pocomc='pocomc',
@@ -64,6 +65,8 @@ KWARGS_RUN = dict(
     hmc=dict(min_steps=10000, **_BLACKJAX_ADAPTATION),
     nuts=dict(**_MCMC_MIN_STEPS, **_BLACKJAX_ADAPTATION),
     mclmc=_MCMC_MIN_STEPS,
+    # 64 walkers: 300 steps is ~19k samples, as many as the single-chain kernels draw.
+    laps=dict(min_steps=300, check_every=100, adaptation=dict(steps=1000)),
     numpyro_nuts=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_hmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_barker=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
@@ -80,6 +83,7 @@ KWARGS_RUN_FAST = dict(
     hmc=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
     nuts=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
     mclmc=dict(max_steps=10),
+    laps=dict(max_steps=10, adaptation=dict(steps=300)),
     numpyro_nuts=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_hmc=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_barker=dict(max_steps=10, adaptation=dict(steps=100)),

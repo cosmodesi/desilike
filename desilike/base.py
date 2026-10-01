@@ -56,7 +56,7 @@ from collections import defaultdict
 
 jax.config.update('jax_enable_x64', True)
 
-from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context,
+from .parameter import (Node, Variable, Parameter, Constraint, VariableCollection, _compile_context,
                         _CompileContext, _iter_node, _replace_node)
 from .distributed import default_mpicomm, get_mpicomm, gather as _mpi_gather
 
@@ -644,6 +644,9 @@ class Posterior(Calculator):
         self._prior_calculator = prior
         _prior_params = list(get_params(prior))
         self._prior_param_names = [p.name for p in _prior_params]
+        # Constraints the prior declares (e.g. w0 + wa < 0), public so the pipeline records their
+        # values with the other derived outputs (the prior graph itself is private).
+        self.prior_constraints = [param for param in _prior_params if isinstance(param, Constraint)]
 
         # Public (scanned by _trace_graph) so non-solved likelihood params are in Posterior's
         # deps and get their values set before each __call__.  Solved params are excluded here
@@ -668,6 +671,9 @@ class Posterior(Calculator):
         _likelihood_ctx = _build_graph(likelihood)
         self._likelihood = CompiledGraph(likelihood, _likelihood_ctx)
         self._solved_params = self._likelihood.params.select(solved=True)
+        # Constraints declared by the likelihood's calculators: their values come back with the
+        # other derived outputs, and enter the log-posterior per the active constraint settings.
+        self._constraints = [param for param in self._likelihood._derived_params if isinstance(param, Constraint)]
 
         # Public (scanned by _trace_graph) so non-solved likelihood params are in Posterior's
         # deps and get their values set before each __call__.  Solved params are excluded here
@@ -827,6 +833,9 @@ class Posterior(Calculator):
         _prior_ref = prior
         self._prior = build(prior, output=lambda: (_prior_ref.logpdf, [p.value for p in _prior_params]))
         self._prior_param_names = [p.name for p in _prior_params]
+        # A prior may declare constraints too (e.g. w0 + wa < 0); their values come back with the
+        # prior graph's outputs, and join the likelihood's in the constraint term.
+        self._prior_constraints = [param for param in _prior_params if isinstance(param, Constraint)]
 
     def _marg_loglik(self, params):
         """Profile/marginalize over solved params, one independent group at a time.
@@ -955,7 +964,8 @@ class Posterior(Calculator):
             sp._value = jnp.zeros(sp.shape) if sp.shape else jnp.zeros(())
         params = {p.name: p.value for p in self._likelihood.params}
         logprior, reparam_vals = self._prior(_restrict(params, self._prior))
-        params = {**params, **dict(zip(self._prior_param_names, reparam_vals))}
+        prior_outputs = dict(zip(self._prior_param_names, reparam_vals))
+        params = {**params, **prior_outputs}
         is_tracing = isinstance(logprior, jax.core.Tracer)
         if is_tracing or not bool(jnp.isneginf(logprior)):
             if self._solved_params:
@@ -973,7 +983,12 @@ class Posterior(Calculator):
                 loglik, inner_derived = self._likelihood(_restrict(params, self._likelihood), return_derived=True)
             for p in self._likelihood._derived_params:
                 p._value = inner_derived[p.name]
+            for constraint in self.prior_constraints:
+                constraint._value = prior_outputs[constraint.name]
             logpdf = logprior + loglik
+            if self._constraints or self._prior_constraints:
+                from .context import constraint_logpdf
+                logpdf = logpdf + constraint_logpdf(self._constraints + self._prior_constraints, {**prior_outputs, **inner_derived})
             self.logpdf = jnp.where(jnp.isnan(logpdf), -jnp.inf, logpdf)
         else:
             loglik = jnp.full((), -jnp.inf)
@@ -1534,7 +1549,11 @@ def _build_graph_call_fn(pipeline):
                     dep_states_list = [node_states[id(dep)] for dep in ncd]
                     dep_was_called = any(s['was_called'] for s in dep_states_list)
                     params_changed = node_state['last_params'] is None or not np.array_equal(own_params_np, node_state['last_params'])
-                    if dep_was_called or params_changed:
+                    # a node also reads priors and constraint settings, which override() changes
+                    # without touching any parameter value
+                    from .context import version as _settings_version
+                    settings_changed = node_state.get('last_settings_version', None) != _settings_version()
+                    if dep_was_called or params_changed or settings_changed:
                         for param in free_nvd:
                             param.value = params[param.name]
                         for param in nvd:
@@ -1549,6 +1568,7 @@ def _build_graph_call_fn(pipeline):
                                 if val is not None and not isinstance(val, Variable):
                                     param._value = np.asarray(val)
                         node_state['last_params'] = own_params_np
+                        node_state['last_settings_version'] = _settings_version()
                         node_state['last_result'] = result
                         # Cache the output-function result for the root node, to guard
                         # against stale live attributes when multiple CompiledGraph
@@ -1820,10 +1840,20 @@ class CompiledGraph:
 
         self._call_fn = _build_graph_call_fn(self)
 
-    @functools.cached_property
+    @property
     def _jit_call_fn(self):
-        """JIT-compiled version of ``_call_fn``; created once and cached on the graph."""
-        return jax.jit(self._call_fn)
+        """JIT-compiled version of ``_call_fn``, cached on the graph per :func:`~desilike.context.version`.
+
+        Priors and constraint settings are read when the graph is traced, so a call under a new
+        :func:`~desilike.context.override` retraces.
+        """
+        from .context import version
+        current = version()
+        cached = self.__dict__.get('_jit_call_fn_cache', None)
+        if cached is None or cached[0] != current:
+            cached = (current, jax.jit(self._call_fn))
+            self.__dict__['_jit_call_fn_cache'] = cached
+        return cached[1]
 
     def release(self):
         """Give up ownership of this graph's nodes, without invalidating this graph.
@@ -2334,7 +2364,22 @@ def _bind_variables(root, variables):
         replace(root, lambda node, _v=variable: isinstance(node, Variable) and node.name == _v.name and node is not _v, variable)
 
 
-def get_params(node_or_graph, level=None) -> VariableCollection:
+def _variable_filter(filter):
+    """``filter`` of :func:`get_params` as a predicate on a Variable."""
+    if isinstance(filter, str):
+        kinds = {'constraint': Constraint, 'parameter': Parameter, 'variable': Variable}
+        if filter not in kinds:
+            raise ValueError(f'unknown kind {filter!r}; choose from {list(kinds)}, or pass a class or a callable')
+        filter = kinds[filter]
+    if isinstance(filter, type) or (isinstance(filter, tuple) and all(isinstance(item, type) for item in filter)):
+        classes = filter
+        return lambda variable: isinstance(variable, classes)
+    if callable(filter):
+        return filter
+    raise TypeError(f'filter must be a kind string, a class or a callable, not {type(filter).__name__}')
+
+
+def get_params(node_or_graph, level=None, filter=None) -> VariableCollection:
     """Return the Variable/Parameter collection for a Calculator or CompiledGraph.
 
     For a :class:`CompiledGraph`, returns the already-collected params (*level* is ignored).
@@ -2347,11 +2392,22 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
     level : int or None, default=None
         Maximum Calculator dependency depth to traverse.  Mirrors the *level* argument of
         :func:`copy` and :func:`replace`.  ``None`` collects from the full tree.
+    filter : str, type, or callable, default=None
+        Keep only some of the Variables:
+
+        - a kind, ``'constraint'``, ``'parameter'`` or ``'variable'`` (all of them): e.g. ``filter='constraint'``
+          for the graph's :class:`~desilike.parameter.Constraint` nodes, whose ``value`` is the violation at
+          the last eager call (``graph(params, return_derived=True)`` returns them per call);
+        - a class, or tuple of classes: the Variables that are instances of it;
+        - a callable ``filter(variable) -> bool``.
 
     Returns
     -------
     VariableCollection
     """
+    if filter is not None:
+        keep = _variable_filter(filter)
+        return VariableCollection([param for param in get_params(node_or_graph, level=level) if keep(param)])
     if isinstance(node_or_graph, CompiledGraph):
         return node_or_graph.params
     ctx = _trace_graph(node_or_graph)

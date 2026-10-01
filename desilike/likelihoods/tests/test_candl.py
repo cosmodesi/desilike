@@ -297,9 +297,13 @@ def test_planck_pr3_lowl_ee_sroll2_ace(tmp_path, monkeypatch):
               - float(pipe_ace({**defaults_ace, 'tau_reio': defaults_ace['tau_reio'] - eps}))) / (2. * eps)
     assert np.isfinite(fd_tau) and abs(fd_tau) > 1., f'no tau_reio response: {fd_tau}'
 
-    # out-of-training-range parameters: NaN-masked Cl must reject the sample (-inf), not
-    # feed finite garbage through clipy's NaN-clamping table lookup
-    assert float(pipe_ace({**defaults_ace, 'h': 0.95})) == -np.inf
+    # out-of-training-range parameters: the ace_range constraint is violated, and the posterior
+    # (hard by default) rejects the sample (-inf) rather than scoring the clipped Cl
+    outside = {**defaults_ace, 'h': 0.95}
+    _, deriveds_ace = pipe_ace(outside, return_derived=True)
+    violations = [float(np.max(deriveds_ace[name])) for name in get_params(pipe_ace, filter='constraint').names()]
+    assert violations and max(violations) > 0.
+    assert float(build(Posterior(like_ace))(outside)) == -np.inf
 
 
 if __name__ == '__main__':

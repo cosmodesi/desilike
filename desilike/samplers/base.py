@@ -16,10 +16,11 @@ import numpy as np
 from scipy.special import logsumexp
 
 from ..base import build, CompiledGraph
-from ..parameter import VariableCollection, _cumsize_params
+from ..parameter import VariableCollection, _cumsize_params, _flat_to_dict
 from ..samples import MCSamples, Covariance, diagnostics
 from ..distributed import default_mpicomm, get_mpicomm
 from ..conditioning import AffineConditioner
+from ..context import resolve_constraints, use_constraints
 from .pool import make_pool
 
 
@@ -60,29 +61,6 @@ def _normalize_sample_ids(nsamples):
     if len(set(sample_ids)) != len(sample_ids):
         raise ValueError(f'Duplicate sample ids in nsamples={sample_ids}.')
     return sample_ids
-
-
-def _flat_to_dict(sample, varied_params):
-    """Convert a flat ``(ndim,)`` array to a ``{name: shaped_array}`` dict.
-
-    Parameters
-    ----------
-    sample : numpy.ndarray, shape (ndim,)
-    varied_params : VariableCollection
-
-    Returns
-    -------
-    dict
-        Maps each parameter name to an array of shape ``param.shape``, or a
-        scalar when ``param.shape`` is empty.  The values keep the dtype of
-        *sample* (so this stays JAX-traceable when *sample* is a tracer).
-    """
-    cumsize = _cumsize_params(varied_params)
-    result = {}
-    for i, param in enumerate(varied_params):
-        chunk = sample[cumsize[i]:cumsize[i + 1]]
-        result[param.name] = chunk.reshape(param.shape) if param.shape else chunk[0]
-    return result
 
 
 def _logp_difference(log_post, log_prior):
@@ -438,6 +416,9 @@ class BaseSampler(ABC):
             conditioner = AffineConditioner()
         self.conditioner = conditioner
         self.conditioner.init(self.varied_params)
+        # Constraint settings: those active at construction, else hard -- the exact truncated
+        # posterior, as the -inf masking of out-of-range calculators always gave.
+        self.constraints = resolve_constraints('hard')
         self._proposal_custom = None  # sentinel: no proposal (the prior is the beta = 0 distribution)
 
         # ── MPI communicator ─────────────────────────────────────────────────
@@ -651,7 +632,8 @@ class BaseSampler(ABC):
         accepted, ndraws = [], 0
         for _ in range(100):
             candidates = draw(2 * size)
-            mask = np.all((candidates >= bounds[:, 0]) & (candidates <= bounds[:, 1]), axis=1)
+            # finite too: a draw on a transform's edge maps to +-inf in the unconstrained space
+            mask = np.all((candidates >= bounds[:, 0]) & (candidates <= bounds[:, 1]) & np.isfinite(candidates), axis=1)
             accepted.append(candidates[mask])
             ndraws += int(mask.sum())
             if ndraws >= size:
@@ -671,10 +653,12 @@ class BaseSampler(ABC):
         mapped to original space via :meth:`AffineConditioner.forward` first.
         """
         x_orig = self.conditioner.forward(sample)
+        # a density in the conditioned space: log|dx/dz| makes it the same distribution
+        logdet = self.conditioner.log_abs_det_jacobian(sample)
         if self._proposal_custom is not None:
-            return self._proposal_custom.logpdf(x_orig)
+            return self._proposal_custom.logpdf(x_orig) + logdet
         cumsize = _cumsize_params(self.varied_params)
-        result = jnp.array(0.)
+        result = logdet
         for i, param in enumerate(self.varied_params):
             if param.prior is not None:
                 chunk = x_orig[cumsize[i]:cumsize[i + 1]]
@@ -684,11 +668,19 @@ class BaseSampler(ABC):
 
     def _posterior_logpdf_one(self, sample):
         """Return ``log_posterior`` for a single rescaled-space ``(ndim,)`` sample."""
-        return self.posterior(_flat_to_dict(self.conditioner.forward(sample), self.varied_params), return_derived=False)
+        with use_constraints(self.constraints):
+            logpost = self.posterior(_flat_to_dict(self.conditioner.forward(sample), self.varied_params), return_derived=False)
+        return logpost + self.conditioner.log_abs_det_jacobian(sample)
 
     def _posterior_logpdf_with_derived_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
+        logdet = self.conditioner.log_abs_det_jacobian(sample)
         sample = _flat_to_dict(self.conditioner.forward(sample), self.varied_params)
+        with use_constraints(self.constraints):
+            return self._posterior_logpdf_with_derived_eval(sample, logdet)
+
+    def _posterior_logpdf_with_derived_eval(self, sample, logdet):
+        """Body of :meth:`_posterior_logpdf_with_derived_one`, run under the sampler's constraint settings."""
         if self.nderived:
             log_post, derived_dict = self.posterior(sample, return_derived=True)
             derived_flat = jnp.concatenate([
@@ -697,7 +689,7 @@ class BaseSampler(ABC):
         else:
             log_post = self.posterior(sample, return_derived=False)
             derived_flat = jnp.zeros(0)
-        return log_post, derived_flat
+        return log_post + logdet, derived_flat
 
     def _likelihood_logpdf_one(self, sample):
         """Return ``log_likelihood`` for a single ``(ndim,)`` sample (no derived)."""
@@ -728,6 +720,10 @@ class BaseSampler(ABC):
         *samples* is in the sampler's rescaled working space; it is mapped back to
         original parameter values via :meth:`AffineConditioner.forward` before being stored.
         """
+        if not self.conditioner.is_linear and kwargs.get('logposterior', None) is not None:
+            # kernels report the conditioned-space density; chains store the posterior in the
+            # original parameters, so the transforms' log|dx/dz| comes back out
+            kwargs['logposterior'] = np.asarray(kwargs['logposterior']) - np.asarray(self.conditioner.log_abs_det_jacobian(np.asarray(samples)))
         samples = np.asarray(self.conditioner.forward(samples))
         data = []
         # ── varied params ─────────────────────────────────────────────────────
@@ -824,10 +820,12 @@ class StaticSampler(BaseSampler):
                 results   = self.pool.map(self.posterior_logpdf_with_derived, grid)
                 log_post  = np.array([result[0] for result in results])
                 derived   = np.array([result[1] for result in results])
+                # the grid is laid out in the original parameters: weight by the posterior there
+                log_post_original = log_post - np.asarray(self.conditioner.log_abs_det_jacobian(grid))
                 self.samples = self.array_to_samples(
                     grid, derived,
                     logposterior=log_post,
-                    aweight=np.exp(log_post - logsumexp(log_post)),
+                    aweight=np.exp(log_post_original - logsumexp(log_post_original)),
                 )
                 self.samples['logprior'] = log_prior
                 self.pool.stop_wait()

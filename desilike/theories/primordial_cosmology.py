@@ -23,6 +23,7 @@ from cosmoprimo import CosmologyInputError, CosmologyComputationError
 from cosmoprimo.cosmology import Cosmology
 
 from ..base import Calculator
+from ..parameter import Constraint
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, fourier_analytic_scales,
                                            theta_analytic, solve_theta_analytic,
@@ -123,6 +124,9 @@ class PrimordialCosmology(Calculator):
             params = self.propose_params(*args, **kwargs)
         elif not isinstance(params, VariableCollection):
             params = VariableCollection(params)
+        # a collection from `get_params` carries the graph's Constraints too (ours among them):
+        # they are this calculator's outputs, declared below, never parameters to derive
+        params = VariableCollection([param for param in params if not isinstance(param, Constraint)])
         self.derived_params = params.select(derived=True)
         self.params = params - self.derived_params
         # Requirement registry: filled by downstream calculators via add_requirements().
@@ -428,6 +432,26 @@ class PrimordialCosmology(Calculator):
 _JAX_ENGINES = frozenset({'eisenstein_hu'})
 
 
+def _is_emulated_engine(engine):
+    """Whether *engine* is a cosmoprimo emulated engine: a saved emulator's path, or the engine class."""
+    return _is_emulator_path(engine) or (not isinstance(engine, str) and getattr(engine, 'name', None) == 'emulated')
+
+
+def _emulated_engine_class(engine):
+    """The engine class behind *engine*: a saved emulator's path is read back."""
+    if isinstance(engine, str):
+        from cosmoprimo.emulators import read_engine
+        return read_engine(engine)
+    return engine
+
+
+def _clipping_supported(engine):
+    """Whether this cosmoprimo serves emulated engines with constraints (an engine carrying its
+    ``emulator``, whose ``constraints()`` it enforces according to ``violation``)."""
+    from cosmoprimo.emulators.tools import Emulator
+    return hasattr(Emulator, 'constraints') and hasattr(_emulated_engine_class(engine), 'emulator')
+
+
 def _is_emulator_path(engine):
     """Whether this engine name is the path to a saved cosmoprimo emulator.
 
@@ -527,11 +551,11 @@ _LENSING_CALC_PARAMS = {
     'class': dict(non_linear='hmcode'),
 }
 _LENS_POTENTIAL_CL_EXTRA_PARAMS = {
-    'camb': dict(lens_margin=1250, lens_potential_accuracy=4,
+    'camb': dict(lens_output_margin=1250, lens_potential_accuracy=4,
                 AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1),
     'class': dict(nonlinear_min_k_max=20, accurate_lensing=1, delta_l_max=800),
 }
-# CAMB needs enough ell reach internally (beyond the requested ellmax) for lens_margin to
+# CAMB needs enough ell reach internally (beyond the requested ellmax) for lens_output_margin to
 # have room to work with; CLASS's 'delta_l_max' above already provides that margin relative
 # to whatever ellmax_cl already is, so it needs no equivalent floor here.
 _LENS_POTENTIAL_CL_MIN_ELLMAX_CL = {'camb': 4000}
@@ -733,6 +757,22 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd=dict(eps=0.05), latex=r'\Omega_k'))
         return params
 
+    def __init__(self, *args, engine='class', **kwargs):
+        super().__init__(*args, engine=engine, **kwargs)
+        # An emulated engine (a saved cosmoprimo emulator, or the class serving one) is run in its
+        # clipping mode: it predicts at the point clipped into its constraints and reports their
+        # distances -- the trained box, the node cloud, any declarative ones -- which are these
+        # Constraint nodes, hard or soft walls in the Posterior, like ACECosmology's guard.
+        # The emulator is read here, at construction, because the nodes must exist by then.
+        self.emulator_constraints = {}
+        if _is_emulated_engine(engine):
+            emulator = _emulated_engine_class(engine).emulator if _clipping_supported(engine) else None
+            if emulator is not None:
+                self.emulator_constraints = {
+                    constraint.name: Constraint(constraint.name, namespace='cosmoprimo_emulator', scale=constraint.scale,
+                                                description=f'cosmoprimo emulator: {constraint.name}')
+                    for constraint in emulator.constraints()}
+
     def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', precision=None, **kwargs):
         # Accuracy overrides on top of the settings derived from the harmonic requirements
         # (_LENSING_CALC_PARAMS / _LENS_POTENTIAL_CL_EXTRA_PARAMS): a dict with optional
@@ -748,6 +788,16 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # likelihoods). str() would turn such a class into "<class '...'>" and cosmoprimo
         # would then fail with 'Unknown engine'.
         self._engine = str(engine) if isinstance(engine, str) else engine
+        self._engine_clips = False
+        if _is_emulated_engine(self._engine):
+            if self.emulator_constraints:
+                from cosmoprimo.emulators import emulated_engine
+                self._engine = emulated_engine(_emulated_engine_class(self._engine).emulator, violation='clip')
+                self._engine_clips = True
+            elif not _clipping_supported(self._engine):
+                # a cosmoprimo older than its emulator constraints: its own guard (NaN when traced) stays
+                warnings.warn('this cosmoprimo has no constraints for emulated engines: outside the trained box '
+                              'they raise (eager) or return NaN (traced), and no Constraint is declared')
         # A non-string engine is a jax-traceable emulator unless it says otherwise; named
         # engines are looked up in the jax list as before -- with the path to a saved emulator
         # counting as one, since `cosmoprimo.cosmology.get_engine` resolves such a path to the
@@ -841,6 +891,10 @@ class CosmoprimoCosmology(PrimordialCosmology):
             self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
                                             calc_params=calc_params, extra_params=extra_params)
             self._run_requirements(params)
+            if self._engine_clips:
+                # set by the engine when the requirements above asked for its prediction
+                for name, value in self._cosmo._engine.violations.items():
+                    self.emulator_constraints[name].value = jnp.asarray(value)
 
     def _run_requirements(self, params):
         """Populate ``self._results`` / ``self.derived_params`` from ``self._cosmo``."""
@@ -1083,7 +1137,7 @@ def _intersect_ranges(ranges_per_emulator):
 def _warn_priors_beyond_ranges(params, ranges):
     """Warn for each varied parameter whose prior reaches outside the emulators' training ranges.
 
-    Outside them every emulated result is NaN-masked, which a posterior turns into ``-inf``: the
+    Outside them the ``ace_range`` constraint is violated, which a sampler's posterior turns into ``-inf``: the
     prior is effectively truncated whether or not anybody said so.  :meth:`ACECosmology.truncate_priors`
     makes it explicit; this is the warning for those who have not called it.
 
@@ -1098,7 +1152,7 @@ def _warn_priors_beyond_ranges(params, ranges):
         low, high = ranges[name]
         if limits[0] < low or limits[1] > high:
             warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
-                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+                          f'training range ({low}, {high}): samples outside violate its ace_range constraint (an effective prior truncation for samplers)')
 
 
 def _add_h_from_H0(ranges, replace):
@@ -1152,13 +1206,35 @@ def _find_capse_metadata(emulator_dir):
     nout = np.load(emulator_dir / spectra[0] / 'outminmax.npy').shape[0]
     ellmax = _find_capse_ellmax(emulator_dir / spectra[0], nout)
     constraint = description.get('constraint', None)
+    linear_constraints = []
     if constraint:
-        warnings.warn(f'Capse-style emulator {emulator_dir} declares the training-domain constraint {constraint!r}, '
-                      "which the out-of-range guard does not enforce (it only clips per-parameter ranges): "
-                      'parameters satisfying every range but violating it are extrapolations, not NaN-masked')
+        parsed = _parse_linear_constraint(constraint)
+        if parsed is None:
+            warnings.warn(f'Capse-style emulator {emulator_dir} declares the training-domain constraint {constraint!r}, '
+                          'which could not be parsed as a linear cut (sum of parameters < bound) and is not enforced: '
+                          'parameters satisfying every range but violating it are extrapolations')
+        else:
+            linear_constraints.append(parsed)
     outputs = ['harmonic.lensed_cl'] + (['harmonic.lens_potential_cl'] if 'PP' in spectra else [])
     return dict(kind='jaxcapse', inputs=list(inputs), outputs=outputs, ranges=ranges,
-                ellmax=int(ellmax), spectra=spectra)
+                ellmax=int(ellmax), spectra=spectra, linear_constraints=linear_constraints)
+
+
+def _parse_linear_constraint(text):
+    """``'w0 + wa < -0.5'`` → ``(['w0_fld', 'wa_fld'], -0.5)``: a sum of parameters bounded above;
+    ``None`` if *text* is not of that form.  Names go through :data:`_CONVERSION_CAPSE`."""
+    import re
+    match = re.fullmatch(r'\s*([A-Za-z0-9_\s+]+?)\s*<=?\s*([-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)\s*', str(text))
+    if match is None:
+        return None
+    names = []
+    for token in match.group(1).split('+'):
+        normalized = token.strip().replace(' ', '').lower()
+        name = _CONVERSION_CAPSE.get(normalized, None)
+        if name is None:
+            return None
+        names.append(name)
+    return names, float(match.group(2))
 
 
 def _ace_background(method_key, z, backend='cosmoprimo', cosmoprimo_cosmo=None, jaxace_cosmo=None):
@@ -1330,6 +1406,14 @@ class ACECosmology(PrimordialCosmology):
         the same equation with a fixed 200-step RK4 whose cost cannot depend on the data.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Distance outside the emulators' training domain (box, plus any declared linear cut such as
+        # w0 + wa < -0.5), read by the Posterior as a hard or soft wall; the results themselves are
+        # computed at clipped inputs and stay finite.
+        self.training_range = Constraint('ace_range', scale=0.01, description='distance outside the ACE emulators training domain')
+        self._linear_constraints = []
+
     @classmethod
     def propose_params(cls, *args, engine='isitgr', fiducial='DESI', **kwargs):
         r"""Return a proposed :class:`~desilike.parameter.VariableCollection` of cosmological Parameters.
@@ -1364,7 +1448,7 @@ class ACECosmology(PrimordialCosmology):
         r"""Return the training ranges of the emulators selected by *engine*.
 
         These are the ranges enforced by :meth:`__call__`'s out-of-range guard: inputs are
-        clipped to them before evaluation and every emulated result is NaN-masked when a
+        clipped to them before evaluation and the ``ace_range`` constraint reports how far a
         parameter falls outside.
 
         Parameters
@@ -1663,6 +1747,12 @@ class ACECosmology(PrimordialCosmology):
         self._param_clip_ranges = _add_h_from_H0(
             _intersect_ranges(self._emulator_metadata[emulator_key].get('ranges', {})
                               for emulator_key in self._loaded_emulators), replace=False)
+        # declared linear cuts of the training domain (e.g. w0 + wa < -0.5), kept once each
+        self._linear_constraints = []
+        for emulator_key in self._loaded_emulators:
+            for names, bound in self._emulator_metadata[emulator_key].get('linear_constraints', []):
+                if (names, bound) not in self._linear_constraints:
+                    self._linear_constraints.append((names, bound))
         _warn_priors_beyond_ranges(self.params, self._param_clip_ranges)
 
     def __call__(self):
@@ -1699,15 +1789,15 @@ class ACECosmology(PrimordialCosmology):
         # ranges so every internal evaluation (networks, splines, BAO filter) stays finite,
         # record per-parameter validity, and mask all results to NaN below when invalid.
         clip_ranges = self._param_clip_ranges
-        params_in_range = {}
+        range_violations = {}
+        unclipped_get_param = get_param
         if clip_ranges:
-            unclipped_get_param = get_param
 
             def get_param(name):
                 value = unclipped_get_param(name)
                 if name in clip_ranges:
                     low, high = clip_ranges[name]
-                    params_in_range[name] = (value >= low) & (value <= high)
+                    range_violations[name] = (jnp.maximum(low - value, 0.) + jnp.maximum(value - high, 0.)) / (high - low)
                     value = jnp.clip(value, low, high)
                 return value
 
@@ -1885,12 +1975,14 @@ class ACECosmology(PrimordialCosmology):
                 emulator_params = jnp.stack([spec['z'] if name == 'z' else jnp.full(shape, get_param(name)) for name in input_names])
                 result = emulator.run_emulator(emulator_params)
             self._results[spec_key] = result
-        if params_in_range:
-            # Out-of-range guard: every result was computed from clipped (finite) inputs;
-            # mask them all to NaN when any parameter fell outside its training range.
-            valid = jnp.all(jnp.array(list(params_in_range.values())))
-            for spec_key in self._requirements:
-                self._results[spec_key] = jax.tree.map(lambda arr: jnp.where(valid, arr, jnp.nan), self._results[spec_key])
+        # Out-of-range guard: every result was computed from clipped (finite) inputs; the distance
+        # outside the training domain -- box ranges in units of their width, plus the excess over
+        # any declared linear cut -- is the `ace_range` Constraint, a hard or soft wall in the Posterior.
+        violation = sum(range_violations.values(), jnp.zeros(()))
+        for names, bound in self._linear_constraints:
+            if all(name in self.params for name in names):
+                violation = violation + jnp.maximum(sum(unclipped_get_param(name) for name in names) - bound, 0.)
+        self.training_range.value = violation
         # Here set derived_params
         for param, getter in self._get_derived.items():
             self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
@@ -2818,6 +2910,25 @@ class CosmologyEmulator(_SectionEmulator):
         if missing:
             raise RuntimeError(f'no sector predicts the leaves {missing}')
         return out
+
+    def predict_in_box(self, **params):
+        """:meth:`predict`, each sector clipped into its own constraints; their distances keyed
+        ``<sector>_<constraint>`` (see :meth:`constraint_specs`)."""
+        out, violations = {}, {}
+        for sector, sub in self._sectors.items():
+            predicted, sub_violations = sub.predict_in_box(**params)
+            out.update(predicted)
+            violations.update({f'{sector}_{name}': value for name, value in sub_violations.items()})
+        missing = [name for name in self.children_leafnames if name not in out]
+        if missing:
+            raise RuntimeError(f'no sector predicts the leaves {missing}')
+        return out, violations
+
+    def constraint_specs(self):
+        return [(f'{sector}_{name}', scale) for sector, sub in self._sectors.items() for name, scale in sub.constraint_specs()]
+
+    def range_limits(self):
+        return {name: sub.range_limits() for name, sub in self._sectors.items()}
 
     def to_calculator(self, calculator=None, center=True):
         # The sectors get their calculator BEFORE the deploy, not after. The base runs no

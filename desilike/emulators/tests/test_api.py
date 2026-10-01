@@ -74,6 +74,58 @@ def test_emulate_a_desilike_calculator_end_to_end():
                        emu.compute(point)['0'], rtol=1e-6)
 
 
+def test_deployed_emulator_reports_its_box_as_a_constraint():
+    """Outside the trained box a deployed emulator predicts at the clipped point -- not silently:
+    each of the emulator's constraints (cosmoprimo's ``constraints()``: the box, the node cloud) is a
+    Constraint node of its own (eager and under jit), which a Posterior turns into a hard wall by
+    default and a soft one in ``override(posterior, constraints='soft')``."""
+    import jax
+    from cosmoprimo.emulators.tools import Emulator as CosmoprimoEmulator
+    from desilike import override
+    from desilike.base import build, get_params, GaussianLikelihood, Posterior
+    if not hasattr(CosmoprimoEmulator, 'constraints'):
+        pytest.skip('this cosmoprimo has no emulator constraints')
+
+    emulator = Emulator(toy(), box()).train(budget=3)
+    emulated = emulator.to_calculator()
+    graph = build(emulated)
+    listed = get_params(graph, filter='constraint')
+    assert sorted(param.basename for param in listed) == ['box']   # a bounds-only space: the nodes fill the box
+    assert all(param.namespace.startswith('emulator_Toy_') for param in listed)
+    name = [param.name for param in listed if param.basename == 'box'][0]
+
+    inside = {'h': 0.72, 'amplitude': 1.3}
+    graph(inside)
+    assert all(float(np.asarray(param.value)) == 0. for param in listed)
+    assert np.allclose(emulated.pk, emulator.predict(**inside)['0'], rtol=1e-12)
+
+    outside = {'h': 0.9, 'amplitude': 1.3}   # 0.1 above the box (0.6, 0.8): half its width
+    graph(outside)
+    assert np.allclose(float(np.asarray(listed[name].value)), 0.5)
+    assert np.allclose(emulated.pk, emulator.predict(h=0.8, amplitude=1.3)['0'], rtol=1e-12)
+    _, derived = jax.jit(lambda params: graph(params, return_derived=True))(outside)
+    assert np.allclose(float(derived[name]), 0.5)
+
+    class Likelihood(GaussianLikelihood):
+
+        def __init__(self, theory):
+            self.theory = theory
+            self.flatdata = np.asarray(emulator.predict(**inside)['0'])
+            self.precision = np.eye(len(K)) * 1e4
+
+        def __call__(self):
+            self.flattheory = self.theory.pk
+            return super().__call__()
+
+    posterior = build(Posterior(Likelihood(emulator.to_calculator())))
+    assert np.isfinite(float(posterior(inside)))
+    assert float(posterior(outside)) == -np.inf
+    with override(posterior, constraints=None):
+        free = float(posterior(outside))
+    with override(posterior, constraints='soft'):
+        assert np.allclose(float(posterior(outside)), free - 0.5 * (0.5 / 0.01) ** 2)
+
+
 def test_partial_parameters_use_defaults():
     """Omitting a parameter is fine -- only unknown names are an error."""
     emu = Emulator(toy(), box())
@@ -482,7 +534,7 @@ def test_space_insets_from_a_downstream_valid_range():
     """`clip` is inset, not merely clipped.
 
     Nodes include the endpoints, and one landing a ULP outside a downstream emulator's training
-    range is NaN-masked -- which poisons every coefficient, not just that node.
+    range is refused as non-finite -- which poisons every coefficient, not just that node.
     """
     from desilike.parameter import Parameter
     param = Parameter('h', value=0.7, prior={'limits': [0., 2.]}, fd={'limits': [0.55, 0.85]})

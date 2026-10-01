@@ -418,9 +418,10 @@ class TestACECosmology:
         assert not np.allclose(cl_tt[2:], cl_tt_fiducial[2:], rtol=1e-4, atol=0.)
 
     def test_packaged_out_of_range(self, jaxace):
-        """Parameters outside the packaged emulators' training ranges yield NaN results
-        (eager and jit) instead of a non-finite crash in downstream spline solves, and a
-        warning flags priors wider than the training range at build time."""
+        """Parameters outside the packaged emulators' training ranges are reported by the
+        ``ace_range`` Constraint (eager and jit), the results staying finite (evaluated at clipped
+        inputs, no crash in downstream spline solves), and a warning flags priors wider than the
+        training range at build time."""
         import warnings as _warnings
         import jax
         from desilike.base import build, get_params
@@ -447,19 +448,56 @@ class TestACECosmology:
                     cosmo.get('fourier.pk_now', of='delta_cb', engine='peakaverage', z=z_test, k=k),
                     cosmo.get('harmonic.lensed_cl', ellmax=100)['tt'])
 
+        from desilike.base import get_params
         results = run(defaults)
         assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
-        results = run({**defaults, 'h': 3.})  # far outside the ACE training range: NaN, no crash
-        assert all(np.all(np.isnan(np.asarray(result))) for result in results)
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        results = run({**defaults, 'h': 3.})  # far outside the ACE training range: finite, flagged
+        assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
+        assert float(np.asarray(cosmo.training_range.value)) > 0.
+        assert get_params(cosmo, filter='constraint').names() == ['ace_range']
 
         # jit path, through a downstream consumer (results must be read off a pipeline output,
         # not off cosmo._results, which lives inside the compiled pipe's own trace)
         from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template
         template = DirectSpectrum2Template(z=z_test, fiducial='DESI', cosmo=ACECosmology(engine='ace', fiducial='DESI'))
-        pipe_template = jax.jit(build(template))
+        graph_template = build(template)
+        pipe_template = jax.jit(lambda params: graph_template(params, return_derived=True))
         defaults = {param.name: param._value for param in get_params(template)}
-        assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
-        assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
+        value, derived = pipe_template(defaults)
+        assert np.all(np.isfinite(np.asarray(value))) and float(derived['ace_range']) == 0.
+        value, derived = pipe_template({**defaults, 'h': 3.})
+        assert np.all(np.isfinite(np.asarray(value))) and float(derived['ace_range']) > 0.
+
+    def test_linear_constraint_parsing(self):
+        """Declared linear training-domain cuts of Capse-style emulators are parsed for the guard."""
+        from desilike.theories.primordial_cosmology import _parse_linear_constraint
+        assert _parse_linear_constraint('w0 + wa < -0.5') == (['w0_fld', 'wa_fld'], -0.5)
+        assert _parse_linear_constraint('w0+wa<=0') == (['w0_fld', 'wa_fld'], 0.)
+        assert _parse_linear_constraint('w0 * wa < 1') is None
+        assert _parse_linear_constraint('w0 + unknown < 1') is None
+
+    def test_w0wa_linear_cut(self, jaxace):
+        """The 'w0 + wa < -0.5' cut of the 20k Capse set enters ``ace_range``: zero inside, the
+        excess over -0.5 outside, while every per-parameter range is satisfied."""
+        from desilike.base import build, get_params
+        from desilike.theories.primordial_cosmology import ACECosmology
+        # desi-clustering's DEFAULT_ACE_ENGINE
+        engine = {'background': 'ACE_mnuw0wacdm_ln10As_basis', 'fourier': 'mnuw0wacdm_class',
+                  'harmonic': 'capse_mnuw0wacdm_20k_hybrid_ee_20260831'}
+        try:
+            cosmo = ACECosmology(engine=engine, fiducial='DESI', requirements={'harmonic.lensed_cl': [{'ellmax': 100}]})
+            pipe = build(cosmo)
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            pytest.skip(f'20k Capse set not available: {exc}')
+        assert cosmo._linear_constraints == [(['w0_fld', 'wa_fld'], -0.5)]
+        defaults = {param.name: param._value for param in get_params(cosmo)}
+        pipe({**defaults, 'w0_fld': -1., 'wa_fld': 0.3})        # w0 + wa = -0.7: inside
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        pipe({**defaults, 'w0_fld': -0.6, 'wa_fld': 0.})        # w0 + wa = -0.6: inside
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        pipe({**defaults, 'w0_fld': -0.4, 'wa_fld': 0.})        # w0 + wa = -0.4: 0.1 over the cut
+        assert np.allclose(float(np.asarray(cosmo.training_range.value)), 0.1)
 
     def test_training_ranges_accepts_a_cosmology(self, jaxace):
         """A cosmology can be handed over directly, so no caller has to branch on how far it got.
@@ -845,6 +883,19 @@ class TestCosmologyEmulator:
                                    np.squeeze(exact['fourier.pk|of=delta_cb,delta_cb']), rtol=2e-3)
         np.testing.assert_allclose(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:], exact[cl][2:], rtol=5e-3)
 
+        # the composite forwards each sector's constraints, keyed `<sector>_<constraint>`
+        from cosmoprimo.emulators.tools import Emulator as CosmoprimoEmulator
+        if hasattr(CosmoprimoEmulator, 'constraints'):
+            from desilike.base import get_params
+            listed = get_params(deployed, filter='constraint')
+            assert {param.basename for param in listed} >= {'harmonic_box', 'fourier_box', 'background_box'}
+            assert all(float(np.asarray(node.value)) == 0. for node in deployed.emulator_constraints.values())
+            build(deployed)({**point, 'omega_cdm': 0.14})            # above (0.11, 0.13), for every sector
+            assert all(float(np.asarray(deployed.emulator_constraints[f'{sector}_box'].value)) > 0.
+                       for sector in ('harmonic', 'fourier', 'background', 'thermodynamics'))
+            assert np.all(np.isfinite(np.asarray(deployed.get('fourier.pk', of='delta_cb', z=Z, k=K))))
+            assert np.all(np.isfinite(np.asarray(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:])))
+
 
     def test_a_reloaded_emulator_deploys_in_the_theta_basis(self, tmp_path):
         """`h` in the space routes through `theta_MC_100`, and that is the case a deploy broke.
@@ -968,6 +1019,28 @@ class TestEmulatedEngine:
         from desilike.base import build
 
         return build(cosmo, output=lambda: cosmo)(params)
+
+    def test_outside_the_box_is_a_constraint(self, emulator_path):
+        """The emulated engine runs in its clipping mode: outside the trained box the results stay
+        finite (the prediction at the clipped point) and the distance is the cosmology's
+        ``cosmoprimo_emulator_range`` Constraint -- eagerly and under jit."""
+        import jax
+        from cosmoprimo.emulators.tools import Emulator as CosmoprimoEmulator
+        from desilike.base import build, get_params
+        if not hasattr(CosmoprimoEmulator, 'constraints'):
+            pytest.skip('this cosmoprimo has no emulator constraints')
+        cosmo = self._cosmology(emulator_path)
+        assert get_params(cosmo, filter='constraint').names() == ['cosmoprimo_emulator.box']   # a bounds-only space
+        self._run(cosmo, h=0.673, omega_cdm=0.1201)
+        assert all(float(np.asarray(node.value)) == 0. for node in cosmo.emulator_constraints.values())
+        self._run(cosmo, h=0.76, omega_cdm=0.1201)                          # h above (0.64, 0.72)
+        assert float(np.asarray(cosmo.emulator_constraints['box'].value)) > 0.
+        assert all(np.all(np.isfinite(np.asarray(leaf))) for result in cosmo._results.values()
+                   for leaf in jax.tree_util.tree_leaves(result))
+        graph = build(self._cosmology(emulator_path))
+        jitted = jax.jit(lambda params: graph(params, return_derived=True)[1])
+        assert float(jitted({'h': 0.673, 'omega_cdm': 0.1201})['cosmoprimo_emulator.box']) == 0.
+        assert float(jitted({'h': 0.76, 'omega_cdm': 0.1201})['cosmoprimo_emulator.box']) > 0.
 
     def test_a_saved_emulator_is_a_jax_native_engine(self, emulator_path):
         """Not an external one: a path that `cosmoprimo.cosmology.get_engine` resolves to an

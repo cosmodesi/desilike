@@ -28,6 +28,17 @@ def _direct_template(**kw):
     return DirectSpectrum2Template(engine='eisenstein_hu', **kw)
 
 
+def _training_violation(theory, name=None):
+    """Value of a training-range Constraint of *theory*'s graph at the last call: the single one, or
+    the one whose basename is *name* (the cosmology may declare its own, e.g. ``ace_range``)."""
+    from desilike.base import get_params
+    constraints = list(get_params(theory, filter='constraint'))
+    if name is not None:
+        constraints = [constraint for constraint in constraints if constraint.basename == name]
+    assert len(constraints) == 1, constraints
+    return float(np.asarray(constraints[0].value))
+
+
 def _compile(theory):
     """Compile *theory* **once** and return a reusable runner.
 
@@ -818,8 +829,8 @@ class TestJAXEffort:
     def test_training_ranges(self):
         """training_ranges / truncate_priors classmethods (PT and tracer classes): the
         'emulator' basis keeps the networks' native inputs (z, H0, m_ncdm_tot), the 'cosmo'
-        basis maps them to sampled parameter names; out-of-range parameters NaN-mask the
-        tracer prediction at runtime."""
+        basis maps them to sampled parameter names; out-of-range parameters violate the
+        training-range constraint at runtime."""
         from desilike import Parameter, VariableCollection
         from desilike.theories.galaxy_clustering.full_shape import (
             JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, _JAXEFFORT_THETA_NAMES,
@@ -843,12 +854,17 @@ class TestJAXEffort:
         low, high = ranges['logA']
         assert params['logA'].prior.limits == (max(1.61, low), min(3.91, high))
 
-        # Runtime out-of-training-range guard: NaN prediction instead of silent extrapolation.
+        # Runtime out-of-training-range guard: the networks run at clipped inputs (no silent
+        # extrapolation) and the distance outside the box is the jaxeffort_range_spectrum2 Constraint.
         k = np.linspace(0.01, 0.2, 20)
-        run = _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2))
+        run = _compile(theory)
         assert np.isfinite(np.asarray(run())).all()
-        assert np.isnan(np.asarray(run(logA=ranges['logA'][1] + 0.5))).all(), \
-            'JAXEffortTracerSpectrum2Poles: expected NaN outside the training range'
+        assert _training_violation(theory, name='jaxeffort_range_spectrum2') == 0.
+        low, high = ranges['logA']
+        assert np.isfinite(np.asarray(run(logA=high + 0.5))).all(), \
+            'JAXEffortTracerSpectrum2Poles: expected finite (clipped) poles outside the training range'
+        assert np.allclose(_training_violation(theory, name='jaxeffort_range_spectrum2'), 0.5 / (high - low))
 
 
 # ── COMET ─────────────────────────────────────────────────────────────────────
@@ -893,7 +909,9 @@ class TestCOMET:
             assert np.isfinite(result).all(), f'COMETTracerSpectrum2Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run, base, f'COMETTracerSpectrum2Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
-        assert np.isnan(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected NaN (derived f below its training range)'
+        # out of range the outputs stay finite and the violation is the calculator's Constraint
+        assert np.isfinite(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected finite (clipped) poles'
+        assert _training_violation(theory) > 0., 'COMETTracerSpectrum2Poles (h=3.0): expected a violation (derived f below its training range)'
 
         k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
         theory3 = COMETTracerSpectrum3Poles(k=k3)
@@ -904,12 +922,13 @@ class TestCOMET:
             assert np.isfinite(result3).all(), f'COMETTracerSpectrum3Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
-        assert np.isnan(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected NaN (derived f below its training range)'
+        assert np.isfinite(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected finite (clipped) poles'
+        assert _training_violation(theory3) > 0., 'COMETTracerSpectrum3Poles (h=3.0): expected a violation (derived f below its training range)'
 
     def test_out_of_training_range(self):
-        """Parameters outside comet's training ranges yield NaN poles (both the PT-split and
-        pt=False direct paths) instead of narrowed priors: the priors are left untouched, and
-        a build-time warning flags the effective prior truncation."""
+        """Parameters outside comet's training ranges are reported by the ``comet_range_spectrum2``
+        Constraint (both the PT-split and pt=False direct paths), the poles staying finite; the
+        priors are left untouched, and a build-time warning flags the effective prior truncation."""
         import warnings as _warnings
         from desilike.base import get_params
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
@@ -926,8 +945,11 @@ class TestCOMET:
             prior_limits = get_params(theory)['n_s'].prior.limits
             assert prior_limits[1] > 1.03, prior_limits
             assert np.isfinite(base).all()
+            assert _training_violation(theory) == 0.
             result = run(n_s=1.08)  # outside comet's ns training range (0.9, 1.03)
-            assert np.isnan(np.asarray(result)).all(), f'expected all-NaN poles (pt={pt}): {result}'
+            assert np.isfinite(np.asarray(result)).all(), f'expected finite (clipped) poles (pt={pt}): {result}'
+            # distance beyond the box edge in units of the box width
+            assert np.allclose(_training_violation(theory), (1.08 - 1.03) / (1.03 - 0.9)), f'pt={pt}'
 
     def test_tracer_spectrum(self):
         """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
@@ -1097,7 +1119,9 @@ class TestCOMET:
         from desilike.base import get_params
         cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
                        'Omega_k', 'w0_fld', 'wa_fld'}
-        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
+        from desilike.parameter import Constraint
+        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
+                       if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
         assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
         assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)

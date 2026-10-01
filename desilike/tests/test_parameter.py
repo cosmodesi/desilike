@@ -448,12 +448,12 @@ class TestDecodeName:
 
     def test_single_bracket(self):
         strings, ranges = decode_name('a_[0:3]')
-        assert ranges == [range(0, 3)]
+        assert ranges == [range(3)]
         assert strings[0] == 'a_'
 
     def test_multi_bracket(self):
-        strings, ranges = decode_name('a_[-4:5:2]_b_[0:2]')
-        assert ranges == [range(-4, 5, 2), range(0, 2)]
+        _strings, ranges = decode_name('a_[-4:5:2]_b_[0:2]')
+        assert ranges == [range(-4, 5, 2), range(2)]
 
     def test_wildcard_passthrough(self):
         # '*' is not touched by decode_name; find_names performs the substitution

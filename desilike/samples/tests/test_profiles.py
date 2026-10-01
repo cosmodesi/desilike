@@ -34,10 +34,10 @@ def _make_profiles(n_runs=3, n_params=4, n_scan=101, n_contour=21):
     }
 
     x = np.linspace(-1., 1., n_scan)
-    profile = {n: (x, -0.5 * x ** 2) for n in pnames}
+    profile = dict.fromkeys(pnames, (x, -0.5 * x ** 2))
 
     grid_x = np.linspace(-1., 1., 5)
-    grid = {n: grid_x for n in pnames}
+    grid = dict.fromkeys(pnames, grid_x)
     grid['logpdf'] = -0.5 * grid_x ** 2
 
     t = np.linspace(0., 2. * np.pi, n_contour)
@@ -206,6 +206,19 @@ def test_concatenate_best_values():
     np.testing.assert_array_equal(pc.best['p0'], expected)
 
 
+def test_concatenate_keeps_runs_aligned_when_one_has_no_error():
+    """A start whose minimiser returned no covariance has no error: its row is NaN, and the
+    errors of the other starts stay on their own rows (they used to shift up by one)."""
+    p1, p2, p3 = (_make_profiles(n_runs=1) for _ in range(3))
+    p2.error = None
+    pc = Profiles.concatenate(p1, p2, p3)
+    assert pc.error['p0'].shape == (3,)
+    assert pc.error['p0'][0] == p1.error['p0'][0] and np.isnan(pc.error['p0'][1]) and pc.error['p0'][2] == p3.error['p0'][0]
+    for index in range(3):
+        assert pc.choice(index=index, squeeze=True).error is not None
+    pc.to_stats()
+
+
 def test_concatenate_interval():
     p1 = _make_profiles(n_runs=2)
     p2 = _make_profiles(n_runs=3)
@@ -297,7 +310,7 @@ def test_select_filters_slots():
     assert sub.logpdf is not None  # always carried over unchanged
     assert set(sub.error) == {'p0', 'p1'}
     # contour pairs restricted to selected names
-    for cl, pairs in sub.contour.items():
+    for pairs in sub.contour.values():
         for p1, p2 in pairs:
             assert p1 in {'p0', 'p1'} and p2 in {'p0', 'p1'}
     # original is untouched
@@ -331,7 +344,7 @@ def test_repr():
 
 def test_eq_self():
     p = _make_profiles(n_runs=2)
-    assert p == p
+    assert p == p  # noqa: PLR0124 -- this is the point of the test
 
 
 def test_eq_copy():
@@ -426,7 +439,7 @@ def test_to_stats_subset_params():
 def test_to_stats_quantities():
     pytest.importorskip('tabulate')
     p = _make_profiles(n_runs=3)
-    rows, headers = p.to_stats(quantities=['best'], tablefmt='list')
+    _rows, headers = p.to_stats(quantities=['best'], tablefmt='list')
     assert 'error' not in headers
     assert 'interval' not in headers
 

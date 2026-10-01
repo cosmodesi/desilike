@@ -20,7 +20,7 @@ import numpy as np
 from cosmoprimo.emulators.tools import Emulator as _Emulator, Space as BaseSpace
 
 from desilike.base import copy, get_params, _bind_variables
-from desilike.parameter import Variable, VariableCollection
+from desilike.parameter import Variable, Constraint, VariableCollection
 
 
 def _import(path):
@@ -65,10 +65,11 @@ class Space(BaseSpace):
         ----------
         clip : dict, default=None
             ``{name: (low, high)}`` valid ranges of whatever computes downstream -- an emulated
-            cosmology NaN-masks outside its training ranges, and one non-finite node poisons every
+            cosmology violates its constraints outside its training ranges, such a node is refused as
+            non-finite, and one non-finite node poisons every
             Chebyshev coefficient.  The box is inset from these by 1e-3 of their width rather than
             merely clipped to them: nodes include the endpoints, and a node landing a ULP outside
-            (a box clipped exactly to omega_b >= 0.02 produced 0.019999999999999997) is masked.
+            (a box clipped exactly to omega_b >= 0.02 produced 0.019999999999999997) is refused.
             Matched by name, then by basename.
         bounds : dict, default=None
             ``{name: (low, high)}`` overriding the derived box for those parameters.  Needed
@@ -211,7 +212,10 @@ class CalculatorEmulator(_Emulator):
                 f'{type(calculator).__name__}')
         # The derived names likewise: the graph returns `{p.name: p._value for p in params if
         # p.derived}` (base.py), so they are a property of the graph, not of having run it.
-        self.derived_names = [param.name for param in self.graph.params if param.derived]
+        # Constraints are derived Variables too, but not outputs to emulate: they are kinked
+        # (zero inside, a distance outside), they gate the training nodes instead (see `compute`),
+        # and a deployed emulator reports constraints of its own (its trained box).
+        self.derived_names = [param.name for param in self.graph.params if param.derived and not isinstance(param, Constraint)]
         super().__init__(self.compute, space, **options)
         # Every Parameter the pipeline exposes, kept once.  The emulated calculator has to HOLD
         # the ones it is emulated over, so that `_trace_graph` rediscovers them after the template
@@ -239,6 +243,19 @@ class CalculatorEmulator(_Emulator):
         self.children_leafnames = [
             _leafname(path) for path, _ in jax.tree_util.tree_flatten_with_path(children)[0]]
 
+    def constraint_specs(self):
+        """``[(name, scale)]`` of :meth:`constraints` (cosmoprimo's: the trained box, the node cloud
+        and any declarative ones), named as :meth:`predict_in_box` keys their distances."""
+        if not hasattr(_Emulator, 'constraints'):
+            # a cosmoprimo older than its emulator constraints: no Constraint is declared, and
+            # `predict`'s own guard (raise eager, NaN traced) is all there is
+            return []
+        return [(constraint.name, constraint.scale) for constraint in self.constraints()]
+
+    def range_limits(self):
+        """``{parameter: [low, high]}`` of the trained box (expansion variable), for naming its constraint."""
+        return {name: [float(value) for value in self.training.limits[name]] for name in self.params}
+
     def compute(self, params):
         # The graph itself rejects a name the calculator does not expose (a typo would otherwise
         # train a perfectly good emulator of the wrong function).
@@ -265,7 +282,19 @@ class CalculatorEmulator(_Emulator):
                   for name, child in zip(self.children_leafnames, children)}
         values.update({f'{DERIVED}{name}': np.asarray(derived[name])
                        for name in self.derived_names})
+        # A node where one of the calculator's constraints is violated (outside an emulated
+        # dependency's training box, say) is computed at clipped inputs and comes back finite
+        # but meaningless. Train on it and the fit silently learns the clipped values: return it
+        # non-finite instead, so the training refuses it (NodeEvaluationError) or drops it,
+        # as it did when the dependencies masked to NaN themselves.
+        if any(np.any(np.asarray(derived[name]) > 0.) for name in derived if name in self._constraint_names):
+            values = {name: np.full_like(np.asarray(value, dtype='f8'), np.nan) for name, value in values.items()}
         return values
+
+    @property
+    def _constraint_names(self):
+        """Names of the Constraint nodes of the calculator's graph."""
+        return set(get_params(self.graph, filter='constraint').names())
 
     def __getstate__(self):
         state = super().__getstate__()
@@ -375,6 +404,15 @@ class CalculatorEmulator(_Emulator):
         nodes = {name: self.graph_params[name] for name in self.space.params}
         derived_nodes = {name: self.graph_params[name] for name in self.derived_names
                          if name in self.graph_params}
+        # The emulator's constraints (cosmoprimo's `constraints()`: the trained box, the node cloud,
+        # any declarative ones), one Constraint node each, in a namespace named after the class and
+        # the box -- so two emulators of the same calculator over the same box, which report the
+        # same distances, share them.
+        import hashlib
+        import json
+        box = json.dumps({'class': root_cls.__name__, 'limits': self.range_limits()}, sort_keys=True)
+        constraint_namespace = f'emulator_{root_cls.__name__}_{hashlib.md5(box.encode()).hexdigest()[:8]}'
+        constraint_specs = self.constraint_specs()
 
         def make_init():
 
@@ -397,6 +435,10 @@ class CalculatorEmulator(_Emulator):
                 # construction default: measured, an emulated pt then returned the fiducial
                 # spectrum for every parameter it was asked about.
                 self.emulator_params = dict(nodes)
+                # distances outside the emulator's constraints, read by the Posterior (hard or soft walls)
+                self.emulator_constraints = {name: Constraint(name, namespace=constraint_namespace, scale=scale,
+                                                              description=f'{root_cls.__name__} emulator: {name}')
+                                             for name, scale in constraint_specs}
                 # And they must be the only copy: `tree_unflatten` below restores whatever the
                 # aux carried, which can include same-named Parameter objects. Two objects per
                 # emulated name start out equal, and `_trace_graph` merges same-named Variables
@@ -426,7 +468,12 @@ class CalculatorEmulator(_Emulator):
                 # cosmological parameters live on a sub-calculator (the template), not as
                 # attributes of the theory, so an attribute lookup finds nothing.
                 values = {name: node.value for name, node in self.emulator_params.items()}
-                predicted = predict(**values)
+                if constraint_specs:
+                    predicted, violations = emulator.predict_in_box(**values)
+                    for name, value in violations.items():
+                        self.emulator_constraints[name].value = value
+                else:
+                    predicted = predict(**values)
                 # count the children rather than subtracting the derived: the two need not be
                 # in step if a derived name is not a graph parameter
                 leaves = [predicted[name] for name in children_leafnames]
@@ -497,18 +544,10 @@ class CalculatorEmulator(_Emulator):
         rebuilt = self._calculator_cls.tree_unflatten(self.aux, children)
         for key, value in rebuilt.__dict__.items():
             setattr(deployed, key, value)
-        # Bind the deployed calculator to the emulator's OWN parameter objects.
-        #
+        # Bind the deployed calculator to the emulator's own parameter objects.
         # `tree_unflatten` above restores whatever the aux carried, which can include same-named
         # Parameter objects alongside the ones this emulator holds.  `_trace_graph` would then
-        # unify the duplicates first-seen-wins: measured back when the root constructor still ran,
-        # a prior narrowed in place on `emulator.graph_params['h']` came back as (0.1, 10.0)
-        # instead of (0.66, 0.69), silently discarding what the caller set -- which is exactly
-        # what `desi-clustering` does before deploying.
-        #
-        # Binding here makes the winner a decision rather than a traversal order, and it is the
-        # only reason auto-share fires at all: measured across 355 tests, all six triggers were
-        # this case.
+        # unify the duplicates first-seen-wins.
         from desilike.base import replace
 
         for param in self.graph_params:

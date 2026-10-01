@@ -27,7 +27,7 @@ def savefig(filename, fig=None, bbox_inches='tight', pad_inches=0.1, dpi=200, **
     """Save *fig* to *filename*, creating parent directories as needed."""
     from matplotlib import pyplot as plt
     Path(filename).parent.mkdir(exist_ok=True)
-    logger.info('Saving figure to {}.'.format(filename))
+    logger.info(f'Saving figure to {filename}.')
     if fig is None:
         fig = plt.gcf()
     fig.savefig(filename, bbox_inches=bbox_inches, pad_inches=pad_inches, dpi=dpi, **kwargs)
@@ -70,9 +70,9 @@ def plotter(*args, **kwargs):
 
     if kwargs or not args:
         if args:
-            raise ValueError('unexpected positional args: {}'.format(args))
+            raise ValueError(f'unexpected positional args: {args}')
         return get_wrapper
 
     if len(args) != 1:
-        raise ValueError('unexpected args: {}'.format(args))
+        raise ValueError(f'unexpected args: {args}')
     return get_wrapper(args[0])

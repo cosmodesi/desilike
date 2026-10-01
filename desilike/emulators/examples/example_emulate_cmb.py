@@ -55,8 +55,7 @@ def check_the_target_is_sane():
         expected = np.asarray(reference[spectrum])
         deviation = np.sqrt(np.mean((predicted - expected)**2) / np.mean(expected**2))
         assert deviation < 1e-4, f'{spectrum} is not what cosmoprimo computes ({deviation:.1e})'
-        print('  {} max {:.3e}   vs cosmoprimo {:.1e}'.format(
-            spectrum, np.max(np.abs(predicted)), deviation))
+        print(f'  {spectrum} max {np.max(np.abs(predicted)):.3e}   vs cosmoprimo {deviation:.1e}')
 
 
 check_the_target_is_sane()
@@ -138,7 +137,7 @@ path = emu.write('cmb_lcdm_tau.h5')
 reloaded = Emulator.read(path)
 before, after = emu.predict(**point_at_centre), reloaded.predict(**point_at_centre)
 assert all(np.allclose(after[key], before[key], rtol=1e-12, atol=0.) for key in before)
-print('round trip through {}: identical'.format(path))
+print(f'round trip through {path}: identical')
 
 
 # --- 5. deploy -------------------------------------------------------------------------------

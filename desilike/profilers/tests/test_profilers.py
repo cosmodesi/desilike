@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-import desilike.profilers as profilers
+from desilike import profilers
 from desilike.samples import Profiles
 from desilike.base import build, GaussianLikelihood as BaseGaussianLikelihood, Prior, Posterior
 from desilike.parameter import Parameter
@@ -431,9 +431,12 @@ class TestIO:
         fn  = str(tmp_path / 'profiles.h5')
         p   = make_profiler(profiler_name, likelihood, output_fn=fn)
         p.maximize(niterations=2)
-        loaded = Profiles.read(fn)
-        assert loaded.best is not None and 'x' in loaded.best
-        np.testing.assert_allclose(loaded.logpdf, p.profiles.logpdf)
+        # `output_fn` is written by rank 0 only, and `tmp_path` is a per-process fixture, so
+        # under MPI every other rank would look for the file in a directory nothing wrote to.
+        if p.mpicomm.rank == 0:
+            loaded = Profiles.read(fn)
+            assert loaded.best is not None and 'x' in loaded.best
+            np.testing.assert_allclose(loaded.logpdf, p.profiles.logpdf)
 
 
 def test_profiler_does_not_recompile_a_compiled_graph(likelihood):

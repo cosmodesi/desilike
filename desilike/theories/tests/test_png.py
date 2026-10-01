@@ -61,13 +61,13 @@ class TestAlphaPNG:
         return k, pk_dd, alpha
 
     def test_prim_shape_finite_decreasing(self):
-        k, pk_dd, alpha = self._compute_alpha('prim')
+        k, _pk_dd, alpha = self._compute_alpha('prim')
         assert alpha.shape == k.shape
         assert np.all(np.isfinite(alpha))
         assert alpha[0] > alpha[-1], "alpha should decrease with k"
 
     def test_transfer_shape_finite_decreasing(self):
-        k, pk_dd, alpha = self._compute_alpha('transfer')
+        k, _pk_dd, alpha = self._compute_alpha('transfer')
         assert alpha.shape == k.shape
         assert np.all(np.isfinite(alpha))
         assert alpha[0] > alpha[-1], "alpha should decrease with k"
@@ -186,7 +186,7 @@ class TestPNGTracerSpectrum2Poles:
         k = np.linspace(0.02, 0.3, 30)
         theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
         pipe = build(theory)
-        from desilike.base import get_params as get_params
+        from desilike.base import get_params
         param_vals = {p.name: p._value for p in get_params(theory)}
         grad = jax.grad(lambda pv: jnp.sum(pipe(pv)))(param_vals)
         assert all(np.isfinite(np.asarray(v)) for v in grad.values()), "non-finite gradient"

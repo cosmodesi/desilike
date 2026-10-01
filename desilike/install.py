@@ -36,7 +36,7 @@ def download(url, target, size=None, max_retries=3, retry_wait=10):
         Seconds to wait between retry attempts.
     """
     # Adapted from https://stackoverflow.com/questions/15644964/python-progress-bar-and-downloads
-    logger.info('Downloading {} to {}.'.format(url, target))
+    logger.info(f'Downloading {url} to {target}.')
     import time
     import requests
     target = Path(target)
@@ -49,14 +49,13 @@ def download(url, target, size=None, max_retries=3, retry_wait=10):
         r = requests.get(url, allow_redirects=True, stream=True)
         if r.status_code < 500 or attempt == max_retries:
             break
-        logger.warning('Attempt {:d}/{:d}: got HTTP {:d} downloading {}; retrying in {:d}s.'.format(
-            attempt, max_retries, r.status_code, url, retry_wait))
+        logger.warning(f'Attempt {attempt:d}/{max_retries:d}: got HTTP {r.status_code:d} downloading {url}; retrying in {retry_wait:d}s.')
         time.sleep(retry_wait)
 
     try:
         r.raise_for_status()
     except requests.exceptions.HTTPError as exc:
-        raise InstallError('Could not download {} (HTTP {:d}): {}'.format(url, r.status_code, r.text[:200])) from exc
+        raise InstallError(f'Could not download {url} (HTTP {r.status_code:d}): {r.text[:200]}') from exc
 
     with open(target, 'wb') as file:
         if size is None or int(size) < 0:  # no content length header
@@ -74,7 +73,7 @@ def download(url, target, size=None, max_retries=3, retry_wait=10):
                     if done > current:  # it seems, when content-length is not set iter_content does not care about chunk_size
                         print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
                         current = done
-            print('')
+            print()
 
 
 def extract(in_fn, out_fn, remove=True):
@@ -116,7 +115,7 @@ def exists_package(pkgname):
         pkg = __import__(pkgname)
     except ImportError:
         return False
-    logger.info('Requirement already satisfied: {} in {}'.format(pkgname, Path(pkg.__file__).parent.parent))
+    logger.info(f'Requirement already satisfied: {pkgname} in {Path(pkg.__file__).parent.parent}')
     del pkg
     return True
 
@@ -153,14 +152,15 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
         # Check if package already installed (to cope with git-provided package)
         if pkgname is None:
             if 'https://' in pkgindex:
-                for pkgname in pkgindex.split('#')[0].split('/')[::-1]:
+                for part in pkgindex.split('#')[0].split('/')[::-1]:
+                    pkgname = part
                     if pkgname: break
             else:
                 pkgname = pkgindex
         if exists_package(pkgname): return
     command = [sys.executable, '-m', 'pip', 'install', pkgindex, '--disable-pip-version-check']
     if install_dir is not None:
-        command = ['PYTHONUSERBASE={}'.format(install_dir)] + command + ['--user']
+        command = [f'PYTHONUSERBASE={install_dir}'] + command + ['--user']
     if no_deps:
         command.append('--no-deps')
     if force_reinstall:
@@ -205,7 +205,7 @@ def source(fn):
     # desilike, those two ranks died, and the other 62 waited in an MPI collective until the
     # 3-hour time limit (2026-09-09). 'surrogateescape' is how os.environ itself represents such
     # bytes on POSIX, so the round trip into ``os.environ`` below is lossless for every other key.
-    result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True)
+    result = subprocess.run(['bash', '-c', f'source {fn} && env'], capture_output=True, check=False)
     for line in result.stdout.decode('utf-8', errors='surrogateescape').split('\n'):
         try:
             # ``split('=', 1)``: a value may itself contain '=' (a PS1, a Slurm variable), and the
@@ -219,7 +219,7 @@ def source(fn):
             pass
 
 
-class Installer(object):
+class Installer:
     """
     Installer. desilike's configuration ('config.yaml' and 'profile.sh') is saved
     under 'DESILIKE_CONFIG_DIR' environment variable if defined, else '~/.desilike'.
@@ -301,7 +301,7 @@ class Installer(object):
         for name, value in default.items():
             setattr(self, name, kwargs.pop(name, value))
         if kwargs:
-            raise ValueError('Did not understand {}'.format(kwargs))
+            raise ValueError(f'Did not understand {kwargs}')
 
     @staticmethod
     def _load_config(source):
@@ -309,7 +309,7 @@ class Installer(object):
         if isinstance(source, dict):
             return dict(source)
         if source and Path(source).is_file():
-            with open(source, 'r') as file:
+            with open(source) as file:
                 return yaml.safe_load(file) or {}
         return {}
 
@@ -338,7 +338,7 @@ class Installer(object):
         try:
             return self.config[name]
         except KeyError as exc:
-            raise KeyError('Config option {} does not exist in config {}; maybe the corresponding calculator should be installed?'.format(name, self.config_fn)) from exc
+            raise KeyError(f'Config option {name} does not exist in config {self.config_fn}; maybe the corresponding calculator should be installed?') from exc
 
     def __call__(self, obj):
         """
@@ -349,7 +349,7 @@ class Installer(object):
 
         More generally, whatever exposes an :meth:`install` classmethod.
         """
-        self.log_info('Installation directory is {}.'.format(self.install_dir))
+        self.log_info(f'Installation directory is {self.install_dir}.')
 
         def install(cls):
             func = getattr(cls, 'install', None)
@@ -477,8 +477,7 @@ class Installer(object):
             file.write('#!/bin/bash\n')
             for key, keybash in zip(dirs, ['PYTHONPATH', 'PATH', 'LD_LIBRARY_PATH']):
                 if key in config: file.write('export {}={}\n'.format(keybash, ':'.join(config[key] + [f'${keybash}'])))
-            for src in config.get('source', []):
-                file.write('source {}'.format(src))
+            file.writelines(f'source {src}\n' for src in config.get('source', []))
 
     def setenv(self):
         """Set environment (i.e. set paths). Called in desilike's __init__.py."""

@@ -267,7 +267,7 @@ class _BaseCandlLikelihood(Likelihood):
         if self._ellmax_potential:
             self.cosmo.add_requirements({'harmonic.lens_potential_cl': [{'ellmax': self._ellmax_potential}]})
         for name in self._cosmo_prior_names:
-            self.cosmo.add_requirements({'params.{}'.format(self._cosmo_params.get(name, name)): None})
+            self.cosmo.add_requirements({f'params.{self._cosmo_params.get(name, name)}': None})
 
     def propose_params(self, split_diag_priors=False):
         """Build one free desilike Parameter per ``self.like.required_nuisance_parameters``,

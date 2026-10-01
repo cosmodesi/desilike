@@ -1439,7 +1439,11 @@ class PyBirdPTSpectrum2Poles(Calculator):
         if self.k[0] * 0.8 < 1e-3:
             import warnings
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
-        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.25,
+        # Work around PyBird's IR resummation shape mismatch for Nl < 3 and kmax <= 0.25.
+        kmax = self.k[-1] * 1.25
+        if with_resum and len(self.ells) < 3 and kmax <= 0.25:
+            kmax = 0.26
+        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=kmax,
                           km=self.km, kr=self.kr, nd=1e-4, eft_basis='eftoflss',
                           halohalo=True, with_cf=False, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
@@ -1477,7 +1481,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
         Pctl = jnp.asarray(self._pt.Pctl)
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _z
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _z
-        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, jnp.asarray(self._pt.f),
+        f = jnp.asarray(self._pt.f)
+        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, f,
                  self.sigma8, self.sigma8_fid, self.qpar, self.qper],
                 {'k': self.k, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
                  'eft_basis': self._pt.eft_basis,
@@ -1672,6 +1677,14 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return bias + counterterms + stochastic
 
     @staticmethod
+    def _counterterm_names(prior_basis):
+        if prior_basis == 'DESI':
+            return ('alpha0', 'alpha2', 'alpha4')
+        if prior_basis == 'eastcoast':
+            return ('c0', 'c2', 'c4')
+        return ('cct', 'cr1', 'cr2')
+
+    @staticmethod
     def _stochastic_names(prior_basis):
         if prior_basis == 'DESI':
             return ('sn0', 'sn2')
@@ -1699,12 +1712,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         not_shared = cls._stochastic_names(prior_basis)
         if 'ctr' not in cross_sharing_mode:
             # The helper's stochastic argument selects cross parameters that are not shared with autos.
-            if prior_basis == 'DESI':
-                not_shared += ('alpha0', 'alpha2', 'alpha4')
-            elif prior_basis == 'eastcoast':
-                not_shared += ('c0', 'c2', 'c4')
-            else:
-                not_shared += ('cct', 'cr1', 'cr2')
+            not_shared += cls._counterterm_names(prior_basis)
         return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=not_shared, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
@@ -2899,7 +2907,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         standard/class-PT counterterms directly specify XY power and bypass the field inversion.
         Append the XY stochastic terms and the pair FoG slot (unused in geometric mode).
         """
-        # XXX: average the higher order counterterm here, to check
+        # NOTE: average the higher order counterterm here, may be incorrect
         ct = (pars_a[7] + pars_b[7]) / 2.
         if self._prior_basis in ('physical', 'physical_aap'):
             A = self.pt.sigma8 / self.pt.sigma8_fid

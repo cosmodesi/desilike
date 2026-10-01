@@ -109,7 +109,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
     def _load_data(self, data_dir, cache_dir=None):
         input_data = np.loadtxt(os.path.join(data_dir, 'like_NPIPE_12.6_unified_spectra.txt'))
         flatdata, masks, index_ells, all_cls = [], [], {}, []
-        with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_data_ranges.txt'), 'r', encoding='utf-8-sig') as file:
+        with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_data_ranges.txt'), encoding='utf-8-sig') as file:
             for iline, line in enumerate(file):
                 if not line.strip():
                     continue
@@ -133,13 +133,13 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
                 if mask.any():
                     index_ells[cl] = tmp_ells[mask]
         if all_cls != self.all_cls:
-            raise ValueError('Unexpected spectra order in data_ranges file: {}'.format(all_cls))
+            raise ValueError(f'Unexpected spectra order in data_ranges file: {all_cls}')
         mask = np.concatenate(masks)
         nx = len(mask)
         with open(os.path.join(data_dir, 'like_NPIPE_12.6_unified_cov.bin'), 'rb') as file:
             covariance = np.fromfile(file, dtype=np.float32)
         if nx ** 2 != covariance.shape[0]:
-            raise ValueError('Covariance size {} does not match expected {}**2'.format(covariance.shape[0], nx))
+            raise ValueError(f'Covariance size {covariance.shape[0]} does not match expected {nx}**2')
         self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(np.concatenate(flatdata)[mask]))
         covariance = covariance.reshape(nx, nx)[np.ix_(mask, mask)].astype('f8')
         # Inverting the full (~11000x11000) matrix takes ~1 min; cache per (select_cls, ell_ranges).
@@ -155,7 +155,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
         # 1.77 GB, took 9.4 s to unpickle, and `allclose` against an object-dtype array raises --
         # swallowed here, so the cache never hit once and the covariance was re-inverted on every
         # construction. '.npz' also means the old, unreadable '.npy' files are simply ignored.
-        basename = 'precision_{}.npz'.format(cache_key)
+        basename = f'precision_{cache_key}.npz'
         try:
             with np.load(os.path.join(data_dir, basename)) as cached:
                 precision, cached_covariance = cached['precision'], cached['covariance']
@@ -168,14 +168,14 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
             # not the run. Written under a temporary name and renamed, so a reader never sees a
             # half-written file and concurrent ranks cannot interleave.
             precision_fn = os.path.join(cache_dir or data_dir, basename)
-            tmp_fn = '{}.tmp.{}'.format(precision_fn, os.getpid())
+            tmp_fn = f'{precision_fn}.tmp.{os.getpid()}'
             try:
                 os.makedirs(os.path.dirname(precision_fn), exist_ok=True)
                 np.savez(tmp_fn, precision=precision, covariance=covariance)
                 os.replace(tmp_fn + '.npz', precision_fn)
             except OSError as exc:
-                warnings.warn('could not cache the precision matrix at {}: {}. The covariance '
-                              'will be inverted again on every construction.'.format(precision_fn, exc))
+                warnings.warn(f'could not cache the precision matrix at {precision_fn}: {exc}. The covariance '
+                              'will be inverted again on every construction.')
                 try: os.remove(tmp_fn + '.npz')
                 except OSError: pass
         self.precision = jnp.asarray(precision)
@@ -190,8 +190,8 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
 
     def _get_foregrounds(self):
         names = ['100', '143', '217', '143x217']
-        amp = jnp.array([self.params['amp_{}'.format(name)].value for name in names])
-        tilt = jnp.array([self.params['n_{}'.format(name)].value for name in names])
+        amp = jnp.array([self.params[f'amp_{name}'].value for name in names])
+        tilt = jnp.array([self.params[f'n_{name}'].value for name in names])
         return amp[:, None] * self._template_foreground_amp * jnp.exp(self._template_foreground_tilt * tilt[:, None])
 
     def _get_cals(self):
@@ -235,7 +235,7 @@ class _BasePlanckNPIPECamspecLikelihood(GaussianLikelihood):
 
         if installer.reinstall or not exists_path(os.path.join(data_dir, 'CamSpec_NPIPE')):
             zip_base = 'CamSpec_NPIPE.zip'
-            url = 'https://github.com/CobayaSampler/planck_native_data/releases/download/v1/{}'.format(zip_base)
+            url = f'https://github.com/CobayaSampler/planck_native_data/releases/download/v1/{zip_base}'
             zip_fn = os.path.join(data_dir, zip_base)
             download(url, zip_fn)
             extract(zip_fn, data_dir)
@@ -277,7 +277,7 @@ class TTTEEEHighlPlanckNPIPECamspecEllMax600Likelihood(_BasePlanckNPIPECamspecLi
     https://arxiv.org/abs/2205.10869
     """
     select_cls = ['143x143', '217x217', '143x217', 'TE', 'EE']
-    ell_ranges = {cl: (30, 600) for cl in select_cls}
+    ell_ranges = dict.fromkeys(select_cls, (30, 600))
 
 
 class TTTEEEHighlPlanckNPIPECamspecCutsForACTLikelihood(_BasePlanckNPIPECamspecLikelihood):

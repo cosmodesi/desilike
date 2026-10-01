@@ -580,7 +580,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
                 p = dict(_params)
                 offset = 0
                 for name, size, shape in zip(_names, _sizes, _shapes):
-                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape or ())
                     offset += size
                 return _pipe(p)
 

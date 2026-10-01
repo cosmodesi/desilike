@@ -80,12 +80,12 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         def check_matrix(matrix, name):
             matrix = np.atleast_2d(matrix).copy()
             if matrix.shape != (matrix.shape[0],) * 2:
-                raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
+                raise ValueError(f'{name} must be a square matrix, but found shape {matrix.shape}')
             mshape = '({0}, {0})'.format(matrix.shape[0])
-            shape = '({0}, {0})'.format(self._flatdata.size)
+            shape = f'({self._flatdata.size}, {self._flatdata.size})'
             shape_obs = '({0}, {0})'.format(' + '.join([str(obs.flatdata.size) for obs in self.observables]))
             if matrix.shape[0] != self._flatdata.size:
-                raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
+                raise ValueError(f'based on provided observables, {name} expected to be a matrix of shape {shape} = {shape_obs}, but found {mshape}')
             return matrix
 
         self._precision = check_matrix(precision, 'precision') if precision is not None else None

@@ -1382,6 +1382,9 @@ class PyBirdPTSpectrum2Poles(Calculator):
     r"""
     PyBird matter power spectrum multipoles (non-JAX).
 
+    PT always uses eftoflss basis with fixed km=0.7 and kr=0.25.
+    Configure tracer-specific km and kr on PyBirdTracerSpectrum2Poles.
+
     Wraps ``pybird.bird.Bird`` + pybird loop integrals.
     Exposes ``P11l``, ``Ploopl``, ``Pctl``, ``Pstl``, ``Pnnlol`` arrays and metadata.
 
@@ -1390,14 +1393,14 @@ class PyBirdPTSpectrum2Poles(Calculator):
     k : array, default=None
     template : DirectSpectrum2Template, default=None
     ells : tuple of int, default=(0, 2, 4)
-    km, kr : float, default=0.7, 0.25
-    accboost, fftaccboost : int, default=1
+    accboost : int, default=1
+    fftaccboost : int, default=2
     fftbias : float, default=-1.6
-    with_nnlo_counterterm : bool, default=False
     with_stoch : bool, default=True
     with_resum : str or bool, default='full'
     with_ap : bool, default=True
-    eft_basis : str, default='eftoflss'
+    LambdaIR : float, default=None
+        IR cutoff passed to PyBird Resum. None uses 0.1 for with_resum='full', otherwise 1.0.
     """
 
     _is_external = True
@@ -1406,9 +1409,9 @@ class PyBirdPTSpectrum2Poles(Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/pierrexyz/pybird')
 
-    def __init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                 accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
-                 with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
+    def __init__(self, k=None, template=None, ells=(0, 2, 4),
+                 accboost=1, fftaccboost=2, fftbias=-1.6,
+                 with_stoch=True, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -1417,52 +1420,48 @@ class PyBirdPTSpectrum2Poles(Calculator):
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
-        if with_nnlo_counterterm:
-            self.template.update(with_now='peakaverage')
 
-    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                      accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
-                      with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4),
+                      accboost=1, fftaccboost=2, fftbias=-1.6,
+                      with_stoch=True, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
         self._with_stoch = bool(with_stoch)
-        self._with_nnlo = bool(with_nnlo_counterterm)
+        self._with_nnlo = False
         self._with_resum = with_resum
         self._with_ap = bool(with_ap)
-        self.km = tuple(km) if hasattr(km, '__len__') else (float(km),) * 2
-        self.kr = tuple(kr) if hasattr(kr, '__len__') else (float(kr),) * 2
+        # Fixed PT metadata; tracer-specific scales only enter the bias coefficients.
+        self.km = 0.7
+        self.kr = 0.25
         from pybird.common import Common
         from pybird.nonlinear import NonLinear
         from pybird.resum import Resum
         from pybird.projection import Projection
-        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
         if self.k[0] * 0.8 < 1e-3:
             import warnings
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
-        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3,
-                          km=min(self.km), kr=min(self.kr), nd=1e-4, eft_basis=eft,
+        # Work around PyBird's IR resummation shape mismatch for Nl < 3 and kmax <= 0.25.
+        kmax = self.k[-1] * 1.25
+        if with_resum and len(self.ells) < 3 and kmax <= 0.25:
+            kmax = 0.26
+        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=kmax,
+                          km=self.km, kr=self.kr, nd=1e-4, eft_basis='eftoflss',
                           halohalo=True, with_cf=False, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
-        self._resum = Resum(co=self._co)
-        self._nnlo = None
-        if with_nnlo_counterterm:
-            from pybird.nnlo import NNLO_counterterm
-            self._nnlo = NNLO_counterterm(co=self._co)
+        # NOTE: theory prediction is sensitive to the chosen value of LambdaIR, better to check with the author
+        if LambdaIR is None:
+            LambdaIR = 0.1 if with_resum == 'full' else 1.0
+        self._resum = Resum(LambdaIR=LambdaIR, NFFT=192, co=self._co)
         self._projection = Projection(self.k, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
 
     def __call__(self):
         from pybird.bird import Bird
-        from scipy.interpolate import interp1d as _interp1d
         cosmo = {'kk': np.asarray(self.template.k), 'pk_lin': np.asarray(self.template.pk_dd),
                  'pk_lin_2': None, 'f': float(self.template.f), 'DA': 1., 'H': 1.}
         self._pt = Bird(cosmo, with_bias=False, eft_basis=self._co.eft_basis, with_stoch=self._with_stoch,
-                        with_nnlo_counterterm=self._nnlo is not None, co=self._co)
-        if self._nnlo is not None:
-            self._nnlo.Ps(self._pt, _interp1d(np.log(np.asarray(self.template.k)),
-                                               np.log(np.clip(np.asarray(self.template.pknow_dd), 1e-30, None)),
-                                               fill_value='extrapolate', assume_sorted=True))
+                        with_nnlo_counterterm=False, co=self._co)
         self._nonlinear.PsCf(self._pt)
         self._pt.setPsCfl()
         if self._with_resum:
@@ -1470,6 +1469,10 @@ class PyBirdPTSpectrum2Poles(Calculator):
         if self._with_ap:
             self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
         self._projection.xdata(self._pt)
+        self.sigma8 = self.template.sigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
 
     def tree_flatten(self):
         _z = jnp.zeros((len(self.ells), 1, len(self.k)))
@@ -1478,9 +1481,11 @@ class PyBirdPTSpectrum2Poles(Calculator):
         Pctl = jnp.asarray(self._pt.Pctl)
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _z
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _z
-        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol],
+        f = jnp.asarray(self._pt.f)
+        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol, f,
+                 self.sigma8, self.sigma8_fid, self.qpar, self.qper],
                 {'k': self.k, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
-                 'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
+                 'eft_basis': self._pt.eft_basis,
                  'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
 
     @classmethod
@@ -1488,8 +1493,8 @@ class PyBirdPTSpectrum2Poles(Calculator):
         from pybird.bird import Bird
         obj = object.__new__(cls)
         pt = Bird.__new__(Bird)
-        pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol = children
-        pt.f = aux['f']
+        (pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol, pt.f,
+         obj.sigma8, obj.sigma8_fid, obj.qpar, obj.qper) = children
         pt.eft_basis = aux['eft_basis']
         pt.with_stoch = aux['with_stoch']
         pt.with_nnlo_counterterm = aux['with_nnlo']
@@ -1507,9 +1512,53 @@ class PyBirdPTSpectrum2Poles(Calculator):
         return obj
 
 
+def _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f):
+    """Convert auto spectrum-level counterterms to cross spectrum-level coefficients up to mu^4.
+
+    Here pair level means power-spectrum level: the inputs describe the XX and YY auto
+    pairs, not the XY cross pair. auto_X/Y contain (t0, t2, t4), including signs and f
+    factors, with T_X = t0 + t2 mu^2 + t4 mu^4; the common k^2 P_lin is omitted below.
+
+    First recover the field-level parameterization F_X = d0X + d2X mu^2 + d4X mu^4 by matching
+    [2 Z_X F_X]_{<=mu^4} = T_X, where Z_X = b1X + f mu^2; do the same for Y.
+    Next pair each field-level parameterization with the OTHER tracer's Z1: Z_X F_Y + Z_Y F_X.
+    Finally return its mu^0, mu^2 and mu^4 coefficients for the XY pair. Averaging
+    T_X and T_Y would instead keep each correction paired with its OWN tracer's Z1.
+
+    The inverse is defined only through mu^4, not by the full ratio T_X / (2 Z_X).
+    The generated mu^6 term is discarded before multipole projection, as in the auto model.
+    Equal tracers recover the input auto coefficients. Both b1X and b1Y must be nonzero;
+    at b1 = 0 a general spectrum-level polynomial has no such field-level inverse.
+    """
+    d0X = auto_X[0] / (2. * b1X)
+    d2X = (auto_X[1] / 2. - f * d0X) / b1X
+    d4X = (auto_X[2] / 2. - f * d2X) / b1X
+    d0Y = auto_Y[0] / (2. * b1Y)
+    d2Y = (auto_Y[1] / 2. - f * d0Y) / b1Y
+    d4Y = (auto_Y[2] / 2. - f * d2Y) / b1Y
+    return (b1Y * d0X + b1X * d0Y,
+            b1Y * d2X + b1X * d2Y + f * (d0X + d0Y),
+            b1Y * d4X + b1X * d4Y + f * (d2X + d2Y))
+
+
 class PyBirdTracerSpectrum2Poles(Calculator):
     r"""
     PyBird tracer power spectrum multipoles.
+
+    Westcoast uses b2p4/b2m4 and ce0/cemono/cequad. Eastcoast uses
+    b2t/b2g/db3g, dimensional counterterms c0/c2/c4 and dimensionless Pshot/a0/a2.
+    Its sampled db3g has a zero-centred unit-width Gaussian prior, with
+    b3g = db3g + 23/42 (b1 - 1) evaluated using the current b1.
+    Eastcoast parameterizes counterterms at spectrum level (the auto XX or YY power spectrum).
+    In cross mode, recover each field-level parameterization, pair it with the OTHER tracer's Z1,
+    then truncate at mu^4 to obtain XY spectrum-level coefficients; both b1 must be nonzero.
+    DESI uses b1/b2/dbk2/dbtd and dimensional counterterms alpha0/alpha2/alpha4.
+    Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
+    bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
+    These shifts use the current b1.
+    DESI stochastic terms are [sn0 + sn2 fsat sigv^2 k^2 mu^2] / nbar.
+    Stochastic terms are normalized by nbar and km in _bias_coefficients.
+    The PT basis is always eftoflss, independently of this tracer's prior_basis.
 
     Parameters
     ----------
@@ -1517,64 +1566,160 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     pt : PyBirdPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    eft_basis : str, default='eftoflss'
-        One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'velocileptors'``.
+    prior_basis : str, default='DESI'
+        One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'DESI'``.
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
+        DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
+        dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
+    km, kr : float or pair of floats, default=0.7, 0.25
+        Tracer scales for counterterm and stochastic normalization. A pair gives
+        one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
+    cross_sharing_mode : {'bias', 'bias+ctr'}, default='bias+ctr'
+        'bias+ctr' shares cross bias and counterterm parameters with autos.
+        'bias' shares only bias; cross counterterm parameters are independent of autos.
+        Cross stochastic parameters are never shared with autos.
+    fsat, sigv : float, default=None
+        DESI stochastic normalization; defaults are 0.1 and 5.
+        Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
-    def _auto_params(cls, eft_basis):
-        """Return default auto_params list for the given EFT basis (shared with Correlation variant)."""
-        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
-        if eft in ('eftoflss', 'velocileptors'):
+    def _auto_params(cls, prior_basis):
+        """Return default auto_params list for the given prior basis (shared with Correlation variant)."""
+        prior_basis = prior_basis or 'eftoflss'
+        if prior_basis == 'eftoflss':
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
                 Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
                 Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3'),
                 Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4'),
             ]
-        elif eft == 'westcoast':
+            counterterms = [
+                Parameter('cct', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}'),
+                Parameter('cr1', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}'),
+                Parameter('cr2', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}'),
+            ]
+            stochastic = [
+                Parameter('ce0', value=0., prior=None, fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_0'),
+                Parameter('ce1', value=0., prior=None, fixed=True,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_1'),
+                Parameter('ce2', value=0., prior=None, fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_2'),
+            ]
+        elif prior_basis == 'DESI':
+            bias = [
+                Parameter('b1', value=1.6, prior=dict(limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+                Parameter('dbk2', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_{K^2}'),
+                Parameter('dbtd', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_\mathrm{td}'),
+            ]
+            counterterms = [
+                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_0'),
+                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_2'),
+                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\alpha_4'),
+            ]
+            stochastic = [
+                Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+            ]
+        elif prior_basis == 'westcoast':
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
                 Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}'),
                 Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}'),
                 Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3'),
             ]
-        else:  # eastcoast
+            counterterms = [
+                Parameter('cct', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}'),
+                Parameter('cr1', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}'),
+                Parameter('cr2', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}'),
+            ]
+            stochastic = [
+                Parameter('ce0', value=0., prior=None, fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_0'),
+                Parameter('cemono', value=0., prior=None, fixed=True,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_{\mathrm{mono}}'),
+                Parameter('cequad', value=0., prior=None, fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\epsilon_{\mathrm{quad}}'),
+            ]
+        elif prior_basis == 'eastcoast':
+            # 2112.04515 Eq(11, 12)
             bias = [
                 Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
-                Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}'),
-                Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}'),
-                Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}'),
+                Parameter('b2t', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}'),
+                Parameter('b2g', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=R'b_{\mathcal{G}_2}'),
+                Parameter('db3g', value=0., prior=dict(dist='norm', loc=0., scale=1.),
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'\Delta b_{\Gamma_3}'),
             ]
-        return bias + [
-            Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}'),
-            Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}'),
-            Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}'),
-            Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0'),
-            Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1'),
-            Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2'),
-        ]
+            counterterms = [
+                Parameter('c0', value=0., prior=dict(dist='norm', loc=0., scale=30.), fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_0'),
+                Parameter('c2', value=0., prior=dict(dist='norm', loc=30., scale=30.), fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
+                Parameter('c4', value=0., prior=dict(dist='norm', loc=0., scale=30.), fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='c_4'),
+            ]
+            stochastic = [
+                Parameter('Pshot', value=0., prior=None, fixed=False,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex=R'P_{\mathrm{shot}}'),
+                Parameter('a0', value=0., prior=None, fixed=True, ref=dict(dist='norm', loc=0., scale=1.), latex='a_0'),
+                Parameter('a2', value=0., prior=None, fixed=False, ref=dict(dist='norm', loc=0., scale=1.), latex='a_2'),
+            ]
+        else:
+            raise ValueError(f'Unknown PyBird prior_basis: {prior_basis!r}')
+        return bias + counterterms + stochastic
+
+    @staticmethod
+    def _counterterm_names(prior_basis):
+        if prior_basis == 'DESI':
+            return ('alpha0', 'alpha2', 'alpha4')
+        if prior_basis == 'eastcoast':
+            return ('c0', 'c2', 'c4')
+        return ('cct', 'cr1', 'cr2')
+
+    @staticmethod
+    def _stochastic_names(prior_basis):
+        if prior_basis == 'DESI':
+            return ('sn0', 'sn2')
+        if prior_basis == 'westcoast':
+            return ('ce0', 'cemono', 'cequad')
+        if prior_basis == 'eastcoast':
+            return ('Pshot', 'a0', 'a2')
+        return ('ce0', 'ce1', 'ce2')
 
     @classmethod
-    def propose_params(cls, tracers=None, eft_basis='eftoflss', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='DESI', cross_sharing_mode='bias+ctr', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
         ----------
         tracers : str, (str, str), or None, default=None
-        eft_basis : str, default='eftoflss'
+        prior_basis : str, default='DESI'
 
         Returns
         -------
         VariableCollection
         """
-        return propose_params_multitracer(cls._auto_params(eft_basis), tracers, stochastic=('ce0', 'ce1', 'ce2'), cross=True)
+        if cross_sharing_mode not in ('bias', 'bias+ctr'):
+            raise ValueError(f'Unknown PyBird cross_sharing_mode: {cross_sharing_mode!r}')
+        not_shared = cls._stochastic_names(prior_basis)
+        if 'ctr' not in cross_sharing_mode:
+            # The helper's stochastic argument selects cross parameters that are not shared with autos.
+            not_shared += cls._counterterm_names(prior_basis)
+        return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=not_shared, cross=True)
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', nbar=1e-4, tracers=None, params=None, **kwargs):
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_sharing_mode=cross_sharing_mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -1582,103 +1727,211 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
-        self._eft_basis = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        self._prior_basis = prior_basis or 'eftoflss'
         if pt is None:
             pt = PyBirdPTSpectrum2Poles(**kwargs)
         self.pt = pt
-        self.pt.update(k=self.k, ells=self.ells, eft_basis=self._eft_basis)
+        self.pt.update(k=self.k, ells=self.ells)
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                      rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Non-node setup only.
+        self._cross_sharing_mode = cross_sharing_mode
         self._nbar = float(nbar)
+        self._rescaling = rescaling if self._prior_basis == 'DESI' else None
+        if self._rescaling not in (None, 'sigma8', 'AP', 'sigma8+AP'):
+            raise ValueError(f'Unknown parameter rescaling method: {rescaling!r}')
+        if self._prior_basis == 'DESI':
+            settings = get_physical_stochastic_settings()
+            self._fsat = float(fsat) if fsat is not None else settings['fsat']
+            self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        if isinstance(self.b1, tuple):
+            self.km = km if isinstance(km, tuple) else (float(km),) * 2
+            self.kr = kr if isinstance(kr, tuple) else (float(kr),) * 2
+        else:
+            self.km = float(km)
+            self.kr = float(kr)
 
-    def _build_params(self, idx=None):
-        """Bias dict for pybird, with **raw** counterterms.
+    def _rescale_params(self, b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2):
+        """Rescale DESI parameters before shifting the coevolution centres or changing basis.
 
-        pybird's ``setBias`` divides ``cct``/``cr1``/``cr2`` by ``co.km**2``/``co.kr**2``
-        (and ``ce1``/``ce2`` by ``co.km**2``) once, so we pass the raw parameters here.
+        S = sigma8(z) / sigma8_fid(z); A_AP = 1 / (qper**2 * qpar).
+        The AP factor uses the template dilation, independently of PT's with_ap.
+        Counterterms scale as 1 / (S**2 * A_AP), stochastic terms as 1 / A_AP.
+        """
+        S = self.pt.sigma8 / self.pt.sigma8_fid if self._rescaling in ('sigma8', 'sigma8+AP') else 1.
+        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._rescaling in ('AP', 'sigma8+AP') else 1.
+        b1 = b1 / (S * A_AP**0.5)
+        b2 = b2 / (S**2 * A_AP**0.5)
+        dbk2 = dbk2 / (S**2 * A_AP**0.5)
+        dbtd = dbtd / (S**4 * A_AP)
+        alpha0 = alpha0 / (A_AP * S**2)
+        alpha2 = alpha2 / (A_AP * S**2)
+        alpha4 = alpha4 / (A_AP * S**2)
+        sn0 = sn0 / A_AP
+        sn2 = sn2 / A_AP
+        return b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2
 
-        For cross-spectra, ``idx`` in ``{0, 1}`` selects tracer X or Y from the
-        tuple-valued (per-tracer) bias attributes; shared stochastic terms are scalars
-        and are returned as-is.
+    def _build_params(self, f, idx=None):
+        """Return scalar bias, counterterm and stochastic parameters for one tracer. For cross-spectra,
+        ``idx`` in ``{0, 1}`` selects tracer X or Y from the tuple-valued (per-tracer) bias attributes;
+        Cross stochastic parameters and counterterms not shared with autos are scalars, not indexed by idx.
+
+        km, kr and nbar normalization is applied in _bias_coefficients.
+        eftoflss/westcoast/DESI return field-level cct, cr1, cr2. Eastcoast returns
+        ct0, ct2, ct4 (tilde c0, c2, c4), which parameterize each tracer's AUTO spectrum-level
+        counterterm -2 [ct0 + f ct2 mu^2 + f^2 ct4 mu^4] k^2 P11. In cross mode these
+        are not yet XY coefficients when shared with autos: _bias_coefficients recovers and cross-pairs
+        the fields.
+        All bases return ce0, ce1, ce2 multiplying [1, (k/km)^2, f (k/km)^2 mu^2] / nbar.
+        DESI absorbs fsat, sigv and the pair's km product into ce2; this conversion requires f != 0.
+        Eastcoast a0 and a2 instead use fixed knl=0.45 h/Mpc; their conversion
+        compensates for the km normalization applied in _bias_coefficients.
         """
         def get(name):
             val = getattr(self, name)
             return val[idx] if (idx is not None and isinstance(val, tuple)) else val
-        eft = self._eft_basis
+        prior_basis = self._prior_basis
         b1 = get('b1')
-        if eft == 'westcoast':
+
+        if prior_basis == 'eftoflss':
+            # galaxy biases
+            b2, b3, b4 = get('b2'), get('b3'), get('b4')
+            # counterterms
+            cct, cr1, cr2 = get('cct'), get('cr1'), get('cr2')
+            # stochastic terms
+            ce0, ce1, ce2 = get('ce0'), get('ce1'), get('ce2')
+            return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
+        elif prior_basis == 'DESI':
+            b1, b2_desi, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2 = self._rescale_params(
+                b1, get('b2'), get('dbk2'), get('dbtd'),
+                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'), get('sn2'))
+            # Shift the rescaled deviations using the rescaled Eulerian b1.
+            bk2 = dbk2 - 2. / 7. * (b1 - 1.)
+            btd = dbtd + 23. / 42. * (b1 - 1.)
+            b2 = b1 + 7. / 2. * bk2
+            b3 = b1 + 15. * bk2 + 6. * btd
+            b4 = 0.5 * b2_desi - 17. / 6. * bk2
+            # EFT auto counterterms are 2 (b1 + f mu^2) (cct/km^2 + cr1/kr^2 mu^2 + cr2/kr^2 mu^4) k^2 P_lin
+            # DESI counterterms are (b1 + f mu^2) (b1 alpha0 + f alpha2 mu^2 + f alpha4 mu^4) k^2 P_lin
+            # The 1/2 factors reproduce the DESI expression; km and kr cancel in _bias_coefficients.
+            km = self.km[idx] if idx is not None else self.km
+            kr = self.kr[idx] if idx is not None else self.kr
+            cct = 0.5 * b1 * alpha0 * km**2
+            cr1 = 0.5 * f * alpha2 * kr**2
+            cr2 = 0.5 * f * alpha4 * kr**2
+            # Cancel the pair's km normalization and the EFT stochastic growth-rate factor.
+            km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
+            ce0 = sn0
+            ce1 = 0.
+            ce2 = sn2 * self._fsat * self._sigv**2 * km2 / f
+            return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
+        elif prior_basis == 'westcoast':
+            # galaxy biases
             b2 = (get('b2p4') + get('b2m4')) / 2.**0.5
             b4 = (get('b2p4') - get('b2m4')) / 2.**0.5
             b3 = get('b3')
-        elif eft == 'eastcoast':
-            b2g, b2t, b3g = get('b2g'), get('b2t'), get('b3g')
+            # counterterms
+            cct, cr1, cr2 = get('cct'), get('cr1'), get('cr2')
+            # stochastic terms: 1909.05271 Eq(35) missed the f factor
+            ce0 = get('ce0')
+            ce1 = get('cemono') - 0.5 * get('cequad')
+            ce2 = 1.5 * get('cequad') / f
+            return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
+        elif prior_basis == 'eastcoast':
+            # galaxy biases: 2208.05929 Eq(1)
+            b2g, b2t = get('b2g'), get('b2t')
+            # Sample the deviation from the relation evaluated at the current b1.
+            b3g = get('db3g') + 23. / 42. * (b1 - 1.)
             b2 = b1 + 7./2.*b2g
             b3 = b1 + 15.*b2g + 6.*b3g
             b4 = 0.5*b2t - 7./2.*b2g
+            # counterterms
+            # inversion of 2004.10607 Eq(2.23)
+            # note eftoflss basis allows k^2 * mu^6 term, so an exact mapping from eastcoast to eftoflss is not possible
+            c0, c2, c4 = get('c0'), get('c2'), get('c4')
+            ct0 = c0 - f / 3. * c2 + 3. / 35. * f**2 * c4
+            ct2 = c2 - 6. / 7. * f * c4
+            ct4 = c4
+            # stochastic terms: comparing 2003.07956 Eq(10) with 2112.04515 Eq(13)
+            # note Poisson shot noise has already been subtracted from data
+            knl = 0.45
+            # Cancel the later km normalization, using the pair's km product for cross spectra.
+            km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
+            ce0 = get('Pshot')
+            ce1 = get('a0') * km2 / knl**2
+            ce2 = get('a2') * km2 / (f * knl**2)
+            return dict(b1=b1, b2=b2, b3=b3, b4=b4, ct0=ct0, ct2=ct2, ct4=ct4, ce0=ce0, ce1=ce1, ce2=ce2)
         else:
-            b2, b3, b4 = get('b2'), get('b3'), get('b4')
-        if eft in ('eftoflss', 'velocileptors', 'westcoast'):
-            return {'b1': b1, 'b2': b2, 'b3': b3, 'b4': b4,
-                    'cct': get('cct'), 'cr1': get('cr1'), 'cr2': get('cr2'),
-                    'ce0': get('ce0'), 'ce1': get('ce1'), 'ce2': get('ce2')}
-        return {'b1': b1, 'b2': b2, 'b3': b3, 'b4': b4,
-                'c0': get('cct'), 'c2': get('cr1'), 'c4': get('cr2'),
-                'ce0': get('ce0'), 'ce1': get('ce1'), 'ce2': get('ce2')}
+            raise ValueError(f'Unknown PyBird prior_basis: {prior_basis!r}')
 
-    def _fullps_cross(self, bird, biasX, biasY):
-        r"""Cross power-spectrum multipoles for two tracers X, Y.
-
-        Follows https://arxiv.org/abs/2308.06206 eq.(13): the shared matter loop
-        tables (``bird.P11l``/``Ploopl``/``Pctl``/``Pstl``) are contracted with
-        symmetric (X<->Y) bias vectors that reduce to the auto vectors when X == Y.
-        Counterterms are divided by ``km**2``/``kr**2`` here (single division, as in
-        :meth:`_build_params` the values are raw); stochastic terms are shared.
-        """
-        f = bird.f
-        b1X, b2X, b3X, b4X = (biasX[f'b{i:d}'] for i in (1, 2, 3, 4))
-        b1Y, b2Y, b3Y, b4Y = (biasY[f'b{i:d}'] for i in (1, 2, 3, 4))
-        kmX, kmY = self.pt.km
-        krX, krY = self.pt.kr
-        if bird.eft_basis in ('eftoflss', 'westcoast'):
-            b5X, b6X, b7X = (biasX[n] / ks**2 for n, ks in zip(('cct', 'cr1', 'cr2'), (kmX, krX, krX)))
-            b5Y, b6Y, b7Y = (biasY[n] / ks**2 for n, ks in zip(('cct', 'cr1', 'cr2'), (kmY, krY, krY)))
-            bct = jnp.array([b1X * b5Y + b1Y * b5X, b1Y * b6X + b1X * b6Y, b1Y * b7X + b1X * b7Y,
-                             (b5X + b5Y) * f, (b6X + b6Y) * f, (b7X + b7Y) * f])
-        else:  # eastcoast (inversion of eq. 2.23 of arXiv:2004.10607)
-            ct0X = biasX['c0'] - f / 3. * biasX['c2'] + 3. / 35. * f**2 * biasX['c4']
-            ct2X = biasX['c2'] - 6. / 7. * f * biasX['c4']
-            ct4X = biasX['c4']
-            ct0Y = biasY['c0'] - f / 3. * biasY['c2'] + 3. / 35. * f**2 * biasY['c4']
-            ct2Y = biasY['c2'] - 6. / 7. * f * biasY['c4']
-            ct4Y = biasY['c4']
-            bct = -jnp.array([ct0X + ct0Y, f * (ct2X + ct2Y), f**2 * (ct4X + ct4Y)])
-        if bird.with_nnlo_counterterm:
-            raise NotImplementedError('PyBird cross-power spectrum with nnlo counterterm is not implemented.')
+    def _bias_coefficients(self, f):
+        """Coefficients in fixed eftoflss table order; auto uses equal X and Y biases."""
+        if isinstance(self.b1, tuple):
+            biasX, biasY = self._build_params(f, idx=0), self._build_params(f, idx=1)
+            kmX, kmY = self.km
+            krX, krY = self.kr
+        else:
+            biasX = biasY = self._build_params(f)
+            kmX = kmY = self.km
+            krX = krY = self.kr
+        b1X, b2X, b3X, b4X = (biasX[f'b{i}'] for i in (1, 2, 3, 4))
+        b1Y, b2Y, b3Y, b4Y = (biasY[f'b{i}'] for i in (1, 2, 3, 4))
         b11 = jnp.array([b1X * b1Y, (b1X + b1Y) * f, f**2])
-        bloop = jnp.array([1., 0.5 * (b1X + b1Y), 0.5 * (b2X + b2Y), 0.5 * (b3X + b3Y), 0.5 * (b4X + b4Y),
-                           b1X * b1Y, 0.5 * (b1X * b2Y + b1Y * b2X), 0.5 * (b1X * b3Y + b1Y * b3X),
-                           0.5 * (b1X * b4Y + b1Y * b4X), b2X * b2Y, 0.5 * (b2X * b4Y + b2Y * b4X), b4X * b4Y])
-        Ps0 = jnp.einsum('b,lbx->lx', b11, bird.P11l)
-        Ps1 = jnp.einsum('b,lbx->lx', bloop, bird.Ploopl) + jnp.einsum('b,lbx->lx', bct, bird.Pctl)
+        bloop = jnp.array([
+            1., 0.5 * (b1X + b1Y), 0.5 * (b2X + b2Y), 0.5 * (b3X + b3Y), 0.5 * (b4X + b4Y),
+            b1X * b1Y, 0.5 * (b1X * b2Y + b1Y * b2X), 0.5 * (b1X * b3Y + b1Y * b3X),
+            0.5 * (b1X * b4Y + b1Y * b4X), b2X * b2Y, 0.5 * (b2X * b4Y + b2Y * b4X), b4X * b4Y])
+        # The fixed eftoflss PT table has six counterterm columns, with angular factors
+        # [1, mu^2, mu^4, mu^2, mu^4, mu^6] multiplying k^2 P11 before projection.
+        # For auto spectra these arise from expanding 2 (b1 + f mu^2) times the
+        # three normalized counterterms; six coefficients do not mean six free parameters.
+        # Eastcoast uses only the first three columns, so its remaining coefficients are zero.
+        if self._prior_basis == 'eastcoast':
+            ct0X, ct2X, ct4X = biasX['ct0'], biasX['ct2'], biasX['ct4']
+            ct0Y, ct2Y, ct4Y = biasY['ct0'], biasY['ct2'], biasY['ct4']
+            if isinstance(self.b1, tuple) and 'ctr' in self._cross_sharing_mode:
+                # Eastcoast parameterizes counterterm at spectrum level:
+                # -2 (ct0 + f ct2 mu^2 + f^2 ct4 mu^4).
+                # Simply averaging two eastcoast counterterm parameters in the cross mode is incorrect.
+                # The following recovers the field level parameter, pair it with the OTHER tracer's Z1,
+                # then truncate at mu^4 as in the auto model.
+                auto_X = (-2. * ct0X, -2. * f * ct2X, -2. * f**2 * ct4X)
+                auto_Y = (-2. * ct0Y, -2. * f * ct2Y, -2. * f**2 * ct4Y)
+                ct0, ct2, ct4 = _cross_counterterms_mu4(auto_X, auto_Y, b1X, b1Y, f)
+                bct = jnp.array([ct0, ct2, ct4, 0., 0., 0.])
+            else:
+                # Auto or independent cross spectrum-level coefficients: no field inversion or b1 division.
+                bct = -2. * jnp.array([ct0X, f * ct2X, f**2 * ct4X, 0., 0., 0.])
+        else:
+            cctX, cr1X, cr2X = biasX['cct'], biasX['cr1'], biasX['cr2']
+            cctY, cr1Y, cr2Y = biasY['cct'], biasY['cr1'], biasY['cr2']
+            cctX, cr1X, cr2X = cctX / kmX**2, cr1X / krX**2, cr2X / krX**2
+            cctY, cr1Y, cr2Y = cctY / kmY**2, cr1Y / krY**2, cr2Y / krY**2
+            # Each field counterterm pairs with the OTHER tracer's linear bias.
+            bct = jnp.array([b1Y * cctX + b1X * cctY, b1Y * cr1X + b1X * cr1Y,
+                             b1Y * cr2X + b1X * cr2Y, f * (cctX + cctY),
+                             f * (cr1X + cr1Y), f * (cr2X + cr2Y)])
+        km2 = kmX * kmY
+        bst = jnp.array([biasX['ce0'], biasX['ce1'] / km2, f * biasX['ce2'] / km2]) / self._nbar
+        return b11, bloop, bct, bst
+
+    def _contract(self, prefix):
+        # PT has no public table accessor; Bird holds the dynamic PyTree arrays.
+        bird = self.pt._pt
+        b11, bloop, bct, bst = self._bias_coefficients(bird.f)
+        poles = (jnp.einsum('b,lbx->lx', b11, getattr(bird, prefix + '11l'))
+                 + jnp.einsum('b,lbx->lx', bloop, getattr(bird, prefix + 'loopl'))
+                 + jnp.einsum('b,lbx->lx', bct, getattr(bird, prefix + 'ctl')))
         if bird.with_stoch:
-            # Match pybird's setBias: stochastic terms divided by co.nd (the number density).
-            bst = jnp.array([biasX['ce0'], biasX['ce1'] / (kmX * kmY), biasX['ce2'] / (kmX * kmY)]) / bird.co.nd
-            Ps1 = Ps1 + jnp.einsum('b,lbx->lx', bst, bird.Pstl)
-        return jnp.nan_to_num(Ps0 + Ps1, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
+            poles = poles + jnp.einsum('b,lbx->lx', bst, getattr(bird, prefix + 'stl'))
+        return jnp.nan_to_num(poles, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
 
     def __call__(self):
-        bird = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
-        if isinstance(self.b1, tuple):  # cross-spectrum of two tracers
-            self.poles = self._fullps_cross(bird, self._build_params(0), self._build_params(1))
-        else:
-            self._pt = bird
-            bird.co.nbar = self._nbar
-            with _pybird_jax():
-                bird.setreducePslb(self._build_params(), what='full')
-            self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
+        self.poles = self._contract('P')
         return self.poles
 
     def tree_flatten(self):
@@ -1695,12 +1948,15 @@ class PyBirdPTCorrelation2Poles(Calculator):
     r"""
     PyBird matter correlation function multipoles (non-JAX).
 
+    PT always uses eftoflss basis with fixed km=0.7 and kr=0.25.
+    Configure tracer-specific km and kr on PyBirdTracerCorrelation2Poles.
+
     Parameters
     ----------
     s : array, default=None
     template : DirectSpectrum2Template, default=None
     ells : tuple of int, default=(0, 2, 4)
-    km, kr, accboost, fftaccboost, fftbias, with_nnlo_counterterm, with_stoch, with_resum, with_ap, eft_basis : same as PyBirdPTSpectrum2Poles.
+    accboost, fftaccboost, fftbias, with_stoch, with_resum, with_ap, LambdaIR : same as PyBirdPTSpectrum2Poles.
     """
 
     _is_external = True
@@ -1709,9 +1965,9 @@ class PyBirdPTCorrelation2Poles(Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/pierrexyz/pybird')
 
-    def __init__(self, s=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                 accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
-                 with_stoch=False, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
+    def __init__(self, s=None, template=None, ells=(0, 2, 4),
+                 accboost=1, fftaccboost=2, fftbias=-1.6,
+                 with_stoch=False, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if s is None:
             s = np.linspace(20., 200., 181)
@@ -1720,52 +1976,43 @@ class PyBirdPTCorrelation2Poles(Calculator):
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
-        if with_nnlo_counterterm:
-            self.template.update(with_now='peakaverage')
 
-    def __post_init__(self, s=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
-                      accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
-                      with_stoch=False, with_resum='full', with_ap=True, eft_basis='eftoflss', **kwargs):
+    def __post_init__(self, s=None, template=None, ells=(0, 2, 4),
+                      accboost=1, fftaccboost=2, fftbias=-1.6,
+                      with_stoch=False, with_resum='full', with_ap=True, LambdaIR=None, **kwargs):
         # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
         self._with_stoch = bool(with_stoch)
-        self._with_nnlo = bool(with_nnlo_counterterm)
+        self._with_nnlo = False
         self._with_resum = with_resum
         self._with_ap = bool(with_ap)
-        self.km = tuple(km) if hasattr(km, '__len__') else (float(km),) * 2
-        self.kr = tuple(kr) if hasattr(kr, '__len__') else (float(kr),) * 2
+        # Fixed PT metadata; tracer-specific scales only enter the bias coefficients.
+        self.km = 0.7
+        self.kr = 0.25
         from pybird.common import Common
         from pybird.nonlinear import NonLinear
         from pybird.resum import Resum
         from pybird.projection import Projection
-        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
         # Nl=3, whatever was asked for: pybird's IR resummation in configuration space
         # (`Resum.Ps2Cf`) contracts a damping window hardcoded to the three multipoles
         # (0, 2, 4) against co.Nl, so it only runs at Nl = 3 -- pybird's own default of 2
         # included.  Compute all three and keep the ones wanted, in the tracer below.
-        self._co = Common(Nl=3, kmin=1e-3, kmax=0.25, km=min(self.km), kr=min(self.kr), nd=1e-4,
-                          eft_basis=eft, halohalo=True, with_cf=True, with_time=True,
+        self._co = Common(Nl=3, kmin=1e-3, kmax=0.25, km=self.km, kr=self.kr, nd=1e-4,
+                          eft_basis='eftoflss', halohalo=True, with_cf=True, with_time=True,
                           accboost=float(accboost), optiresum=(with_resum == 'opti'),
                           with_uvmatch=False, exact_time=False, quintessence=False,
                           with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self._nonlinear = NonLinear(load_matrix=False, save_matrix=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
-        self._resum = Resum(co=self._co)
-        self._nnlo = None
-        if with_nnlo_counterterm:
-            from pybird.nnlo import NNLO_counterterm
-            self._nnlo = NNLO_counterterm(co=self._co)
+        if LambdaIR is None:
+            LambdaIR = 0.1 if with_resum == 'full' else 1.0
+        self._resum = Resum(LambdaIR=LambdaIR, NFFT=192, co=self._co)
         self._projection = Projection(self.s, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
 
     def __call__(self):
         from pybird.bird import Bird
-        from scipy.interpolate import interp1d as _interp1d
         cosmo = {'kk': np.asarray(self.template.k), 'pk_lin': np.asarray(self.template.pk_dd),
                  'pk_lin_2': None, 'f': float(self.template.f), 'DA': 1., 'H': 1.}
         self._pt = Bird(cosmo, with_bias=False, eft_basis=self._co.eft_basis, with_stoch=self._with_stoch,
-                        with_nnlo_counterterm=self._nnlo is not None, co=self._co)
-        if self._nnlo is not None:
-            self._nnlo.Cf(self._pt, _interp1d(np.log(np.asarray(self.template.k)),
-                                               np.log(np.clip(np.asarray(self.template.pknow_dd), 1e-30, None)),
-                                               fill_value='extrapolate', assume_sorted=True))
+                        with_nnlo_counterterm=False, co=self._co)
         self._nonlinear.PsCf(self._pt)
         self._pt.setPsCfl()
         if self._with_resum:
@@ -1773,6 +2020,10 @@ class PyBirdPTCorrelation2Poles(Calculator):
         if self._with_ap:
             self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
         self._projection.xdata(self._pt)
+        self.sigma8 = self.template.sigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
 
     def tree_flatten(self):
         # Expose both Cf and Ps loop arrays: setreduceCflb ends with a call to
@@ -1790,7 +2041,8 @@ class PyBirdPTCorrelation2Poles(Calculator):
         _zp = jnp.zeros((self._co.Nl, 1, P11l.shape[-1]))
         Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _zp
         Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _zp
-        return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol],
+        return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol,
+                 self.sigma8, self.sigma8_fid, self.qpar, self.qper],
                 {'s': self.s, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
                  'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
                  'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
@@ -1801,7 +2053,8 @@ class PyBirdPTCorrelation2Poles(Calculator):
         obj = object.__new__(cls)
         pt = Bird.__new__(Bird)
         (pt.C11l, pt.Cloopl, pt.Cctl, pt.Cstl, pt.Cnnlol,
-         pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol) = children
+         pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol,
+         obj.sigma8, obj.sigma8_fid, obj.qpar, obj.qper) = children
         pt.f = aux['f']
         pt.eft_basis = aux['eft_basis']
         pt.with_stoch = aux['with_stoch']
@@ -1830,13 +2083,25 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     pt : PyBirdPTCorrelation2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    eft_basis : str, default='eftoflss'
+    prior_basis : str, default='DESI'
+        Same choices and parameter conventions as PyBirdTracerSpectrum2Poles.
+    rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
+        DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
+        dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
+    km, kr : float or pair of floats, default=0.7, 0.25
+        Tracer scales for counterterm and stochastic normalization. A pair gives
+        one scale per tracer in a cross spectrum; eastcoast counterterms are dimensional.
+    fsat, sigv : float, default=None
+        DESI stochastic normalization; defaults are 0.1 and 5 Mpc/h, as in FOLPS physical.
+        Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, eft_basis='eftoflss'):
+    def propose_params(cls, tracers=None, prior_basis='DESI'):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Cross-correlations are not supported for the correlation function; use a single tracer name.
@@ -1844,18 +2109,20 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         Parameters
         ----------
         tracers : str or None, default=None
-        eft_basis : str, default='eftoflss'
+        prior_basis : str, default='DESI'
 
         Returns
         -------
         VariableCollection
         """
-        return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(eft_basis),
-                                           tracers, stochastic=('ce0', 'ce1', 'ce2'))  # no cross
+        return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(prior_basis),
+                                           tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(prior_basis))  # no cross
 
-    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', nbar=1e-4, tracers=None, params=None, **kwargs):
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 rescaling='sigma8+AP', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
@@ -1863,27 +2130,37 @@ class PyBirdTracerCorrelation2Poles(Calculator):
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
         self.ells = tuple(ells)
-        self._eft_basis = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        self._prior_basis = prior_basis if prior_basis is not None else 'eftoflss'
         if pt is None:
             pt = PyBirdPTCorrelation2Poles(**kwargs)
         self.pt = pt
-        self.pt.update(s=self.s, ells=self.ells, eft_basis=self._eft_basis)
+        self.pt.update(s=self.s, ells=self.ells)
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling='sigma8+AP', **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
+        self._rescaling = rescaling if self._prior_basis == 'DESI' else None
+        if self._rescaling not in (None, 'sigma8', 'AP', 'sigma8+AP'):
+            raise ValueError(f'Unknown parameter rescaling method: {rescaling!r}')
+        if self._prior_basis == 'DESI':
+            settings = get_physical_stochastic_settings()
+            self._fsat = float(fsat) if fsat is not None else settings['fsat']
+            self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        self.km = float(km)
+        self.kr = float(kr)
 
+    _stochastic_names = staticmethod(PyBirdTracerSpectrum2Poles._stochastic_names)
+    _rescale_params = PyBirdTracerSpectrum2Poles._rescale_params
     _build_params = PyBirdTracerSpectrum2Poles._build_params
+    _bias_coefficients = PyBirdTracerSpectrum2Poles._bias_coefficients
+    _contract = PyBirdTracerSpectrum2Poles._contract
 
     def __call__(self):
-        self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
-        self._pt.co.nbar = self._nbar
-        with _pybird_jax():
-            self._pt.setreduceCflb(self._build_params(), what='full')
         # pybird always computed (0, 2, 4) here -- see the Nl=3 note in PyBirdPTCorrelation2Poles.
-        self.poles = self._pt.fullCf[:len(self.ells)]
+        self.poles = self._contract('C')[:len(self.ells)]
         return self.poles
 
     def tree_flatten(self):
@@ -2107,11 +2384,16 @@ class FOLPSPTSpectrum2Poles(Calculator):
         return FOLPSDEmulator
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
-                                           redshift_smearing=None):
+                                           redshift_smearing=None, *, pars_b=None, cross_nuisance=None,
+                                           cross_damping_mode='single'):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
         emulated) — no access to ``self.template``.
+        ``pars_b`` selects a cross spectrum; both tracer vectors use ``bias_scheme``.
+        ``cross_nuisance`` contains the already-combined Folps spectrum-level coefficients,
+        stochastic normalization and single pair FoG parameter. In 'geometric' mode,
+        FoG parameters are read from the two tracer vectors instead.
 
         ``redshift_smearing`` is a callable returning the single-field characteristic function
         D(k mu) of the line-of-sight displacement; P(k, mu) is damped by its **square**, since
@@ -2128,7 +2410,15 @@ class FOLPSPTSpectrum2Poles(Calculator):
         _folps_module.use_TNS_model_status = self._remove_DeltaP
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS)
+        cross_options = {}
+        if pars_b is not None:
+            if redshift_smearing is not None:
+                raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
+            pars_b = folps_rsdmps.set_bias_scheme(pars=pars_b, bias_scheme=bias_scheme)
+            # cross_nuisance is already in Folps' spectrum-level convention; only convert the two bias vectors.
+            cross_options = dict(pars_b=pars_b, cross_nuisance=cross_nuisance,
+                                 cross_damping_mode=cross_damping_mode)
+        pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS, **cross_options)
         if redshift_smearing is not None:
             # observed (pre-AP) k, mu: the displacement is dv / (aH)_fid, in the fiducial frame
             # the catalogue was built in, not in the AP-distorted frame kap, muap.
@@ -2351,6 +2641,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     Parameters
     ----------
+    tracers : str, (str, str), or None, default=None
+        Passing a pair uses the cross spectrum model. Cross redshift smearing is not supported yet.
     k : array, default=None
     pt : FOLPSPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
@@ -2373,6 +2665,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``get_physical_stochastic_settings()['sigv']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
+        Cross spectra use one explicit spectrum-level nbar, fsat and sigv.
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
 
@@ -2382,6 +2675,11 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``1/mu``. At the default the residual is a few :math:`10^{-4}` of :math:`P_0`.
     damping : str, default='lor'
         Damping kernel for the Finger-of-God effect: 'exp', 'lor' or 'vdg'.
+    cross_sharing_mode : str, default='bias+ctr'
+        ``'bias'`` shares cross bias parameters with autos; cross counterterms and X_FoG are not shared.
+        ``'bias+ctr'`` also shares counterterms with autos; cross X_FoG is not shared.
+        ``'bias+ctr+damping'`` additionally shares each tracer's auto X_FoG,
+        with geometric cross damping sqrt(W_A * W_B). Cross stochastic parameters are never shared with autos.
     redshift_smearing : callable or None, default=None
         Damping from residual redshift errors: the jax-traceable single-field characteristic
         function :math:`D(k\mu)`, wrapped in a :class:`RedshiftSmearing` (see there for the
@@ -2419,7 +2717,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     """
 
     @classmethod
-    def propose_params(cls, tracers=None, prior_basis='physical_aap', **kwargs):
+    def propose_params(cls, tracers=None, prior_basis='physical_aap', cross_sharing_mode='bias+ctr', **kwargs):
         """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
@@ -2427,13 +2725,20 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         tracers : str, (str, str), or None, default=None
         prior_basis : str, default='physical_aap'
             One of ``'standard'``, ``'physical'``, ``'physical_aap'``, ``'tcm_chudaykin_aap'``.
+        cross_sharing_mode : str, default='bias+ctr'
+            ``'bias'`` shares biases only; ``'bias+ctr'`` also shares counterterms.
+            ``'bias+ctr+damping'`` additionally shares each tracer's X_FoG and uses geometric damping.
 
         Returns
         -------
         VariableCollection
         """
+        if 'cross_damping_mode' in kwargs:
+            raise TypeError('Use cross_sharing_mode instead of the removed cross_damping_mode tracer option')
         if prior_basis not in _FOLPS_PRIOR_BASES:
             raise ValueError(f"Unknown prior_basis={prior_basis!r}; valid: {list(_FOLPS_PRIOR_BASES)}.")
+        if cross_sharing_mode not in ('bias', 'bias+ctr', 'bias+ctr+damping'):
+            raise ValueError(f'Unknown FOLPS cross_sharing_mode: {cross_sharing_mode!r}')
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
@@ -2465,17 +2770,28 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
             ]
-        return propose_params_multitracer(auto_params, tracers)
+        not_shared = ('sn0', 'sn2')
+        if 'damping' not in cross_sharing_mode:
+            not_shared += ('X_FoG',)
+        if 'ctr' not in cross_sharing_mode:
+            # The helper's stochastic argument selects cross parameters that are not shared with autos.
+            not_shared += ('alpha0', 'alpha2', 'alpha4', 'ct')
+        return propose_params_multitracer(auto_params, tracers, stochastic=not_shared, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                  fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None,
+                 use_GTNS=None, redshift_smearing=None, tracers=None, params=None, cross_sharing_mode='bias+ctr',
                  **kwargs):
+        # Reject the removed option rather than silently forwarding it to PT through **kwargs.
+        if 'cross_damping_mode' in kwargs:
+            raise TypeError('Use cross_sharing_mode instead of the removed cross_damping_mode tracer option')
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_sharing_mode=cross_sharing_mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
+        if isinstance(self.b1, tuple) and redshift_smearing is not None:
+            raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
         self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -2490,11 +2806,13 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
                       fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
-                      use_GTNS=None, redshift_smearing=None, tracers=None,
+                      use_GTNS=None, redshift_smearing=None, tracers=None, cross_sharing_mode='bias+ctr',
                       **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
         self._damping = str(damping)
+        self._cross_sharing_mode = cross_sharing_mode
+        self._cross_damping_mode = 'geometric' if 'damping' in cross_sharing_mode else 'single'
         if damping_method in ('tree', 'tree-gtns'):
             raise ValueError(f"damping_method={damping_method!r} is deprecated; use 'tree+loop+ctr' (GTNS removed)")
         if damping_method not in (None, 'loop+ctr', 'tree+loop', 'tree+loop+ctr', 'tree+loop+ctr+sn', 'all'):
@@ -2511,7 +2829,22 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
-    def __call__(self):
+    def _build_params(self, idx=None):
+        """Convert parameters for one tracer to the Folps parameter vector.
+
+        In every basis, the returned alpha0/alpha2/alpha4 are spectrum-level coefficients
+        of (alpha0 + alpha2 mu^2 + alpha4 mu^4) k^2 P_lin. Physical-basis field inputs
+        are combined with that tracer's own Z1 here; standard/class-PT inputs already
+        use a spectrum-level parameterization. For auto spectra or cross counterterms
+        shared with autos, these are auto coefficients. _cross_nuisance constructs the XY coefficients.
+        """
+
+        def get(name):
+            param = getattr(self, name)
+            if isinstance(param, tuple):
+                param = param[idx]
+            return param.value
+
         sigma8 = self.pt.sigma8
         fsigma8 = self.pt.fsigma8
         f = fsigma8 / sigma8
@@ -2523,48 +2856,110 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
         bias_scheme = 'folps'
         if self._prior_basis == 'standard':
-            b1, b2, bs, b3 = self.b1.value, self.b2.value, self.bs.value, self.b3.value
-            alpha0, alpha2, alpha4, ct = self.alpha0.value, self.alpha2.value, self.alpha4.value, self.ct.value
-            sn0, sn2, X_FoG = self.sn0.value, self.sn2.value, self.X_FoG.value
+            b1, b2, bs, b3 = get('b1'), get('b2'), get('bs'), get('b3')
+            alpha0, alpha2, alpha4, ct = get('alpha0'), get('alpha2'), get('alpha4'), get('ct')
+            sn0, sn2, X_FoG = get('sn0'), get('sn2'), get('X_FoG')
             pars = [b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG]
 
         elif self._prior_basis in ['physical', 'physical_aap']:  # physical basis with AP rescaling
             if 'aap' not in self._prior_basis: A_AP = 1.
-            b1L = self.b1.value / (A * A_AP**0.5) - 1.
-            b2L = self.b2.value / (A**2 * A_AP**0.5)
+            b1L = get('b1') / (A * A_AP**0.5) - 1.
+            b2L = get('b2') / (A**2 * A_AP**0.5)
             b1E = 1. + b1L
             b2E = b2L
-            bK2 = self.bs.value / (A**2 * A_AP**0.5) - 2. / 7. * b1L
-            btd = self.b3.value / (A**4 * A_AP) + 23. / 42. * b1L
+            bK2 = get('bs') / (A**2 * A_AP**0.5) - 2. / 7. * b1L
+            btd = get('b3') / (A**4 * A_AP) + 23. / 42. * b1L
             bsE = 2. * bK2
             b3E = 64. / 105. * (-5. / 4. * bsE - btd)
-            a0t, a2t, a4t = self.alpha0.value / (A**2 * A_AP), self.alpha2.value / (A**2 * A_AP), self.alpha4.value / (A**2 * A_AP)
+            a0t, a2t, a4t = get('alpha0') / (A**2 * A_AP), get('alpha2') / (A**2 * A_AP), get('alpha4') / (A**2 * A_AP)
             alpha0 = b1E**2 * a0t
             alpha2 = b1E * f * (a0t + a2t)
             alpha4 = f**2 * a2t + b1E * f * a4t
-            sn0 = self.sn0.value / A_AP / self._nbar
-            sn2 = self.sn2.value / A_AP / self._nbar * self._fsat * self._sigv**2
-            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct.value,
-                               sn0, sn2, 1., self.X_FoG.value]
+            sn0 = get('sn0') / A_AP / self._nbar
+            sn2 = get('sn2') / A_AP / self._nbar * self._fsat * self._sigv**2
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, get('ct'),
+                               sn0, sn2, 1., get('X_FoG')]
 
         else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis
             bias_scheme = 'classpt'
-            b1L = self.b1.value / A - 1.
-            b2L = self.b2.value / A**2
-            bsL = self.bs.value / A**2
-            b3 = self.b3.value / A
-            c0, c2, c4 = self.alpha0.value / (A**2 * A_AP), self.alpha2.value / (A**2 * A_AP), self.alpha4.value / (A**2 * A_AP)
+            b1L = get('b1') / A - 1.
+            b2L = get('b2') / A**2
+            bsL = get('bs') / A**2
+            b3 = get('b3') / A
+            c0, c2, c4 = get('alpha0') / (A**2 * A_AP), get('alpha2') / (A**2 * A_AP), get('alpha4') / (A**2 * A_AP)
             ct0 = -2. / 105. * (105. * c0 - 35. * c2 * f + 9. * c4 * f**2)
             ct2 = -2. / 7. * f * (7. * c2 - 6. * f * c4)
             ct4 = -2. * f**2 * c4
-            sn0 = self.sn0.value / self._nbar
-            sn2 = self.sn2.value / self._nbar * self._fsat * self._sigv**2
+            sn0 = get('sn0') / self._nbar
+            sn2 = get('sn2') / self._nbar * self._fsat * self._sigv**2
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
-                               sn0, sn2, 1., self.X_FoG.value]
+                               sn0, sn2, 1., get('X_FoG')]
 
+        return pars, bias_scheme
+
+    def _cross_nuisance(self, pars_a, pars_b):
+        """Build Folps' cross spectrum-level counterterms from per-tracer field-level parameterizations.
+
+        Physical-basis field inputs are read directly from the tracer parameters;
+        standard/class-PT field-level parameterizations are recovered from the auto vectors.
+        Shared counterterms cross-pair the fields and retain only mu^0, mu^2 and mu^4.
+        Independent physical counterterms use the same field inputs on both legs; independent
+        standard/class-PT counterterms directly specify XY power and bypass the field inversion.
+        Append the XY stochastic terms and the pair FoG slot (unused in geometric mode).
+        """
+        # NOTE: average the higher order counterterm here, may be incorrect
+        ct = (pars_a[7] + pars_b[7]) / 2.
+        if self._prior_basis in ('physical', 'physical_aap'):
+            A = self.pt.sigma8 / self.pt.sigma8_fid
+            A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.
+            norm = A**2 * A_AP
+            def get_values(params, norm):
+                params = params if isinstance(params, tuple) else (params,) * 2
+                return tuple(param.value / norm for param in params)
+
+            a0a, a0b = get_values(self.alpha0, norm)
+            a2a, a2b = get_values(self.alpha2, norm)
+            a4a, a4b = get_values(self.alpha4, norm)
+            b1a, b1b = pars_a[0], pars_b[0]
+            f = self.pt.fsigma8 / self.pt.sigma8
+            # Physical inputs directly specify the field-level parameterization F_X = C_X / 2,
+            # with C_X = b1_X a0_X + f a2_X mu^2 + f a4_X mu^4. Cross-pair as
+            # Z1_A F_B + Z1_B F_A = 1/2 [Z1_A C_B + Z1_B C_A], then truncate at mu^4.
+            # Read the field inputs directly, not the already-combined auto coefficients
+            # in pars_a/b; unlike the inverse below, this does not require division by b1.
+            alpha0 = b1a * b1b * (a0a + a0b) / 2.
+            alpha2 = f * (b1a * a2b + b1b * a2a + b1a * a0a + b1b * a0b) / 2.
+            alpha4 = (f**2 * (a2a + a2b) + f * (b1a * a4b + b1b * a4a)) / 2.
+        elif 'ctr' not in self._cross_sharing_mode:
+            # Independent standard/class-PT parameters already describe XY power after basis conversion.
+            # Do not reinterpret them as two auto spectra or invert their field-level parameterizations.
+            alpha0, alpha2, alpha4 = pars_a[4:7]
+        else:
+            # Standard/class-PT parameterize counterterms at auto spectrum level (AA and BB).
+            # pars_a/b already contain the signs, f factors and parameter rescaling.
+            # Recover each field-level parameterization through mu^4, pair it with the OTHER tracer's
+            # Z1, then truncate at mu^4 to obtain the AB spectrum-level coefficients.
+            # Simply averaging the two auto coefficients does not perform this cross pairing.
+            # The inverse uses the rescaled Eulerian b1 in each vector, not the sampled b1.
+            f = self.pt.fsigma8 / self.pt.sigma8
+            alpha0, alpha2, alpha4 = _cross_counterterms_mu4(pars_a[4:7], pars_b[4:7], pars_a[0], pars_b[0], f)
+        # Both vectors contain the same pair sn0, sn2 and 1/nbar. Geometric damping
+        # reads X_FoG from each tracer vector; Folps ignores the pair FoG slot in that mode.
+        X_FoG = pars_a[-1] if self._cross_damping_mode == 'single' else 0.
+        return [alpha0, alpha2, alpha4, ct, *pars_a[8:11], X_FoG]
+
+    def __call__(self):
+        cross_options = {}
+        if isinstance(self.b1, tuple):
+            pars, bias_scheme = self._build_params(idx=0)
+            pars_b, _ = self._build_params(idx=1)
+            cross_options = dict(pars_b=pars_b, cross_nuisance=self._cross_nuisance(pars, pars_b),
+                                 cross_damping_mode=self._cross_damping_mode)
+        else:
+            pars, bias_scheme = self._build_params()
         redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
-                                                                redshift_smearing=redshift_smearing)
+                                                                redshift_smearing=redshift_smearing, **cross_options)
         return self.poles
 
 
@@ -2594,6 +2989,8 @@ class FOLPSTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='physical_aap'
         See :class:`FOLPSTracerSpectrum2Poles`.
+    cross_sharing_mode : str, default='bias+ctr'
+        Forwarded to :class:`FOLPSTracerSpectrum2Poles`; supports the same three sharing modes.
     fsat, sigv, nbar : forwarded to :class:`FOLPSTracerSpectrum2Poles`.
     """
 
@@ -5743,19 +6140,27 @@ class FOLPSDEmulator(_ScaledEmulator):
                   for name in self._nuisance_names]
         order = self._nuisance_names
 
-        def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, **kwargs):
+        def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, *, pars_b=None,
+                                               cross_nuisance=None, **kwargs):
             folpsv2 = _import_folps()
-            pars = list(folpsv2.RSDMultipolesPowerSpectrumCalculator(
-                model='FOLPSD').set_bias_scheme(pars=pars, bias_scheme=bias_scheme))
-            if len(pars) != len(order):
-                raise ValueError(
-                    f'folps returned {len(pars)} nuisance parameters, expected {len(order)} '
-                    f'{order}. The s-powers are matched to that ordering; applying them to a '
-                    f'different one would rescale the wrong terms silently.')
+            calculator = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
             scale = self.emulator_params[h_name].value / h_fid
-            pars = [par / scale**power if power else par for par, power in zip(pars, powers)]
+            vectors = [pars] if pars_b is None else [pars, pars_b]
+            converted = []
+            for vector in vectors:
+                vector = list(calculator.set_bias_scheme(pars=vector, bias_scheme=bias_scheme))
+                if len(vector) != len(order):
+                    raise ValueError(f'folps returned {len(vector)} nuisance parameters, expected {len(order)} {order}')
+                converted.append([par / scale**power if power else par for par, power in zip(vector, powers)])
+            cross_options = {}
+            if pars_b is not None:
+                # Pair nuisance is already in Folps convention; its 8 entries omit the four biases.
+                if len(cross_nuisance) != 8:
+                    raise ValueError('cross_nuisance must contain 8 Folps parameters')
+                pair = [par / scale**power if power else par for par, power in zip(cross_nuisance, powers[4:])]
+                cross_options = dict(pars_b=converted[1], cross_nuisance=pair)
             return FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles(
-                self, pars, 'folps', damping, **kwargs)
+                self, converted[0], 'folps', damping, **cross_options, **kwargs)
 
         return {'combine_bias_terms_spectrum2_poles': combine_bias_terms_spectrum2_poles}
 

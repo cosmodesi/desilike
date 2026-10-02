@@ -5186,22 +5186,21 @@ class COMETTracerSpectrum3Poles(Calculator):
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
         SN0 = 0.
         if 'physical' in self._prior_basis:
-            # Prior-document convention (TG_2pt3pt_priors): the bispectrum shot noise is
-            # B_shot/nbar (b1 + 2 SN_0 nbar / B_shot f mu^2) Z_1 P + cycl. + SN_0^2,
-            # whose mu_i^{0,2,4} coefficients are [b1^2 B_shot, b1 f B_shot + 2 SN_0 nbar b1 f,
-            # 2 SN_0 nbar f^2] / nbar.  comet's are [b1^2 MB0, b1 f (MB0 + NP0), f^2 NP0] / nbar,
-            # i.e. the same structure with MB0 = B_shot and **NP0 = 2 SN_0 nbar**: comet absorbs
-            # the document's explicit factor 2 into NP0, its power spectrum does not.  NP0 is one
-            # shared parameter, so the 2 lives here, in the bispectrum branch only.
+            # Both conventions carry a single f mu^2 N^P_0 in the bispectrum pair noise, so
+            # there is nothing left to switch on here. The prior document (TG_2pt3pt_priors),
+            # following eq. 3.14 of 2110.10161, writes
+            # B_shot/nbar (b1 + 2 SN_0 nbar / B_shot f mu^2) Z_1 P + cycl. + SN_0^2, with an
+            # explicit factor 2 that this branch used to reproduce. The 2 fails the Poisson
+            # limit: a coincident pair is a single object, whose redshift-space phase is
+            # exp[-i(k2 + k3).s] with (k2 + k3).zhat = -k1 mu1, so it carries one power of the
+            # velocity, not two, and the term has to reduce to Z_1^2 P / nbar at B_shot = 1,
+            # SN_0 nbar = 1. comet never had the 2; FolpsD dropped it in b9e1ebf.
             SN0 = NP0 / A_AP / self._nbar  # the document's SN_0, identical to the power spectrum's
-            # N^B_0 is a 1/nbar^2 quantity, so it carries the AP volume factor SQUARED, unlike
+            # N^B_0 is a 1/nbar^2 quantity, so it carries the AP volume factor squared, unlike
             # the 1/nbar quantities NP0 and MB0. comet's own `_rescale_params` does the same
             # (`NB0 /= Aap**2`), and without it the free N^B_0 would scale as A_AP while the tied
             # SN0**2 piece it is summed with scales as A_AP**2.
-            # The COMET team's convention drops the document's 2 and hands comet the same NP0
-            # its own pipeline would.
-            shot = 1. if self._comet_conventions else 2.
-            NP0, NB0, MB0 = shot * NP0 / A_AP, NB0 / A_AP**2, MB0 / A_AP
+            NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP**2, MB0 / A_AP
         # nbar normalization is needed for the BX_ell_Sugi()-decomposed path (its diagrams
         # are nbar-bare), but skipped for the direct/pt=False path (rescale_counterterms=False):
         # eval_bell_sugi_from_raw_params()'s bell_sugi()/project_sugi() apply 1/nbar/1/nbar**2

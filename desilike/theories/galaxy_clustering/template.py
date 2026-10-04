@@ -1251,9 +1251,35 @@ class BAOTheory(Calculator):
     sampler effort on the unconstrained orthogonal direction. Pass a shared
     :class:`~desilike.parameter.Parameter` instance (rather than ``True``) when multiple
     :class:`BAOTheory` deps (e.g. one per DESI tracer bin) must share the same sampled ``r_d``.
+
+    ``correction`` accounts for the BAO template fit not recovering the :math:`r_d` scaling above
+    when a cosmological parameter differs from the fiducial's. The main case is :math:`N_{\rm eff}`:
+    free-streaming radiation shifts the phase of the wiggles, which a template fixed at the
+    fiducial reads as a dilation (Bashinsky & Seljak 2004; Baumann et al. 2019, arXiv:1803.10741;
+    Asensio-Rivera et al. 2026, arXiv:2603.03443). Given, for each parameter :math:`p`, the
+    derivatives :math:`c_{p,X} = \mathrm{d}(q_X^{\rm fit} / q_X - 1) / \mathrm{d}p` at the fiducial,
+    the predicted dilations become
+
+    .. math::
+
+        q_{\rm iso} \to q_{\rm iso} \left[1 + \sum_p c_{p,{\rm iso}} (p - p_{\rm fid})\right], \quad
+        q_{\rm ap} \to q_{\rm ap} \left[1 + \sum_p c_{p,{\rm ap}} (p - p_{\rm fid})\right],
+
+    and :math:`q_\parallel, q_\perp` and the distance ratios follow from them, so that every
+    output stays consistent.
+
+    Parameters
+    ----------
+    correction : dict, default={'N_eff': (-2.5e-3, 0.)}
+        ``{param: (c_iso, c_ap)}``; ``param`` is a cosmological parameter name, read from the
+        cosmology as ``params.<param>``. ``None`` or ``{}`` applies no correction. The default is the
+        DESI DR2 post-reconstruction correlation-function fit (BGS to QSO, fiducial DESI), averaged
+        over tracers: c_iso scatters by 7% across them; c_ap, below 0.03 sigma per unit N_eff, is set
+        to 0. Other parameters (omega_cdm, omega_b, n_s, h, m_ncdm_tot) give below 0.05 sigma at
+        Planck-like prior widths and are left out.
     """
 
-    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
+    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False, correction={'N_eff': (-2.5e-3, 0.)}):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(fiducial=fiducial)
         self.cosmo = cosmo
@@ -1286,7 +1312,7 @@ class BAOTheory(Calculator):
             'rs_drag', value=rd_fid, prior=dict(limits=[10., 1000.]),
             ref=dict(dist='norm', loc=rd_fid, scale=1.), fd=dict(eps=1.), latex=r'r_{\mathrm{d}}')])
 
-    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False):
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None, rs_drag=False, correction={'N_eff': (-2.5e-3, 0.)}):
         from cosmoprimo import constants
         self._override_rs_drag = bool(rs_drag)
         requirements = {
@@ -1295,6 +1321,12 @@ class BAOTheory(Calculator):
         }
         if not self._override_rs_drag:
             requirements['thermodynamics.rs_drag'] = None
+        self._correction = {}
+        for name, coefficients in (correction or {}).items():
+            if len(coefficients) != 2:
+                raise ValueError(f'correction[{name!r}] must be (c_iso, c_ap), got {coefficients!r}')
+            self._correction[name] = tuple(float(coefficient) for coefficient in coefficients)
+            requirements[f'params.{name}'] = None
         self.cosmo.add_requirements(requirements)
         self.z = float(z)
         self._eta = float(eta)
@@ -1307,6 +1339,7 @@ class BAOTheory(Calculator):
         self._DM_over_rd_fid = DM_fid / rd_fid
         self._DH_over_DM_fid = DH_fid / DM_fid
         self._DV_over_rd_fid = DV_fid / rd_fid
+        self._correction_fid = {name: float(self._fiducial[name]) for name in self._correction}
 
     def __call__(self):
         from cosmoprimo import constants
@@ -1314,6 +1347,17 @@ class BAOTheory(Calculator):
         DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         rd = self.rs_drag.value if self._override_rs_drag else self.cosmo.get_thermodynamics().rs_drag
         DH = constants.c / 1e3 / (100. * efunc)
+        if self._correction:
+            # What the template fit returns: qiso (1 + sum c_iso dp) and qap (1 + sum c_ap dp), so
+            # DV / rd scales as the former and DH / DM as the latter; DH = DV (DH/DM)^(1-eta) z^(-1/3)
+            # and DM = DV (DH/DM)^(-eta) z^(-1/3) then carry both.
+            factor_iso, factor_ap = 1., 1.
+            for name, (coefficient_iso, coefficient_ap) in self._correction.items():
+                delta = self.cosmo.get(f'params.{name}') - self._correction_fid[name]
+                factor_iso = factor_iso + coefficient_iso * delta
+                factor_ap = factor_ap + coefficient_ap * delta
+            DH = DH * factor_iso * factor_ap ** (1. - self._eta)
+            DM = DM * factor_iso * factor_ap ** (-self._eta)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_rd = DH / rd
         self.DM_over_rd = DM / rd
@@ -1365,10 +1409,10 @@ class BAOPhaseShiftTheory(BAOTheory):
     """
 
     def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
-        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo, correction=None)
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
-        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo, correction=None)
         self.cosmo.add_requirements({'params.N_eff': None})
         self._N_eff_fid = float(self._fiducial.N_eff)
 
@@ -1551,11 +1595,11 @@ class ShapeFitTheory(BAOTheory):
     """
 
     def __init__(self, z=1., eta=1./3., kp=0.03, n_varied=False, with_now='peakaverage', fiducial='DESI', cosmo=None):
-        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo, correction=None)
 
     def __post_init__(self, z=1., eta=1./3., kp=0.03, n_varied=False, with_now='peakaverage', fiducial='DESI', cosmo=None):
         from cosmoprimo import PowerSpectrumBAOFilter
-        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo, correction=None)
         self._kp = float(kp)
         self._n_varied = bool(n_varied)
         # k grid on which the no-wiggle power spectrum is requested: wide enough to bracket

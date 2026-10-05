@@ -13,6 +13,7 @@ call (JAX-friendly), supporting automatic differentiation through all cosmologic
 """
 
 import numpy as np
+import jax
 import jax.numpy as jnp
 
 from ...base import Calculator
@@ -25,6 +26,45 @@ from ._multitracer import propose_params_multitracer, assign_params
 
 _delta_c = 1.686  # linear collapse threshold
 _C_KMS = 299792.458  # speed of light in km/s
+
+
+def beta_gnl_sfl(b1, z, hod='narrow'):
+    """
+    samgolds: gNL scale-dependent bias coefficient, Delta b = beta_g gNL / alpha(k, z), from Smith, Ferraro & LoVerde 2012
+    (arXiv:1106.0503) fitting functions in the observables (b1, z). Implements Eq. 50 and Eq. 51.
+
+    Parameters
+    ----------
+    b1 : float
+        Eulerian linear bias at redshift z
+    z : float
+        Redshift at which b1 is defined, which is typically set by zeff from the window matrix.
+    hod : str
+        Halo-occupation distribution. Use 'narrow' for halos in a narrow mass bin (Eq. 50) or 'mass-weighted' for
+        mass weighted halos with above some minimum halo mass (Mmin).
+    """
+
+    kappa3 = 0.000329 * (1. + 0.09 * z) * b1 ** (-0.09)     # Eq. 46
+    nu2 = 1.42 * (b1 - 1.) + 1.0
+    # samgolds: the peak height nu is real only for b1 > 1 - 1/1.42 ~ 0.3. Below that, nu is set to NaN so we don't break jax.
+    if not isinstance(nu2, jax.core.Tracer) and np.any(np.asarray(nu2) <= 0.):
+        raise ValueError(f'beta_gnl_sfl: b1 = {b1} gives nu^2 = 1.42 (b1 - 1) + 1 <= 0; the SFL fitting functions are undefined there')
+    nu = jnp.sqrt(jnp.where(nu2 > 0., nu2, jnp.nan))  # Eq. 48. We set delta_c=1.42 instead of 1.686 here
+                                                            # because this is Sheth-Tormen rescaling of the collapse
+                                                            # threshold based on a=0.707 from the Sheth-Tormen mass
+                                                            # function. This ensures that our definition is
+                                                            # consistent with the parameters from the fitting
+                                                            # function
+    x = nu - 1.0
+
+    if hod == 'narrow':
+        dkappa3 = -0.000061 * (1.0 + 0.22 * z) * b1 ** (-0.25)   # Eq. 47
+        return kappa3 * (-0.7 + 1.4 * x**2 + 0.6 * x**3) - dkappa3 * (nu - 1.0 / nu) / 2.0   # Eq. 50
+
+    if hod == 'mass-weighted':
+        return kappa3 * (-0.4 * x + 1.5 * x**2 + 0.6 * x**3)   # Eq. 51
+
+    raise ValueError("hod must be 'narrow' (SFL Eq. 50) or 'mass-weighted' (SFL Eq. 51)")
 
 
 def _alpha_png(k, pk_dd, pk_prim, h, method, Omega0_m=None, growth_factor_z=None, growth_factor_znorm=None):
@@ -142,23 +182,34 @@ class PNGTracerSpectrum2Poles(Calculator):
             Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
                       ref=dict(dist='norm', loc=0., scale=0.1), fd=dict(eps=0.05), latex='s_{n,0}'),
         ]
-        # samgolds: tnl_exc_loc = the local tauNL Suyama-Yamaguchi excess, tauNL - (6/5 fnl_loc)^2. This is implemented as an
-        # excess because, for fnl!=0, the model already contains the fnl^2 bphi^2 alpha^2 term, which corresponds to (6/5)fNL^2.
-        # Therefore, if you vary both fnl and tnl_exc_loc, you need to convert tnl_exc_loc to tnl by adding (6/5 fnl_loc)^2.
+
+        # samgolds: gNL: amplitude of cubic local non-Gaussianity, which has the same shape as fnl_loc, but a different non-Gaussian
+        # bias parameter.
+        gnl_param = Parameter('gnl_loc', value=0., fixed=True, prior=dict(limits=[-1e7, 1e7]),
+                              ref=dict(limits=[-1e5, 1e5]), fd=dict(eps=1e4), latex=r'g_{\mathrm{NL}}^{\mathrm{loc}}')
+
+        # samgolds: tnl_exc_loc: the local tauNL excess from the collapsed trispectrum, tauNL - (6/5 fnl_loc)^2. We implement an
+        # excess because, for fnl!=0, the model already contains the fnl^2 bphi^2 alpha^2 term. If you vary both fnl and tnl_exc_loc,
+        # you need to convert tnl_exc_loc to tnl by adding (6/5 fnl_loc)^2. Note that the Suyama-Yamaguchi inequality is equivalent
+        # to tnl_exc_loc>=0
         tnl_param = Parameter('tnl_exc_loc', value=0., fixed=True, prior=dict(limits=[-1e6, 1e6]),
                               ref=dict(limits=[-1000., 1000.]), fd=dict(eps=100.), latex=r'\tau_{\mathrm{NL}}^{\mathrm{exc}}')
+
+
         if mode == 'b-p':
             auto_params += [
                 Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
                           ref=dict(limits=[-10., 10.]), fd=dict(eps=1.), latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
-                tnl_param,
+                gnl_param,  # samgolds: added gnl
+                tnl_param,  # samgolds: added tnl
                 Parameter('p', value=1., prior=dict(limits=[0., 3.]), ref=dict(limits=[0.5, 1.5]), fd=dict(eps=0.1), latex='p'),
             ]
         elif mode == 'bphi':
             auto_params += [
                 Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
                           ref=dict(limits=[-10., 10.]), fd=dict(eps=1.), latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
-                tnl_param,
+                gnl_param,  # samgolds: added gnl
+                tnl_param,  # samgolds: added tnl
                 Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]), ref=dict(limits=[3., 4.]), fd=dict(eps=0.1), latex=r'b_{\phi}'),
             ]
         else:
@@ -166,7 +217,7 @@ class PNGTracerSpectrum2Poles(Calculator):
                 Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
                           ref=dict(limits=[-50., 50.]), fd=dict(eps=1.), latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}'),
             ]
-        return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc', 'tnl_exc_loc'), cross=True)  # samgolds: tnl_exc_loc 
+        return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc', 'gnl_loc', 'tnl_exc_loc'), cross=True)  # samgolds: added gnl_loc and tnl_exc_loc
 
     def __init__(self, k=None, ells=(0, 2), method='prim', mu=10, mode='b-p',
                  tracers=None, nbar=1e-4, params=None, template=None):
@@ -226,7 +277,7 @@ class PNGTracerSpectrum2Poles(Calculator):
         if isinstance(self.b1, tuple):  # cross-spectrum
             b1_X, b1_Y = self.b1
             sigmas_X, sigmas_Y = self.sigmas
-            bphi_X = bphi_Y = None  # samgolds: PNG bias bphi, needed by the tauNL term. Defaults to None in 'bfnl' mode 
+            bphi_X = bphi_Y = None  # samgolds: PNG bias bphi, needed by the tauNL term. Defaults to None in 'bfnl' mode
             if self._mode == 'b-p':
                 p_X, p_Y = self.p
                 bphi_X, bphi_Y = 2. * _delta_c * (b1_X - p_X), 2. * _delta_c * (b1_Y - p_Y)
@@ -238,17 +289,27 @@ class PNGTracerSpectrum2Poles(Calculator):
                 bfnl_loc_Y = bphi_Y * self.fnl_loc
             else:  # 'bfnl'
                 bfnl_loc_X, bfnl_loc_Y = self.bfnl_loc
+
+            # samgolds: gNL-induced scale-dependent bias. Same shape as local fNL, but a different bias parameter
+            #           (see beta_gnl_sfl)
+            if bphi_X is not None:
+                bfnl_loc_X = bfnl_loc_X + beta_gnl_sfl(b1_X, self._z) * self.gnl_loc
+                bfnl_loc_Y = bfnl_loc_Y + beta_gnl_sfl(b1_Y, self._z) * self.gnl_loc
+
             b_eff_X = b1_X + bfnl_loc_X * alpha
             b_eff_Y = b1_Y + bfnl_loc_Y * alpha
             fog_X = 1. / (1. + sigmas_X**2 * kap**2 * muap**2 / 2.)
             fog_Y = 1. / (1. + sigmas_Y**2 * kap**2 * muap**2 / 2.)
             pkmu = fog_X * fog_Y * (b_eff_X + f * muap**2) * (b_eff_Y + f * muap**2) * pk_dd
-            if getattr(self, 'drop_fnl_squared', False):  # samgolds: diagnostic, model linear in fNL (no bfnl_X bfnl_Y alpha^2 term)
+
+            # samgolds: ignore the squared scale-dependent bias in Pgg (fNL^2, and fNL gNL, gNL^2 if gNL is free). Useful for
+            #           testing how much information comes from the fNL^2 piece.
+            if getattr(self, 'drop_fnl_squared', False):
                 pkmu = pkmu - fog_X * fog_Y * bfnl_loc_X * bfnl_loc_Y * alpha**2 * pk_dd
-            if bphi_X is not None:  # samgolds: local tauNL (SY excess), see, e.g., Ferraro & Smith 2014 eq. 8
+            if bphi_X is not None:  # samgolds: local tauNL, see, e.g., Ferraro & Smith 2014 eq. 8
                 pkmu = pkmu + fog_X * fog_Y * (25. / 36.) * self.tnl_exc_loc * bphi_X * bphi_Y * alpha**2 * pk_dd
         else:
-            bphi = None  # samgolds: as above
+            bphi = None  # samgolds: initialize as above
             if self._mode == 'b-p':
                 bphi = 2. * _delta_c * (self.b1 - self.p)
                 bfnl_loc = bphi * self.fnl_loc
@@ -257,15 +318,18 @@ class PNGTracerSpectrum2Poles(Calculator):
                 bfnl_loc = bphi * self.fnl_loc
             else:  # 'bfnl'
                 bfnl_loc = self.bfnl_loc
+            if bphi is not None:  # samgolds: local gNL, as above
+                bfnl_loc = bfnl_loc + beta_gnl_sfl(self.b1, self._z) * self.gnl_loc
             b_eff = self.b1 + bfnl_loc * alpha
             fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.)**2
             pkmu = fog * (b_eff + f * muap**2)**2 * pk_dd
-            if getattr(self, 'drop_fnl_squared', False):  # samgolds: diagnostic, model linear in fNL (no bfnl^2 alpha^2 term)
+            if getattr(self, 'drop_fnl_squared', False):  # samgolds: testing model that is linear in fNL (no bfnl^2 alpha^2 term)
                 pkmu = pkmu - fog * (bfnl_loc * alpha)**2 * pk_dd
-            if bphi is not None:  # samgolds: local tauNL (SY excess)
+
+            if bphi is not None:  # samgolds: local tauNL contribution
                 pkmu = pkmu + fog * (25. / 36.) * self.tnl_exc_loc * bphi**2 * alpha**2 * pk_dd
 
-        sn =jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
         self.poles = self._to_poles(pkmu) + sn
         return self.poles
 

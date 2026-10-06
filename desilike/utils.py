@@ -129,7 +129,7 @@ def _h5py_recursively_read_dict(h5file, path='/'):
             if not dic[key].shape:
                 dic[key] = dic[key].item()
     if h5file[path].attrs:
-        dic['attrs'] = {k: v for k, v in h5file[path].attrs.items()}
+        dic['attrs'] = dict(h5file[path].attrs.items())
     return dic
 
 
@@ -164,15 +164,15 @@ def _txt_recursively_read_dict(path):
             dic[key] = _txt_recursively_read_dict(path_key)
         elif os.path.isfile(path_key):
             if path_key.endswith('.json'):
-                with open(path_key, 'r') as fh:
+                with open(path_key) as fh:
                     dic['attrs'] = json.load(fh)
                 continue
-            with open(path_key, 'r') as fh:
+            with open(path_key) as fh:
                 dtype = np.dtype(fh.readline().rstrip('\r\n').replace(' ', '').replace('#dtype=', ''))
                 shape = tuple(int(s) for s in
                               fh.readline().rstrip('\r\n').replace(' ', '').replace('#shape=', '')[1:-1].split(',')
                               if s)
-                stem = key[:-4] if key.endswith('.txt') else key
+                stem = key.removesuffix('.txt')
                 if dtype.kind == 'U':
                     rows = [line.rstrip('\r\n') for line in fh]
                     dic[stem] = np.array(rows, dtype=dtype)
@@ -222,7 +222,7 @@ def _number_profile(value, sigfigs):
     if is_neg:
         value = abs(value)
     power = -1 * math.floor(math.log10(value)) + sigfigs - 1
-    sig_digits = str(int(round(abs(value) * 10.0 ** power)))
+    sig_digits = str(round(abs(value) * 10.0 ** power))
     return sig_digits, int(-power), is_neg
 
 
@@ -399,11 +399,11 @@ def read(filename):
         )
     try:
         cls = _registry[cls_name]
-    except KeyError:
+    except KeyError as exc:
         raise ValueError(
             f'Unknown class {cls_name!r} in {filename!r}; '
             f'registered types: {list(_registry)}'
-        )
+        ) from exc
     obj = cls.__new__(cls)
     obj.__setstate__(state)
     return obj

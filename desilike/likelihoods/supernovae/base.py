@@ -70,13 +70,13 @@ class BaseSNLikelihood(GaussianLikelihood):
 
     def read_covariance(self, fn):
         """Read a CosmoMC-format covariance file: leading line is the matrix size, then the flattened values."""
-        with open(fn, 'r') as file:
+        with open(fn) as file:
             size = int(file.readline())
         return np.loadtxt(fn, skiprows=1).reshape(size, size)
 
     def read_light_curve_params(self, fn, header='#', sep=' ', skip=None):
         """Read a whitespace/comma-separated light-curve parameter table into a dict of arrays."""
-        with open(fn, 'r') as file:
+        with open(fn) as file:
             names, values = None, None
             for iline, line in enumerate(file.readlines()):
                 if skip is not None:

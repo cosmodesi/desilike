@@ -262,7 +262,7 @@ class TestSource:
         extra = str(tmp_path / 'mylib')
         monkeypatch.setattr(sys, 'path', list(sys.path))
         fn = tmp_path / 'profile.sh'
-        fn.write_text('export PYTHONPATH={}\n'.format(extra))
+        fn.write_text(f'export PYTHONPATH={extra}\n')
         source(str(fn))
         assert sys.path[0] == extra
 
@@ -296,7 +296,7 @@ class TestInstallerInit:
         assert installer.ignore_installed is True
 
     def test_derived_dirs(self, isolated_config):
-        config_dir, install_dir = isolated_config
+        _config_dir, install_dir = isolated_config
         installer = Installer()
         assert installer.bin_dir == os.path.join(str(install_dir), 'bin')
         assert installer.include_dir == os.path.join(str(install_dir), 'include')
@@ -307,7 +307,7 @@ class TestInstallerInit:
         assert installer.bin_dir == '/my/bin'
 
     def test_config_fn_written_on_init(self, isolated_config):
-        config_dir, install_dir = isolated_config
+        _config_dir, install_dir = isolated_config
         installer = Installer()
         assert os.path.isfile(installer.config_fn)
         with open(installer.config_fn) as file:

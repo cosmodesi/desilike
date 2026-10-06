@@ -2640,7 +2640,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
                               renormalized=True, use_fk=False, redshift_smearing=None,
-                              basis='sugiyama'):
+                              basis='sugiyama', mg_kernel_fn=None):
     folpsv2 = _import_folps()
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
@@ -2698,6 +2698,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
             bias_scheme=bias_scheme,
             renormalize=renormalized,
             interpolation_method=interpolation_method,
+            mg_kernel_fn=mg_kernel_fn,
         )
     else:
         result = bispectrum.Sugiyama_Bell(
@@ -3006,8 +3007,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
     :class:`FOLPSTracerSpectrum3Poles` — no separate FKPT-specific tracer class is needed; the
     bias parametrization (and ``prior_basis`` options) are exactly FOLPS's own.
 
-    This always evaluates FKPT kernels live from ``template`` (no MG emulator/rescaling branch
-    such as ``MgEmulatorCosmology``/``fkpt_pkemu_*`` in the original fkptjax_muMG branch).
+    By default the kernels are evaluated live. An optional ``ingredients_provider``
+    can replace the loop-kernel solves with a separately trained approximation.
 
     Parameters
     ----------
@@ -3021,20 +3022,30 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         For model='HDKI': 'mu_OmDE', 'BZ', or 'BZ_Mass'. For model='PHENOM': 'binning' (the
         only supported variant; binned mu/Sigma parameterization).
     beyond_eds : bool, default=True
+        If False, use EdS growth coefficients while retaining f(k) (sMGPT's EdSfk).
+    kernel_mode : str, default=None
+        Explicit selection: 'full', 'fkpt', 'eds', or 'eds_fk'. Overrides beyond_eds
+        and fkpt_approximation when supplied. 'eds' also replaces f(k) by f0 in both
+        spectra; 'eds_fk' retains the scale-dependent linear velocity. Full kernels
+        currently omit nonlinear screening sources, as in sMGPT's NoScreen branch.
+    fkpt_approximation : bool, default=True
+        ``True`` (default, unchanged historical behaviour): beyond-EdS kernels use the fkPT
+        large-scale-limit approximation -- a single scalar ``A``/``ApOverf0``/``CFD3``/``CFD3p``
+        reused for every loop mode. ``False``: the genuine, non-squeezed (external k, loop q,
+        angle) full kernels are computed on the Q/R quadrature grids instead
+        (``fkptjax.MG_kernels``), via the eager ``Kfuncs_to_tables`` builder (see Notes). Only matters when ``beyond_eds=True``; more expensive
+        than the default. See ``Kfuncs_to_tables``'s own docstring for the full description
+        and validation status of this path.
     use_numba : bool, default=False
-        Opt-in numba fast path for the PHENOM/binning MG ODE right-hand side. Only used by
-        the eager (non-jittable) path; ignored for model='PHENOM' (which always uses the
-        jax/diffrax ODE, see Notes).
+        Opt-in numba fast path for the PHENOM/binning MG ODE right-hand side.
     z_div, z_TGR, z_tw, scale_bins, k_TGR, k_c, k_S, k_tw :
         Binning constants for model='PHENOM', mg_variant='binning'. Fixed configuration
         (not sampled); defaults match the original fkptjax_muMG desilike wrapper.
     mg_params_override : dict, default=None
         Explicit MG parameter overrides, applied on top of the resolved per-model parameters.
     growth_source : str, default='ode'
-        Where the linear-growth rate f(k) comes from -- for any model/mg_variant, on both the
-        JAX/diffrax binning route (``Kfuncs_to_tables_jax``) and the eager builder
-        (``Kfuncs_to_tables``, used for non-binning models and for binning with
-        ``use_numba=True``/``include_neutrino_corrections=True``).
+        Where the linear-growth rate f(k) comes from, via the eager ``Kfuncs_to_tables``
+        builder, for any model/mg_variant.
 
         - 'ode': fkptjax integrates its own growth ODE (previous behaviour).
         - 'template': take f(k) and f0 from ``template.fk`` / ``template.f0``.
@@ -3042,42 +3053,46 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         Use 'template' when the template is served by an emulator, or more generally to make
         the loop kernels and the linear spectrum consistent by construction: the ODE and
         ``template.fk``/``f0`` (``sqrt(P_theta_cb/P_delta_cb)``) are otherwise two independent
-        statements about the same cosmology's growth, with nothing forcing them to agree.  On
-        the JAX/diffrax route this also drops the diffrax solve over the full extrapolated k
-        grid.  Note this replaces the LINEAR growth only -- with ``beyond_eds=True`` the
-        beyond-EdS kernel constants still come from their own third-order ODE in the MG
-        parameters (``kernel_constants_jax``/``kernel_constants``), and
-        ``include_neutrino_corrections=True``'s correction to the ODE has no effect once ``fk``
-        is supplied externally (the two are redundant, not additive, if combined -- see
-        ``Kfuncs_to_tables``'s docstring). Requires an fkptjax whose ``Kfuncs_to_tables_jax``/
-        ``Kfuncs_to_tables`` accepts ``fk``/``f0``.
+        statements about the same cosmology's growth, with nothing forcing them to agree.
+        Note this replaces the LINEAR growth only -- with ``beyond_eds=True`` the beyond-EdS
+        kernel constants still come from their own third-order ODE in the MG parameters
+        (``kernel_constants``), and ``include_neutrino_corrections=True``'s correction to the
+        ODE has no effect once ``fk`` is supplied externally (the two are redundant, not
+        additive, if combined -- see ``Kfuncs_to_tables``'s docstring). Requires an fkptjax
+        whose ``Kfuncs_to_tables`` accepts ``fk``/``f0``.
 
     Notes
     -----
-    ``fkptjax.kfuncs_to_tables.Kfuncs_to_tables`` (the eager table builder, used by 'LCDM'/'GR',
-    'HS', 'NDGP', 'HDKI') concretizes its MG/cosmology parameters internally to drive a
-    scipy-based ODE solve, so this calculator is **not** analytically differentiable/jittable
-    with respect to those parameters for those models (this is the original fkptjax_muMG
-    branch's "Wall 2"). ``_is_external = True`` makes desilike wrap it via ``pure_callback`` +
-    finite-difference gradients in that case.
+    ``fkptjax.kfuncs_to_tables.Kfuncs_to_tables`` (the eager table builder, used for every
+    model, including PHENOM/binning) concretizes its MG/cosmology parameters internally to
+    drive a scipy-based ODE solve, so this calculator is **not** analytically
+    differentiable/jittable with respect to those parameters (this is the original
+    fkptjax_muMG branch's "Wall 2"). ``_is_external = True`` makes desilike wrap it via
+    ``pure_callback`` + finite-difference gradients.
 
-    For model='PHENOM', mg_variant='binning', ``fkptjax`` instead provides
-    ``Kfuncs_to_tables_jax``, a diffrax-based ODE solve that keeps ``mu1..mu4`` and the
-    cosmology traced — genuinely jit/vmap/grad-able. This is independent of the trained MG
-    emulator (``MgEmulatorCosmology``, out of scope here): the emulator predicts ``plin``/``pnw``
-    fast without ISiTGR, whereas ``Kfuncs_to_tables_jax`` is an alternative *live* ODE solver
-    for this one variant. ``_is_external`` is therefore set to ``False`` only in this case.
+    An earlier version of this class routed model='PHENOM', mg_variant='binning' through
+    ``fkptjax.kfuncs_to_tables.Kfuncs_to_tables_jax`` instead (a diffrax-based ODE solve
+    that kept ``mu1..mu4`` and the cosmology traced, genuinely jit/vmap/grad-able, with
+    ``_is_external=False`` only in that case). That route is deprecated here: every model
+    now shares the one eager builder above, so the full (non-squeezed) beyond-EdS kernel
+    treatment (``fkpt_approximation=False``) and the bispectrum's per-triangle A/B feed
+    (see ``combine_bias_terms_spectrum3_poles``) only need wiring through a single code
+    path. ``Kfuncs_to_tables_jax`` itself is unaffected in ``fkptjax`` -- it remains in use
+    by that package's own validation examples -- it can be selected explicitly with ``use_jax_tables=True``.
     """
 
     def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
                  model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
+                 fkpt_approximation=True, kernel_mode=None,
                  use_numba=False, include_neutrino_corrections=False,
                  n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
                  gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
                  eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                 mg_params_override=None, growth_source='ode', **kwargs):
+                 mg_params_override=None, growth_source='ode', ingredients_provider=None,
+                 fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10,
+                 use_jax_tables=False, **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -3118,18 +3133,35 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
                       model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
+                      fkpt_approximation=True, kernel_mode=None,
                       use_numba=False, include_neutrino_corrections=False,
                       n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
                       gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
                       eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
                       z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
-                      mg_params_override=None, growth_source='ode', **kwargs):
+                      mg_params_override=None, growth_source='ode',
+                      ingredients_provider=None,
+                      fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10,
+                      use_jax_tables=False, **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
         _import_folps()
         self._model = str(model)
         self._mg_variant = str(mg_variant) if mg_variant is not None else None
         self._beyond_eds = bool(beyond_eds)
+        self._fkpt_approximation = bool(fkpt_approximation)
+        modes = {'full': (True, False), 'fkpt': (True, True),
+                 'eds': (False, True), 'eds_fk': (False, True)}
+        if kernel_mode is not None:
+            if kernel_mode not in modes:
+                raise ValueError(f'Unknown kernel_mode={kernel_mode!r}; choose from {tuple(modes)}')
+            self._beyond_eds, self._fkpt_approximation = modes[kernel_mode]
+        self._eds_constant_growth = kernel_mode == 'eds'
+        if self._beyond_eds and not self._fkpt_approximation:
+            if self._model.upper() == 'HDKI' and (self._mg_variant or '').upper() in ('EFT_DE', 'EFTDE'):
+                raise NotImplementedError('Full EFT_DE kernels require translation of the EFTCAMB interpolators')
+            if self._model.upper() == 'HS' and screening:
+                raise NotImplementedError('Full HS kernels currently require screening=0 (NoScreen)')
         self._use_numba = bool(use_numba)
         self._include_neutrino_corrections = bool(include_neutrino_corrections)
         self._hs_kwargs = dict(
@@ -3147,10 +3179,19 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                                      scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_c=float(k_c),
                                      k_S=float(k_S), k_tw=float(k_tw))
         self._mg_params_override = dict(mg_params_override or {})
+        # Bind an optional pre-trained ingredient provider to the live MG parameters
+        # on every call. Its accuracy is separate from the live-kernel validation.
+        self._ingredients_provider = ingredients_provider
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._fkpt_kmin = float(min(1e-3, float(np.min(self.k))))
         self._fkpt_kmax = float(max(1.0, float(np.max(self.k))))
         self._fkpt_Nk_kernel = int(min(len(self.k), 120))
+        # Expose the loop quadrature for reproducible convergence checks.
+        self._fkpt_nquad_steps = int(fkpt_nquad_steps)
+        self._fkpt_NQ = int(fkpt_nq)
+        self._fkpt_NR = int(fkpt_nr)
+        # Optional JAX table builder; the wrapper retains external-callback semantics.
+        self._use_jax_tables = bool(use_jax_tables)
 
         model_u = self._model.strip().upper()
         variant_u = (self._mg_variant or '').strip().upper()
@@ -3175,30 +3216,14 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         if self._growth_source not in ('ode', 'template'):
             raise ValueError(f"growth_source must be 'ode' or 'template', got {growth_source!r}")
 
-        # The JAX/diffrax binning route does not yet support the internal neutrino
-        # correction or the numba RHS. Those cases use the eager builder.
-        self._use_binning_jax = (
-            self._is_binning
-            and not self._include_neutrino_corrections
-            and not self._use_numba
-        )
-        if (
-            self._is_binning
-            and self._use_numba
-            and self._include_neutrino_corrections
-        ):
-            raise ValueError(
-                "PHENOM/binning cannot use use_numba=True together "
-                "with include_neutrino_corrections=True. "
-                "Set use_numba=False for neutrino-corrected runs."
-            )
-
-        self._is_external = not self._use_binning_jax
-        if self._use_binning_jax:
-            from fkptjax.kfuncs_to_tables import build_jax_static_ctx
-            self._jax_static_ctx = build_jax_static_ctx(
-                self.template.k, kmin=self._fkpt_kmin, kmax=self._fkpt_kmax,
-                Nk_kernel=self._fkpt_Nk_kernel, nquadSteps=300, NQ=10, NR=10)
+        # Kfuncs_to_tables_jax (the JAX/diffrax binning route) is deprecated as this
+        # class's production path: every model, including PHENOM/binning, now goes
+        # through the eager Kfuncs_to_tables builder below. This keeps a single code
+        # path to wire the full (non-squeezed) beyond-EdS kernel treatment through
+        # (both here and for the bispectrum), instead of maintaining it in two
+        # builders. Kfuncs_to_tables_jax itself is untouched in fkptjax (still used by
+        # its own validation examples); it can be selected explicitly with ``use_jax_tables=True``.
+        self._is_external = True
 
     def _mg_kwargs(self):
         """FKPT MG keyword arguments relevant to the chosen model/variant.
@@ -3298,52 +3323,71 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             mg_kwargs['fk'] = self.template.fk
             mg_kwargs['f0'] = self.template.f0
 
-        if self._use_binning_jax:
-            from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
-            if self._growth_source == 'template':
-                # Fail loudly on an fkptjax that predates the external-f(k) feature:
-                # **mg_kwargs would otherwise raise a bare TypeError, or worse, a
-                # permissive **kwargs signature would swallow fk and silently keep
-                # solving the ODE -- exactly the inconsistency this option removes.
-                import inspect
-                _sig = inspect.signature(Kfuncs_to_tables_jax).parameters
-                _missing = [p for p in ('fk', 'f0') if p not in _sig]
-                if _missing:
-                    raise NotImplementedError(
-                        f"growth_source='template' needs an fkptjax whose "
-                        f"Kfuncs_to_tables_jax accepts {_missing}; the installed one "
-                        f"does not. Update fkptjax or use growth_source='ode'.")
-            table_w, table_now, kernel_constants = Kfuncs_to_tables_jax(
+        if self._eds_constant_growth:
+            # Pure EdS velocity kernels require a constant linear growth rate too.
+            # Keep the chosen model's linear density spectrum and its large-scale f0.
+            mg_kwargs['f0'] = self.template.f0
+            mg_kwargs['fk'] = jnp.full_like(self.template.k, self.template.f0)
+
+        from fkptjax.kfuncs_to_tables import Kfuncs_to_tables, Kfuncs_to_tables_jax
+        _table_builder = Kfuncs_to_tables_jax if self._use_jax_tables else Kfuncs_to_tables
+        if self._growth_source == 'template':
+            # Fail loudly on an fkptjax that predates the external-f(k) feature:
+            # **mg_kwargs would otherwise raise a bare TypeError, or worse, a
+            # permissive **kwargs signature would swallow fk and silently keep
+            # solving the ODE -- exactly the inconsistency this option removes.
+            import inspect
+            _sig = inspect.signature(_table_builder).parameters
+            _missing = [p for p in ('fk', 'f0') if p not in _sig]
+            if _missing:
+                raise NotImplementedError(
+                    f"growth_source='template' needs an fkptjax whose "
+                    f"{_table_builder.__name__} accepts {_missing}; the installed one "
+                    f"does not. Update fkptjax or use growth_source='ode'.")
+        ingredients_fn = None
+        if self._beyond_eds and not self._fkpt_approximation and self._ingredients_provider is not None:
+            # Bind fresh to the CURRENT live parameter values every call -- mirrors how
+            # `combine_bias_terms_spectrum3_poles` rebuilds `mg_kernel_fn` fresh rather
+            # than caching it. Filtered to the provider's own trained names, since
+            # `mg_kwargs` carries whatever this model/variant needs (e.g. `mu0` for
+            # HDKI/mu_OmDE, `mu1..mu4` for PHENOM/binning) and the provider only knows
+            # the subset it was actually trained over.
+            provider = self._ingredients_provider
+            bind_kwargs = {name: mg_kwargs[name] for name in provider.param_names if name in mg_kwargs}
+            ingredients_fn = provider.bind(**bind_kwargs)
+
+        if self._use_jax_tables:
+            if neutrino_correction is not None:
+                raise NotImplementedError(
+                    "use_jax_tables=True does not support neutrino_correction "
+                    "(Kfuncs_to_tables_jax only accepts NeutrinoTransferCorrection-like "
+                    "objects for that, untested here) -- use --no-include-neutrino-"
+                    "corrections or use_jax_tables=False.")
+            table_w, table_now, kernel_constants = _table_builder(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,
                 kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
-                nquadSteps=300, NQ=10, NR=10, xnow=xnow, f0_kmax=1e-3,
-                beyond_eds=self._beyond_eds, return_kernel_constants=True,
-                static_ctx=self._jax_static_ctx,
+                nquadSteps=self._fkpt_nquad_steps, NQ=self._fkpt_NQ, NR=self._fkpt_NR,
+                xnow=xnow, f0_kmax=1e-3,
+                beyond_eds=self._beyond_eds, fkpt_approximation=self._fkpt_approximation,
+                model=self._model, mg_variant=self._mg_variant,
+                return_kernel_constants=True,
+                ingredients_fn=ingredients_fn,
                 **mg_kwargs,
             )
         else:
-            from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
-            if self._growth_source == 'template':
-                # Same defensive check as the JAX/diffrax branch above, for the eager builder.
-                import inspect
-                _sig = inspect.signature(Kfuncs_to_tables).parameters
-                _missing = [p for p in ('fk', 'f0') if p not in _sig]
-                if _missing:
-                    raise NotImplementedError(
-                        f"growth_source='template' needs an fkptjax whose "
-                        f"Kfuncs_to_tables accepts {_missing}; the installed one "
-                        f"does not. Update fkptjax or use growth_source='ode'.")
-            table_w, table_now, kernel_constants = Kfuncs_to_tables(
+            table_w, table_now, kernel_constants = _table_builder(
                 k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
                 z=float(self.template.z), Om=Om,
                 kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
-                nquadSteps=300, NQ=10, NR=10,
+                nquadSteps=self._fkpt_nquad_steps, NQ=self._fkpt_NQ, NR=self._fkpt_NR,
                 xnow=xnow, ode_method='RKQS', f0_kmax=1e-3,
-                beyond_eds=self._beyond_eds, model=self._model, mg_variant=self._mg_variant,
+                beyond_eds=self._beyond_eds, fkpt_approximation=self._fkpt_approximation,
+                model=self._model, mg_variant=self._mg_variant,
                 use_numba=self._use_numba,
                 neutrino_correction=neutrino_correction,
                 return_kernel_constants=True,
+                ingredients_fn=ingredients_fn,
                 **mg_kwargs,
             )
         self._table_w = table_w
@@ -3364,6 +3408,27 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # the template's growth rate, so an emulator can route f0 against it: f0 comes from
         # fkpt's own growth (an ODE in Omega_m) and the two are not the same number
         self.f = self.template.f
+
+        # Carry the nonlinear model as a pytree so callbacks and emulated calculators
+        # can evaluate per-triangle kernels without accessing live Parameter objects.
+        from fkptjax import mg_jax as _bj_call
+        from fkptjax.kfuncs_to_tables import _resolve_mg_kind as _resolve_mg_kind_call
+
+        model_u_call = self._model.strip().upper()
+        variant_u_call = (self._mg_variant or '').strip().upper()
+        mg_kwargs_for_P = dict(mg_kwargs, neutrino_correction=neutrino_correction)
+        if model_u_call == 'HDKI' and variant_u_call in ('BZ_MASS', 'BZMASS'):
+            for _old, _new in (('mu_kinf_BZmass', 'mu_kinf'),
+                               ('lambda_a_BZmass', 'lambda_a'),
+                               ('lambda_dS_BZmass', 'lambda_dS')):
+                if _old in mg_kwargs_for_P:
+                    mg_kwargs_for_P[_new] = mg_kwargs_for_P.pop(_old)
+        import inspect as _inspect_call
+        _valid_call = set(_inspect_call.signature(_bj_call.pack_constants_jnp).parameters)
+        mg_kwargs_for_P = {name: value for name, value in mg_kwargs_for_P.items() if name in _valid_call}
+        kind_call = _resolve_mg_kind_call(self._model, self._mg_variant)
+        self._P = _bj_call.pack_constants_jnp(om=Om, ol=1.0 - Om, kind=kind_call, **mg_kwargs_for_P)
+        self._xstop = jnp.log(1.0 / (1.0 + jnp.asarray(self.template.z, dtype=jnp.float64)))
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None, redshift_smearing=None):
         """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
@@ -3398,7 +3463,17 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when emulated).
         Includes ``calA``/``calAp`` (beyond-EdS kernel constants) in ``k_pkl_pklnw_fk``, unlike
-        the FOLPS analogue, since they matter when ``beyond_eds=True``.
+        the FOLPS analogue, since they matter when ``beyond_eds=True``. These are the flat,
+        squeezed-large-scale-limit scalars (fallback for ``fkpt_approximation=True``, or when
+        ``beyond_eds=False``).
+
+        When ``fkpt_approximation=False`` (and ``beyond_eds=True``), also builds
+        ``mg_kernel_fn`` -- a closure around ``fkptjax.MG_kernels.A_B_grid`` -- and passes it
+        through to folps' ``bispectrum()``/``Z2``, which use it to evaluate the genuine,
+        non-squeezed :math:`\\mathcal A(k_f,k_1,k_2)`/:math:`\\mathcal B(k_f,k_1,k_2)` at the
+        real AP-transformed triangle legs of each cyclic term, instead of reusing the flat
+        scalar above for both roles. Mirrors the power-spectrum full-kernel path
+        (``fkpt_approximation=False`` in ``Kfuncs_to_tables``) for the bispectrum.
 
         The k-grid is detached for the same reason as in
         :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`: emulated, it arrives as
@@ -3412,11 +3487,54 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             jax.lax.stop_gradient(self._table_w[0]), self._table_w[1], self._table_now[1], self._table_w[2] * self.f0,
             calA_arr, calAp_arr,
         ])
+
+        mg_kernel_fn = None
+        if self._beyond_eds and not self._fkpt_approximation:
+            from fkptjax import MG_kernels as _mgk
+
+            model_u = self._model.strip().upper()
+            variant_u = (self._mg_variant or '').strip().upper()
+            if model_u == 'HDKI' and variant_u in ('EFT_DE', 'EFTDE'):
+                raise NotImplementedError(
+                    "fkpt_approximation=False's bispectrum A/B feed does not yet support "
+                    "HDKI/EFT_DE: its eftcamb_h1_interp/h3/h5 convention needs translating "
+                    "to pack_constants_jnp's eftde_*_grid inputs separately."
+                )
+
+            # `self._P`/`self._xstop` are built ONCE in `__call__` and carried as genuine
+            # tree_flatten children (see there for why) -- this is what makes mg_kernel_fn
+            # work on an EMULATED pt too, not just a live one: no live Parameter access or
+            # `self.template` needed here at all anymore.
+            P = self._P
+            xnow = -3.912023
+            xstop = self._xstop
+
+            def mg_kernel_fn(kf, k1, k2):
+                # Matches the production power-spectrum solver. BZ_Mass validation
+                # on the 36 x 16 x 3 triangle mesh gives absolute RK4-vs-adaptive
+                # differences <3e-7 in A/B and <9e-7 in Ap/Bp. Relative derivative
+                # errors alone are misleading near their zero crossings.
+                A, B, Ap, Bp = _mgk.A_B_grid(kf, k1, k2, P, xnow, xstop, solver='rk4', n_steps=64)
+                return A, Ap, B, Bp
+
+        # `mg_kernel_fn` is only threaded through folps' Sugiyama_Bell (the `use_fk` branch of
+        # `_get_spectrum3poles_folps`), not through Scoccimarro_Bell.  Without this check the
+        # scoccimarro basis would silently fall back to the flat squeezed calA/calAp for both the
+        # A and B roles -- i.e. quietly return the very approximation `fkpt_approximation=False`
+        # asked to switch off.  Fail loudly instead.  `basis` always arrives here: the tracer puts
+        # it in `self._options`.
+        if mg_kernel_fn is not None and 'scoccimarro' in kwargs.get('basis', 'sugiyama'):
+            raise NotImplementedError("fkpt_approximation=False (kernel_mode='full') is not wired through the "
+                                      "scoccimarro basis: folps' Scoccimarro_Bell does not receive mg_kernel_fn, so "
+                                      "the genuine non-squeezed A/B would be silently replaced by the flat squeezed "
+                                      "scalars.  Use basis='sugiyama', or fkpt_approximation=True.")
+
         return _get_spectrum3poles_folps(
             pars, k1k2, k_pkl_pklnw_fk,
             self.f0, self.qpar, self.qper,
             multipoles=multipoles,
             use_fk=True,
+            mg_kernel_fn=mg_kernel_fn,
             **kwargs,
         )
 
@@ -3495,10 +3613,19 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         kernel_constants = self._kernel_constants
         children = ([self.jac, self.kap, self.muap, self.qpar, self.qper, self.sigma8,
                      self.fsigma8, self.sigma8_fid, self.f, self.f0]
-                    + list(self._table_w) + list(self._table_now) + list(kernel_constants or ()))
+                    + list(self._table_w) + list(self._table_now) + list(kernel_constants or ())
+                    # `_P` (a nested MGConstants pytree) and `_xstop`: see __call__'s own
+                    # comment -- needed so combine_bias_terms_spectrum3_poles's mg_kernel_fn
+                    # works on an EMULATED pt too, not just a live one.
+                    + [self._P, self._xstop])
         aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
                'n_table_w': len(self._table_w), 'n_table_now': len(self._table_now),
-               'has_kernel_constants': kernel_constants is not None}
+               'has_kernel_constants': kernel_constants is not None,
+               # Static (non-MG-parameter-dependent) config the bispectrum's mg_kernel_fn
+               # needs and which is otherwise only ever set by __post_init__ -- never present
+               # on an emulated instance, which skips __init__/__post_init__ entirely.
+               'beyond_eds': self._beyond_eds, 'fkpt_approximation': self._fkpt_approximation,
+               'model': self._model, 'mg_variant': self._mg_variant}
         return children, aux
 
     @classmethod
@@ -3520,18 +3647,23 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         obj._table_w = tuple(next(it) for _ in range(aux['n_table_w']))
         obj._table_now = tuple(next(it) for _ in range(aux['n_table_now']))
         obj._kernel_constants = tuple(next(it) for _ in range(4)) if aux['has_kernel_constants'] else None
+        obj._P = next(it)
+        obj._xstop = next(it)
         obj._table_state = make_table_state(obj._table_w, obj._table_now, kernel_constants=obj._kernel_constants)
         # after `make_table_state`, which derives its own f0 from the tables: the child is the
         # routed one, and the two agree only if both were rescaled by the same growth ratio
         obj.f0 = f0
         obj.k = aux['k']
         obj.ells = aux['ells']
-        obj.f0 = obj._table_state.f0
         obj.fk = obj._table_state.fk
         obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
         obj._to_poles.mu = aux['mu']
         obj._to_poles.wmu = aux['wmu']
         obj._to_poles.ells = aux['ells']
+        obj._beyond_eds = aux['beyond_eds']
+        obj._fkpt_approximation = aux['fkpt_approximation']
+        obj._model = aux['model']
+        obj._mg_variant = aux['mg_variant']
         return obj
 
 
@@ -3554,6 +3686,11 @@ class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
         super().__init__(k=k, pt=pt, ells=ells, template=template, prior_basis=prior_basis,
                          fsat=fsat, sigv=sigv, nbar=nbar, mu=mu, damping=damping, damping_method=damping_method,
                          use_GTNS=use_GTNS, tracers=tracers, params=params, **kwargs)
+
+    def __post_init__(self, *args, damping_method=None, **kwargs):
+        # build() replays the subclass's original arguments, not the arguments
+        # forwarded by __init__. Keep its FKPT default in both lifecycle methods.
+        super().__post_init__(*args, damping_method=damping_method, **kwargs)
 
 
 class FKPTJAXTracerSpectrum3Poles(FOLPSTracerSpectrum3Poles):
@@ -5935,14 +6072,21 @@ class FKPTEmulator(FOLPSDEmulator):
                 'f', 'f0')
 
     def set_children_leafnames(self):
-        """The scalars, then the two tables, then the kernel constants if there are any."""
+        """The scalars, then the two tables, the kernel constants if there are any, then the
+        bispectrum's own `_P` (MGConstants, flattened -- its leaf count varies by model, e.g.
+        HDKI/EFT_DE's eftde_*_grid fields are None -- hence sized dynamically here rather than
+        hardcoded) and `_xstop`. Both ride at degree 0 alongside kernel_constants (see
+        `_layout`): this is what lets `combine_bias_terms_spectrum3_poles`'s `mg_kernel_fn`
+        work on the emulated calculator too."""
         calculator = self.calculator
         self.children_leafnames = (
             list(self._SCALARS)
             + [f'table_w.{index}' for index in range(len(calculator._table_w))]
             + [f'table_now.{index}' for index in range(len(calculator._table_now))]
             + [f'kernel_constants.{index}'
-               for index in range(len(calculator._kernel_constants or ()))])
+               for index in range(len(calculator._kernel_constants or ()))]
+            + [f'P.{index}' for index in range(len(jax.tree_util.tree_leaves(calculator._P)))]
+            + ['xstop'])
 
     def _layout(self):
         """The children name themselves; only the per-column degrees are left to work out."""
@@ -5960,9 +6104,11 @@ class FKPTEmulator(FOLPSDEmulator):
         degrees = dict(zip(table_w, column_degrees(table_w)))
         degrees.update(zip(table_now, column_degrees(table_now)))
         # the kernel constants ride along at degree 0 and with no k row, which is how the base
-        # transform carries them through untouched
+        # transform carries them through untouched -- same treatment for `_P`'s own flattened
+        # fields and `_xstop` (see set_children_leafnames): plain scalars, no k-dependence.
         degrees.update({name: 0 for name in names
-                        if name.startswith('kernel_constants.')})
+                        if name.startswith('kernel_constants.')
+                        or name.startswith('P.') or name == 'xstop'})
         k_rows = dict.fromkeys(table_w, table_w[0])
         k_rows.update(dict.fromkeys(table_now, table_now[0]))
         layout = {name: name for name in self._SCALARS}

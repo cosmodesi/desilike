@@ -490,7 +490,15 @@ class CalculatorEmulator(_Emulator):
         # carries the configuration and one prediction at the deployment point carries the rest --
         # the same two ingredients `__call__` uses, so the object starts out exactly as a called
         # one looks.
-        centre = dict(self.space.center)
+        # `Space.center` is in the expansion variable (a transform declared for an axis -- log,
+        # sqrt -- has already been applied to it), while `predict` takes the user's own parameters
+        # and applies the transform itself; handing it the raw centre maps a log axis twice
+        # (measured 2026-10-04: log(log tau) = NaN, CoverageError at deployment). Back through
+        # the inverse, and a caller's own `center` mapping -- physical values, e.g. a stable
+        # EFT-of-DE model instead of the box centre -- is honoured here too, as the docstring says.
+        centre = dict(self.space.inverse(self.space.center))
+        if isinstance(center, dict):
+            centre.update({name: value for name, value in center.items() if name in centre})
         predicted = self.predict(**centre)
         leaves = [predicted[name] for name in self.children_leafnames]
         children = jax.tree_util.tree_unflatten(self.children_treedef, leaves)
@@ -519,7 +527,7 @@ class CalculatorEmulator(_Emulator):
             # On the deployed object, not on the emulator's own nodes: `build` resolves a
             # parameter from the calculator it evaluates, so moving anything else is a no-op that
             # looks like it worked.
-            values = self.space.center if center is True else dict(center)
+            values = self.space.inverse(self.space.center) if center is True else dict(center)
             params = get_params(deployed)
             for name, value in values.items():
                 if name in params:

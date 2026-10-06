@@ -113,7 +113,7 @@ class SMC(PopulationKernel):
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']
-        self._has_proposal = context.get('proposal', None) is not None
+        self._has_proposal = context.get('proposal') is not None
 
     # ── pooled evaluation ─────────────────────────────────────────────────────
 

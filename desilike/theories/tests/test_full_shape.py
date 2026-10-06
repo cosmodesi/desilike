@@ -28,6 +28,17 @@ def _direct_template(**kw):
     return DirectSpectrum2Template(engine='eisenstein_hu', **kw)
 
 
+def _training_violation(theory, name=None):
+    """Value of a training-range Constraint of *theory*'s graph at the last call: the single one, or
+    the one whose basename is *name* (the cosmology may declare its own, e.g. ``ace_range``)."""
+    from desilike.base import get_params
+    constraints = list(get_params(theory, filter='constraint'))
+    if name is not None:
+        constraints = [constraint for constraint in constraints if constraint.basename == name]
+    assert len(constraints) == 1, constraints
+    return float(np.asarray(constraints[0].value))
+
+
 def _compile(theory):
     """Compile *theory* **once** and return a reusable runner.
 
@@ -58,12 +69,27 @@ def _compile(theory):
     return run
 
 
-def _fd_box(calculator, width=3.):
+# Training costs one full PT evaluation per finite-difference node, ~(2 * ndim + 1) of them, so
+# the box dimension sets what the `test_emulated` methods cost -- a third of this suite's runtime.
+# `_check_emulator` only ever shifts a BIAS parameter, which is downstream of the emulator, so no
+# assertion here evaluates it off-centre along a box axis.  Two axes keep the multi-parameter
+# plumbing under test at a bit under half the cost; `max_axes=None` asks for the full box, which
+# the Kaiser case still does.  A COUNT, not a list of names: which parameters are varied depends
+# on the template, so naming them fits one case and raises on the next.
+# NOTE: test_full_shape_emulated.py carries its own copy of this helper; keep the two in step.
+_EMU_MAX_AXES = 2
+
+
+def _fd_box(calculator, width=3., max_axes=_EMU_MAX_AXES):
     """A box `value +- width * fd.eps` per varied parameter.
 
     The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
     the emulated region comparable.  NOT the `ref` box: these parameters have none, and the
     prior is far too wide to evaluate.
+
+    *max_axes* caps how many varied parameters the box spans, taking them in name order so the
+    choice is reproducible (``None`` keeps every one).  A parameter left out is frozen at its
+    trained value, which `_check_emulator` accounts for.
     """
     from desilike.base import build
     limits = {}
@@ -82,23 +108,26 @@ def _fd_box(calculator, width=3.):
         # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
         # the node `_check` asserts the emulator is exact at.
         bounds = getattr(getattr(param, 'prior', None), 'limits', None)
-        if bounds is not None and np.isfinite(bounds).all():
-            if low < float(bounds[0]) or high > float(bounds[1]):
-                continue
+        if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
+            continue
         limits[param.name] = (low, high)
+    if max_axes is not None:
+        if not limits:
+            raise ValueError(f'{calculator} has no varied parameter to emulate over')
+        limits = {name: limits[name] for name in sorted(limits)[:max_axes]}
     return limits
 
 
-def _emulate(theory, inner_pt=None):
+def _emulate(theory, inner_pt=None, max_axes=_EMU_MAX_AXES):
     """Emulate ``inner_pt`` (default: ``theory.pt``), replace it in-place, return compiled pipeline."""
     from desilike import build
     from desilike.base import replace
     from desilike.emulators import Emulator, Space
     if inner_pt is None:
         inner_pt = theory.pt
-    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt)))
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt, max_axes=max_axes)))
     emu.train(budget=1, verbose=False)
-    replace(theory, inner_pt, emu.to_calculator())
+    replace(theory, inner_pt, emu.to_calculator(inner_pt))
     return build(theory)
 
 
@@ -205,7 +234,9 @@ class TestKaiserPoles:
         pipe_exact = build(KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template))
         theory_emu = KaiserTracerSpectrum2Poles(k=k, ells=ells,
                                                 pt=KaiserPTSpectrum2Poles(k=k, ells=ells, template=copy(template)))
-        _check_emulator(pipe_exact, _emulate(theory_emu), shift_param='b1')
+        # `max_axes=None`: the one case here that trains over EVERY varied parameter, so the
+        # full-box path stays covered.  Kaiser is the cheapest PT here, which is why it carries it.
+        _check_emulator(pipe_exact, _emulate(theory_emu, max_axes=None), shift_param='b1')
 
         s = np.linspace(50., 150., 10)
         template_s = BAOSpectrum2Template(z=0.5, fiducial=('DESI', {'engine': 'camb'}), apmode='qparqper')
@@ -236,7 +267,7 @@ class TestTNSPoles:
         # Parameter sensitivity on the (cheap default) template, reusing one build.
         theory = TNSPTSpectrum2Poles(k=k)
         run = _compile(theory)
-        param = list(get_params(theory).select(fixed=False))[0]
+        param = next(iter(get_params(theory).select(fixed=False)))
         lo, hi = (float(v) for v in np.asarray(param.ref.sample(jax.random.key(0), shape=2)))
         run(**{param.name: lo})
         r0 = np.asarray(theory.table['pk_dd'])
@@ -677,6 +708,56 @@ class TestFOLPS:
         theory_ells = FOLPSTracerSpectrum3Poles(k=k, ells=((0, 0, 0),))
         assert _compile(theory_ells)().shape[0] == 1
 
+    def test_tracer_bispectrum_scoccimarro(self):
+        """FOLPSTracerSpectrum3Poles in the Scoccimarro basis: integer ells, (k1, k2, k3) triangles."""
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum3Poles
+
+        k = np.array([[0.05, 0.05, 0.05], [0.05, 0.08, 0.10], [0.06, 0.10, 0.12], [0.08, 0.10, 0.15]])
+        ells = (0, 2, 4)
+
+        theory = FOLPSTracerSpectrum3Poles(k=k, ells=ells)
+        # The basis follows the shape of ells, as jaxpower's estimator names them, so a
+        # Scoccimarro window drives the theory over on its own.
+        assert theory._basis == 'scoccimarro' and theory.ells == ells
+        run = _compile(theory)
+        base = run()
+        _check(base, 'FOLPSTracerSpectrum3Poles (scoccimarro)')
+        assert base.shape == (len(ells), len(k))
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum3Poles (scoccimarro)', b1=2.0)
+
+        # The multipoles are taken about the third leg (jaxpower puts the Y_lm on `meshes[2]`),
+        # which the theory arranges by rotating the triplet.  The monopole cannot see that -- it
+        # is an orientation average of a function symmetric in its three legs -- while every
+        # higher multipole depends on it entirely.
+        for permutation in [[1, 2, 0], [2, 0, 1]]:
+            other = _compile(FOLPSTracerSpectrum3Poles(k=k[:, permutation], ells=ells))()
+            assert np.allclose(other[0], base[0], rtol=1e-6), 'B0 should not see the leg ordering'
+            assert np.max(np.abs(other[1] / base[1] - 1.)) > 0.1, 'B2 should follow the leg ordering'
+
+        # Angular quadrature.  Measured here (z = 0.8, the triangles above, against (10, 40)),
+        # max |dB/B| per ell: (10, 6) -> 1e-8, 1e-6, 3e-3; (10, 8) -> 2e-11, 5e-10, 3e-7;
+        # (10, 10) -> 3e-15, 2e-13, 2e-10.  Nphi matters more here than in the Sugiyama basis:
+        # (4, 10) is off by 1% on B2 and 4% on B4, (6, 10) by 3e-4.
+        assert _compile(FOLPSTracerSpectrum3Poles(k=k, ells=ells, precision=(10, 16)))() is not None
+        # Nmu <= ell is not inaccurate but empty: the nodes are the roots of P_Nmu.  Refused
+        # when the pipeline is built, `precision` being non-node setup (__post_init__).
+        for precision in [(10, 4), (10, 2)]:
+            try:
+                _compile(FOLPSTracerSpectrum3Poles(k=k, ells=ells, precision=precision))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'precision={precision} should be refused for ells={ells}')
+
+        # k and ells must agree on the basis.
+        for kk, ee in [(k, ((0, 0, 0),)), (k[:, :2], (0, 2))]:
+            try:
+                FOLPSTracerSpectrum3Poles(k=kk, ells=ee)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'k of shape {kk.shape} with ells={ee} should be refused')
+
     def test_emulated(self):
         """FOLPSPTSpectrum2Poles emulated as pt= in spectrum and correlation."""
         from desilike import build
@@ -748,8 +829,8 @@ class TestJAXEffort:
     def test_training_ranges(self):
         """training_ranges / truncate_priors classmethods (PT and tracer classes): the
         'emulator' basis keeps the networks' native inputs (z, H0, m_ncdm_tot), the 'cosmo'
-        basis maps them to sampled parameter names; out-of-range parameters NaN-mask the
-        tracer prediction at runtime."""
+        basis maps them to sampled parameter names; out-of-range parameters violate the
+        training-range constraint at runtime."""
         from desilike import Parameter, VariableCollection
         from desilike.theories.galaxy_clustering.full_shape import (
             JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, _JAXEFFORT_THETA_NAMES,
@@ -773,12 +854,17 @@ class TestJAXEffort:
         low, high = ranges['logA']
         assert params['logA'].prior.limits == (max(1.61, low), min(3.91, high))
 
-        # Runtime out-of-training-range guard: NaN prediction instead of silent extrapolation.
+        # Runtime out-of-training-range guard: the networks run at clipped inputs (no silent
+        # extrapolation) and the distance outside the box is the jaxeffort_range_spectrum2 Constraint.
         k = np.linspace(0.01, 0.2, 20)
-        run = _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2))
+        run = _compile(theory)
         assert np.isfinite(np.asarray(run())).all()
-        assert np.isnan(np.asarray(run(logA=ranges['logA'][1] + 0.5))).all(), \
-            'JAXEffortTracerSpectrum2Poles: expected NaN outside the training range'
+        assert _training_violation(theory, name='jaxeffort_range_spectrum2') == 0.
+        low, high = ranges['logA']
+        assert np.isfinite(np.asarray(run(logA=high + 0.5))).all(), \
+            'JAXEffortTracerSpectrum2Poles: expected finite (clipped) poles outside the training range'
+        assert np.allclose(_training_violation(theory, name='jaxeffort_range_spectrum2'), 0.5 / (high - low))
 
 
 # ── COMET ─────────────────────────────────────────────────────────────────────
@@ -823,7 +909,9 @@ class TestCOMET:
             assert np.isfinite(result).all(), f'COMETTracerSpectrum2Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run, base, f'COMETTracerSpectrum2Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
-        assert np.isnan(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected NaN (derived f below its training range)'
+        # out of range the outputs stay finite and the violation is the calculator's Constraint
+        assert np.isfinite(np.asarray(run(h=3.))).all(), 'COMETTracerSpectrum2Poles (h=3.0): expected finite (clipped) poles'
+        assert _training_violation(theory) > 0., 'COMETTracerSpectrum2Poles (h=3.0): expected a violation (derived f below its training range)'
 
         k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
         theory3 = COMETTracerSpectrum3Poles(k=k3)
@@ -834,12 +922,13 @@ class TestCOMET:
             assert np.isfinite(result3).all(), f'COMETTracerSpectrum3Poles ({param_name}={value}): non-finite result'
             _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
                                **{param_name: value}, **comet_tol)
-        assert np.isnan(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected NaN (derived f below its training range)'
+        assert np.isfinite(np.asarray(run3(h=3.))).all(), 'COMETTracerSpectrum3Poles (h=3.0): expected finite (clipped) poles'
+        assert _training_violation(theory3) > 0., 'COMETTracerSpectrum3Poles (h=3.0): expected a violation (derived f below its training range)'
 
     def test_out_of_training_range(self):
-        """Parameters outside comet's training ranges yield NaN poles (both the PT-split and
-        pt=False direct paths) instead of narrowed priors: the priors are left untouched, and
-        a build-time warning flags the effective prior truncation."""
+        """Parameters outside comet's training ranges are reported by the ``comet_range_spectrum2``
+        Constraint (both the PT-split and pt=False direct paths), the poles staying finite; the
+        priors are left untouched, and a build-time warning flags the effective prior truncation."""
         import warnings as _warnings
         from desilike.base import get_params
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
@@ -856,8 +945,11 @@ class TestCOMET:
             prior_limits = get_params(theory)['n_s'].prior.limits
             assert prior_limits[1] > 1.03, prior_limits
             assert np.isfinite(base).all()
+            assert _training_violation(theory) == 0.
             result = run(n_s=1.08)  # outside comet's ns training range (0.9, 1.03)
-            assert np.isnan(np.asarray(result)).all(), f'expected all-NaN poles (pt={pt}): {result}'
+            assert np.isfinite(np.asarray(result)).all(), f'expected finite (clipped) poles (pt={pt}): {result}'
+            # distance beyond the box edge in units of the box width
+            assert np.allclose(_training_violation(theory), (1.08 - 1.03) / (1.03 - 0.9)), f'pt={pt}'
 
     def test_tracer_spectrum(self):
         """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
@@ -1024,10 +1116,12 @@ class TestCOMET:
                                    err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
 
         # The physical bases expose FOLPSD's names, so the two theories share them.
-        from desilike.base import get_params as get_params
+        from desilike.base import get_params
         cosmo_names = {'h', 'logA', 'n_s', 'omega_b', 'omega_cdm', 'm_ncdm', 'tau_reio', 'N_eff',
                        'Omega_k', 'w0_fld', 'wa_fld'}
-        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))} - cosmo_names
+        from desilike.parameter import Constraint
+        comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
+                       if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
         assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
         assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
@@ -1275,7 +1369,7 @@ class TestGeoFPTAX:
         
         # Wrong shape for Sugiyama should raise error
         k_3d = np.column_stack([np.linspace(0.01, 0.1, 11)] * 3)
-        with pytest.raises(ValueError, match="basis='sugiyama'.*shape \\(N, 2\\)"):
+        with pytest.raises(ValueError, match=r"basis='sugiyama'.*shape \(N, 2\)"):
             GeoFPTAXTracerSpectrum3Poles(k=k_3d, basis='sugiyama')
         
         # Scoccimarro expects (N, 3)
@@ -1283,7 +1377,7 @@ class TestGeoFPTAX:
         _check(_compile(theory_scoccimarro)(), 'Scoccimarro with (N,3) k')
         
         # Wrong shape for Scoccimarro should raise error
-        with pytest.raises(ValueError, match="basis='scoccimarro'.*shape \\(N, 3\\)"):
+        with pytest.raises(ValueError, match=r"basis='scoccimarro'.*shape \(N, 3\)"):
             GeoFPTAXTracerSpectrum3Poles(k=k_2d, basis='scoccimarro')
         
         # Invalid triangles for Scoccimarro should raise error

@@ -24,8 +24,8 @@ class BOBYQA(Kernel):
     def init(self):
         try:
             import pybobyqa  # noqa: F401
-        except ImportError:
-            raise ImportError("'pybobyqa' is required but not installed. Run: pip install pybobyqa")
+        except ImportError as exc:
+            raise ImportError("'pybobyqa' is required but not installed. Run: pip install pybobyqa") from exc
 
     def run(self, state: ProfilerState, chi2, grad=None, max_iterations=int(1e5), **kwargs) -> ProfilerState:
         import pybobyqa

@@ -15,7 +15,7 @@ Typical multi-process usage::
 import os
 import copy
 import functools
-from typing import Callable
+from collections.abc import Callable
 import numpy as np
 
 _use_mpi = True
@@ -102,7 +102,7 @@ def default_mpicomm(func: Callable):
     return wrapper
 
 
-def initialize(mpicomm=None, nshards: int=None):
+def initialize(mpicomm=None, nshards: int | None=None):
     """Configure the global MPI communicator and JAX device setup.
 
     **Must be called before any JAX computation** (i.e. before calling

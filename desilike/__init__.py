@@ -15,8 +15,9 @@ os.environ['FOLPS_BACKEND'] = 'jax'
 # crashing. Set before any equinox-importing dependency (interpax, lineax, blackjax, ...);
 # setdefault so EQX_ON_ERROR=default in the environment restores raising for debugging.
 os.environ.setdefault('EQX_ON_ERROR', 'nan')
-from .parameter import Node, Variable, ParameterPrior, Parameter, VariableCollection
+from .parameter import Node, Variable, ParameterPrior, Parameter, Constraint, VariableCollection
 from .base import Calculator, CompiledGraph, Likelihood, SumLikelihood, GaussianLikelihood, Posterior, Prior, build, differentiate, jacfwd, hessian, pmap, get_params
+from .context import override
 from .utils import read, write, setup_logging, round_measurement
 from .samples import Samples, MCSamples, Profiles, Covariance, Precision
 from .profilers import Profiler, Scipy, Minuit, Optax, BOBYQA

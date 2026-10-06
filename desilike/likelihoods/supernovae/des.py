@@ -109,7 +109,7 @@ class DESY5DovekieSNLikelihood(_BaseDESY5SNLikelihood):
     def read_light_curve_params(self, fn):
         """Parse the 'VARNAMES:'/'SN:'-prefixed, whitespace-separated Dovekie light-curve file."""
         names, values = None, None
-        with open(fn, 'r') as file:
+        with open(fn) as file:
             for line in file:
                 line = line.strip()
                 if not line or line.startswith('#'):

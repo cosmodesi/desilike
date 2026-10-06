@@ -12,6 +12,7 @@ CosmoprimoCosmology
     (``'eisenstein_hu'``) and external Boltzmann codes (``'camb'``, ``'class'``, …).
 """
 
+import os
 import warnings
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from cosmoprimo import CosmologyInputError, CosmologyComputationError
 from cosmoprimo.cosmology import Cosmology
 
 from ..base import Calculator
+from ..parameter import Constraint
 from ..emulators.api import CalculatorEmulator, DERIVED
 from cosmoprimo.emulators.analytic import (AMPLITUDES, amplitude, harmonic_scaling, fourier_analytic_scales,
                                            theta_analytic, solve_theta_analytic,
@@ -122,6 +124,9 @@ class PrimordialCosmology(Calculator):
             params = self.propose_params(*args, **kwargs)
         elif not isinstance(params, VariableCollection):
             params = VariableCollection(params)
+        # a collection from `get_params` carries the graph's Constraints too (ours among them):
+        # they are this calculator's outputs, declared below, never parameters to derive
+        params = VariableCollection([param for param in params if not isinstance(param, Constraint)])
         self.derived_params = params.select(derived=True)
         self.params = params - self.derived_params
         # Requirement registry: filled by downstream calculators via add_requirements().
@@ -129,6 +134,13 @@ class PrimordialCosmology(Calculator):
         # _results:   spec_key → jnp.array   (populated in __call__)
         self._requirements = {}
         self._results = {}
+        # BAO filters, one per `fourier.pk_now` requirement, held between calls where that is
+        # exact: everything a filter does with the fiducial -- locating the peaks of the
+        # fiducial wiggles, which takes scipy -- it does in its `_prepare`, once, and only what
+        # depends on the point (the rs_drag rescaling and the no-wiggle envelope) in `_compute`.
+        # See `_bao_filter`, which is where the exception lives. Latched on the fiducial, so
+        # `__post_init__` clears it.
+        self._bao_filters = {}
         # Out-of-range guard state, here rather than in `__post_init__` so that it exists on
         # every instance -- a caller may ask an uncompiled cosmology what it enforces -- and so
         # that the warn-once latch is per object: `__post_init__` runs at every build, and
@@ -139,13 +151,13 @@ class PrimordialCosmology(Calculator):
         self._engine = None
         self._get_derived = {}
         for param in self.derived_params:
-            if param.basename in ['sigma8_m']:
+            if param.basename == 'sigma8_m':
                 req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_m'})
-            elif param.basename in ['sigma8_cb']:
+            elif param.basename == 'sigma8_cb':
                 req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_cb'})
-            elif param.basename in ['rs_drag']:
+            elif param.basename == 'rs_drag':
                 req = ('thermodynamics.rs_drag', {'of': 'delta_cb'})
-            elif param.basename in ['age']:
+            elif param.basename == 'age':
                 req = ('background.age', {})
             else:
                 req = (f'params.{param.basename}', {})
@@ -157,6 +169,33 @@ class PrimordialCosmology(Calculator):
         # survive it; one passed here does.
         if requirements is not None:
             self.add_requirements(requirements)
+
+    def _bao_filter(self, spec_key, pk_interpolator, fiducial_pk_interpolator=None, engine=None,
+                    cosmo=None, cosmo_fid=None):
+        r"""The BAO filter for this requirement, built once at the fiducial and re-called after.
+
+        A filter splits in two: :meth:`~cosmoprimo.bao_filter.BasePowerSpectrumBAOFilter._prepare`
+        is the fiducial half, which locates the peaks of the fiducial wiggles with scipy, and
+        ``_compute`` the point half (the :math:`r_\mathrm{drag}` rescaling and the no-wiggle
+        envelope). Calling a built filter -- ``bao_filter(pk_interpolator, cosmo=cosmo)`` -- redoes only
+        the second, so the peak finding is paid once for a whole chain rather than at every point.
+
+        Built on *fiducial_pk_interpolator* rather than on the first point that happens to arrive.
+        For the filters whose preparation reads only ``cosmo_fid`` (``wallish2018``, the default,
+        along with ``peakaverage``, ``brieden2022`` and ``savgol``) the two are the same thing. For
+        one that reads the input spectrum as well -- ``hinton2017`` takes its maximum -- they are
+        not, and the fiducial is the defensible choice: the answer then depends on the fiducial the
+        caller declared, not on the order in which a sampler proposed its points.
+        """
+        from cosmoprimo import PowerSpectrumBAOFilter
+
+        bao_filter = self._bao_filters.get(spec_key, None)
+        if bao_filter is None:
+            built_on = pk_interpolator if fiducial_pk_interpolator is None else fiducial_pk_interpolator()
+            bao_filter = self._bao_filters[spec_key] = PowerSpectrumBAOFilter(
+                built_on, engine=engine, cosmo=cosmo_fid if cosmo_fid is not None else cosmo,
+                cosmo_fid=cosmo_fid)
+        return bao_filter(pk_interpolator, cosmo=cosmo)
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -207,7 +246,18 @@ class PrimordialCosmology(Calculator):
                     spec['static'] = static
                     for coord in _COORDS:
                         if coord in kwargs:
-                            spec[coord] = np.sort(np.atleast_1d(kwargs[coord]))
+                            # `unique`, not `sort`: a merge below dedupes, so a grid registered
+                            # once and the same grid registered twice would otherwise have
+                            # different lengths -- and the results array is built from whichever
+                            # was in force when it was computed while `get` indexes with whichever
+                            # is in force now. A grid carrying a repeated value is ordinary
+                            # (`DirectSpectrum2Template` prepends k0 = 1e-3 to a grid that starts
+                            # there), and one registration then gave a 401-long array against a
+                            # 400-long grid: `searchsorted` is off by one from the second entry
+                            # on, so the consumer reads the spectrum shifted a bin down the k
+                            # axis. Measured on a two-observable LRG3 fit, that read as a smooth
+                            # -2% to +6% error across the fitted range and cost |dchi2| ~ 12.
+                            spec[coord] = np.unique(np.atleast_1d(kwargs[coord]))
                 else:
                     spec = self._requirements[spec_key]
                     for coord in _COORDS:
@@ -237,7 +287,7 @@ class PrimordialCosmology(Calculator):
     def get_emulator_cls(self):
         """The emulator this cosmology's requirements call for.
 
-Answered for every cosmology that flattens to its
+        Answered for every cosmology that flattens to its
         registered requirements, which is what the routing reads -- an :class:`ACECosmology`
         included, and there the point is not the Boltzmann call (ACE is already fast) but the
         routing and the leaf naming, plus training nodes cheap enough to check a box in seconds.
@@ -364,7 +414,7 @@ Answered for every cosmology that flattens to its
         obj._engine = aux['engine']
         obj.params = aux['params']
         obj._get_derived = aux['get_derived']
-        obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
+        obj._requirements = dict(aux['ordered_specs'])
         n_results = len(aux['ordered_specs'])
         obj._param_values = children[0]
         obj._results = {sk: arr for (sk, _), arr in zip(aux['ordered_specs'], children[1:1 + n_results])}
@@ -381,6 +431,37 @@ Answered for every cosmology that flattens to its
 # Engines that produce JAX-traceable outputs through cosmoprimo.Cosmology.clone.
 _JAX_ENGINES = frozenset({'eisenstein_hu'})
 
+
+def _is_emulated_engine(engine):
+    """Whether *engine* is a cosmoprimo emulated engine: a saved emulator's path, or the engine class."""
+    return _is_emulator_path(engine) or (not isinstance(engine, str) and getattr(engine, 'name', None) == 'emulated')
+
+
+def _emulated_engine_class(engine):
+    """The engine class behind *engine*: a saved emulator's path is read back."""
+    if isinstance(engine, str):
+        from cosmoprimo.emulators import read_engine
+        return read_engine(engine)
+    return engine
+
+
+def _clipping_supported(engine):
+    """Whether this cosmoprimo serves emulated engines with constraints (an engine carrying its
+    ``emulator``, whose ``constraints()`` it enforces according to ``violation``)."""
+    from cosmoprimo.emulators.tools import Emulator
+    return hasattr(Emulator, 'constraints') and hasattr(_emulated_engine_class(engine), 'emulator')
+
+
+def _is_emulator_path(engine):
+    """Whether this engine name is the path to a saved cosmoprimo emulator.
+
+    The same test :func:`cosmoprimo.cosmology.get_engine` makes: a name with one of these
+    suffixes, or an existing file, is read back as an emulated engine rather than looked up in
+    the engine registry.
+    """
+    return isinstance(engine, str) and (engine.endswith(('.h5', '.hdf5', '.npy', '.npz'))
+                                        or os.path.exists(engine))
+
 # Parameter name conversion: desilike name → cosmoprimo clone kwarg.
 _CONVERSIONS = {}
 
@@ -391,7 +472,8 @@ _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)
 def _get_cosmoprimo_fiducial(fiducial):
     """Return a cosmoprimo Cosmology from a name string, (name, kwargs) tuple, dict, or Cosmology."""
     import cosmoprimo
-    import cosmoprimo.fiducial  # noqa: ensure submodule is accessible as cosmoprimo.fiducial
+    # Ensure the submodule is accessible as cosmoprimo.fiducial.
+    import cosmoprimo.fiducial  # noqa: F401
     if fiducial is None:
         raise ValueError('fiducial cosmology is required')
     if hasattr(fiducial, 'get_fourier'):
@@ -469,11 +551,11 @@ _LENSING_CALC_PARAMS = {
     'class': dict(non_linear='hmcode'),
 }
 _LENS_POTENTIAL_CL_EXTRA_PARAMS = {
-    'camb': dict(lens_margin=1250, lens_potential_accuracy=4,
+    'camb': dict(lens_output_margin=1250, lens_potential_accuracy=4,
                 AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1),
     'class': dict(nonlinear_min_k_max=20, accurate_lensing=1, delta_l_max=800),
 }
-# CAMB needs enough ell reach internally (beyond the requested ellmax) for lens_margin to
+# CAMB needs enough ell reach internally (beyond the requested ellmax) for lens_output_margin to
 # have room to work with; CLASS's 'delta_l_max' above already provides that margin relative
 # to whatever ellmax_cl already is, so it needs no equivalent floor here.
 _LENS_POTENTIAL_CL_MIN_ELLMAX_CL = {'camb': 4000}
@@ -677,6 +759,22 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd=dict(eps=0.05), latex=r'\Omega_k'))
         return params
 
+    def __init__(self, *args, engine='class', **kwargs):
+        super().__init__(*args, engine=engine, **kwargs)
+        # An emulated engine (a saved cosmoprimo emulator, or the class serving one) is run in its
+        # clipping mode: it predicts at the point clipped into its constraints and reports their
+        # distances -- the trained box, the node cloud, any declarative ones -- which are these
+        # Constraint nodes, hard or soft walls in the Posterior, like ACECosmology's guard.
+        # The emulator is read here, at construction, because the nodes must exist by then.
+        self.emulator_constraints = {}
+        if _is_emulated_engine(engine):
+            emulator = _emulated_engine_class(engine).emulator if _clipping_supported(engine) else None
+            if emulator is not None:
+                self.emulator_constraints = {
+                    constraint.name: Constraint(constraint.name, namespace='cosmoprimo_emulator', scale=constraint.scale,
+                                                description=f'cosmoprimo emulator: {constraint.name}')
+                    for constraint in emulator.constraints()}
+
     def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', precision=None, **kwargs):
         # Accuracy overrides on top of the settings derived from the harmonic requirements
         # (_LENSING_CALC_PARAMS / _LENS_POTENTIAL_CL_EXTRA_PARAMS): a dict with optional
@@ -686,19 +784,36 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # are the truth the fit is only as good as.
         self._precision = {key: dict((precision or {}).get(key, {}) or {})
                            for key in ('calc_params', 'extra_params')}
-        # ``engine`` may be a cosmoprimo engine CLASS as well as a name -- notably
-        # ``EmulatedEngine.read(fn)``, the documented way to use a trained cosmoprimo
-        # emulator (e.g. an emulated harmonic section shared by CMB / FS / SN likelihoods).
-        # str() would turn such a class into "<class '...'>" and cosmoprimo would then fail
-        # with 'Unknown engine'.
+        # ``engine`` may be a cosmoprimo engine class as well as a name -- notably
+        # ``cosmoprimo.emulators.read_engine(fn)``, the documented way to use a trained
+        # cosmoprimo emulator (e.g. an emulated harmonic section shared by CMB / FS / SN
+        # likelihoods). str() would turn such a class into "<class '...'>" and cosmoprimo
+        # would then fail with 'Unknown engine'.
         self._engine = str(engine) if isinstance(engine, str) else engine
-        # A non-string engine is a JAX-traceable emulator unless it says otherwise; named
-        # engines are looked up in the JAX list as before.
-        self._is_external = isinstance(self._engine, str) and self._engine not in _JAX_ENGINES
+        self._engine_clips = False
+        if _is_emulated_engine(self._engine):
+            if self.emulator_constraints:
+                from cosmoprimo.emulators import emulated_engine
+                self._engine = emulated_engine(_emulated_engine_class(self._engine).emulator, violation='clip')
+                self._engine_clips = True
+            elif not _clipping_supported(self._engine):
+                # a cosmoprimo older than its emulator constraints: its own guard (NaN when traced) stays
+                warnings.warn('this cosmoprimo has no constraints for emulated engines: outside the trained box '
+                              'they raise (eager) or return NaN (traced), and no Constraint is declared')
+        # A non-string engine is a jax-traceable emulator unless it says otherwise; named
+        # engines are looked up in the jax list as before -- with the path to a saved emulator
+        # counting as one, since `cosmoprimo.cosmology.get_engine` resolves such a path to the
+        # emulated engine (`Cosmology(engine='my_emulator.npy')`). Getting that wrong is not a
+        # crash but a silent loss: the cosmology would run through `pure_callback` with
+        # finite-difference derivatives, which is both slower than the emulator it wraps and
+        # no longer differentiable through.
+        self._is_external = isinstance(self._engine, str) and self._engine not in _JAX_ENGINES \
+            and not _is_emulator_path(self._engine)
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
         # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
         self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
+        self._bao_filters = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -778,6 +893,10 @@ class CosmoprimoCosmology(PrimordialCosmology):
             self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
                                             calc_params=calc_params, extra_params=extra_params)
             self._run_requirements(params)
+            if self._engine_clips:
+                # set by the engine when the requirements above asked for its prediction
+                for name, value in self._cosmo._engine.violations.items():
+                    self.emulator_constraints[name].value = jnp.asarray(value)
 
     def _run_requirements(self, params):
         """Populate ``self._results`` / ``self.derived_params`` from ``self._cosmo``."""
@@ -790,12 +909,28 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 fo = cosmo.get_fourier()
                 result = fo.pk_interpolator(of=static['of'], **_kw_pk)(**_kw_coords).T
             elif method_key == 'fourier.pk_now':
-                from cosmoprimo import PowerSpectrumBAOFilter
-                fo = cosmo.get_fourier()
-                pk_interp = fo.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=_kw_coords['z'])
-                bao = PowerSpectrumBAOFilter(pk_interp, engine=static['engine'],
-                                             cosmo=cosmo, cosmo_fid=self._fiducial)
-                result = bao.smooth_pk_interpolator()(_kw_coords['k']).T
+                fourier = cosmo.get_fourier()
+                if hasattr(fourier, 'pk_now_interpolator'):
+                    # An emulated section filters the spectrum it predicts, holding its filter
+                    # between calls -- which is what makes the peak-finding filters traceable, and
+                    # what keeps the no-wiggle spectrum consistent with the wiggle one. Building a
+                    # filter here instead would locate its peaks with scipy inside the jit, and
+                    # would hand it `self._fiducial`, which for an emulated engine is a cosmology
+                    # that can only answer for what was emulated (measured: `'delta_m' was not
+                    # emulated` out of the filter's own reference spectrum).
+                    result = fourier.pk_now_interpolator(of=static['of'], engine=static['engine'],
+                                                         **_kw_pk)(**_kw_coords).T
+                else:
+                    pk_interp = fourier.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=_kw_coords['z'])
+
+                    def fiducial_pk_interp(of=static['of'], z=_kw_coords['z']):
+                        # the fiducial's own spectrum, on the same grid and settings; called once,
+                        # when the filter is built
+                        return self._fiducial.get_fourier().pk_interpolator(of=of, **_kw_pk).to_1d(z=z)
+
+                    result = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
+                                              engine=static['engine'], cosmo=cosmo,
+                                              cosmo_fid=self._fiducial).smooth_pk_interpolator()(_kw_coords['k']).T
             elif method_key == 'fourier.sigma8_z':
                 fo = cosmo.get_fourier()
                 result = fo.sigma8_z(**_kw_coords, of=static['of'])
@@ -998,7 +1133,7 @@ def _find_capse_ellmax(spectrum_dir, nout):
         else:
             raise ValueError(f'Capse-style emulator {spectrum_dir}: multipole grid length ({len(ell)}) '
                              f'does not match the network output length ({nout})')
-    return int(round(float(np.max(ell))))
+    return round(float(np.max(ell)))
 
 
 def _intersect_ranges(ranges_per_emulator):
@@ -1019,7 +1154,7 @@ def _intersect_ranges(ranges_per_emulator):
 def _warn_priors_beyond_ranges(params, ranges):
     """Warn for each varied parameter whose prior reaches outside the emulators' training ranges.
 
-    Outside them every emulated result is NaN-masked, which a posterior turns into ``-inf``: the
+    Outside them the ``ace_range`` constraint is violated, which a sampler's posterior turns into ``-inf``: the
     prior is effectively truncated whether or not anybody said so.  :meth:`ACECosmology.truncate_priors`
     makes it explicit; this is the warning for those who have not called it.
 
@@ -1034,7 +1169,7 @@ def _warn_priors_beyond_ranges(params, ranges):
         low, high = ranges[name]
         if limits[0] < low or limits[1] > high:
             warnings.warn(f'parameter {name!r} prior range {tuple(limits)} extends beyond the packaged emulator '
-                          f'training range ({low}, {high}): samples outside yield NaN (effective prior truncation)')
+                          f'training range ({low}, {high}): samples outside violate its ace_range constraint (an effective prior truncation for samplers)')
 
 
 def _add_h_from_H0(ranges, replace):
@@ -1088,13 +1223,35 @@ def _find_capse_metadata(emulator_dir):
     nout = np.load(emulator_dir / spectra[0] / 'outminmax.npy').shape[0]
     ellmax = _find_capse_ellmax(emulator_dir / spectra[0], nout)
     constraint = description.get('constraint', None)
+    linear_constraints = []
     if constraint:
-        warnings.warn(f'Capse-style emulator {emulator_dir} declares the training-domain constraint {constraint!r}, '
-                      "which the out-of-range guard does not enforce (it only clips per-parameter ranges): "
-                      'parameters satisfying every range but violating it are extrapolations, not NaN-masked')
+        parsed = _parse_linear_constraint(constraint)
+        if parsed is None:
+            warnings.warn(f'Capse-style emulator {emulator_dir} declares the training-domain constraint {constraint!r}, '
+                          'which could not be parsed as a linear cut (sum of parameters < bound) and is not enforced: '
+                          'parameters satisfying every range but violating it are extrapolations')
+        else:
+            linear_constraints.append(parsed)
     outputs = ['harmonic.lensed_cl'] + (['harmonic.lens_potential_cl'] if 'PP' in spectra else [])
     return dict(kind='jaxcapse', inputs=list(inputs), outputs=outputs, ranges=ranges,
-                ellmax=int(ellmax), spectra=spectra)
+                ellmax=int(ellmax), spectra=spectra, linear_constraints=linear_constraints)
+
+
+def _parse_linear_constraint(text):
+    """``'w0 + wa < -0.5'`` → ``(['w0_fld', 'wa_fld'], -0.5)``: a sum of parameters bounded above;
+    ``None`` if *text* is not of that form.  Names go through :data:`_CONVERSION_CAPSE`."""
+    import re
+    match = re.fullmatch(r'\s*([A-Za-z0-9_\s+]+?)\s*<=?\s*([-+]?[0-9.]+(?:[eE][-+]?[0-9]+)?)\s*', str(text))
+    if match is None:
+        return None
+    names = []
+    for token in match.group(1).split('+'):
+        normalized = token.strip().replace(' ', '').lower()
+        name = _CONVERSION_CAPSE.get(normalized, None)
+        if name is None:
+            return None
+        names.append(name)
+    return names, float(match.group(2))
 
 
 def _ace_background(method_key, z, backend='cosmoprimo', cosmoprimo_cosmo=None, jaxace_cosmo=None):
@@ -1266,6 +1423,14 @@ class ACECosmology(PrimordialCosmology):
         the same equation with a fixed 200-step RK4 whose cost cannot depend on the data.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Distance outside the emulators' training domain (box, plus any declared linear cut such as
+        # w0 + wa < -0.5), read by the Posterior as a hard or soft wall; the results themselves are
+        # computed at clipped inputs and stay finite.
+        self.training_range = Constraint('ace_range', scale=0.01, description='distance outside the ACE emulators training domain')
+        self._linear_constraints = []
+
     @classmethod
     def propose_params(cls, *args, engine='isitgr', fiducial='DESI', **kwargs):
         r"""Return a proposed :class:`~desilike.parameter.VariableCollection` of cosmological Parameters.
@@ -1300,7 +1465,7 @@ class ACECosmology(PrimordialCosmology):
         r"""Return the training ranges of the emulators selected by *engine*.
 
         These are the ranges enforced by :meth:`__call__`'s out-of-range guard: inputs are
-        clipped to them before evaluation and every emulated result is NaN-masked when a
+        clipped to them before evaluation and the ``ace_range`` constraint reports how far a
         parameter falls outside.
 
         Parameters
@@ -1358,7 +1523,7 @@ class ACECosmology(PrimordialCosmology):
                 base_dir = cosmology._init[1].get('base_dir')
         base_emulator_dir = Path(base_dir) if base_dir is not None else Path(Installer().install_dir) / 'ace-emulators'
         if isinstance(engine, str):
-            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section_: engine for section_ in ['harmonic', 'fourier', 'background']}
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else dict.fromkeys(['harmonic', 'fourier', 'background'], engine)
         if section is not None:
             sections = [section] if isinstance(section, str) else list(section)
             unknown = [name for name in sections if name not in engine]
@@ -1429,7 +1594,7 @@ class ACECosmology(PrimordialCosmology):
             base_emulator_dir = Path(Installer().install_dir) / 'ace-emulators'
         _SECTIONS = ['harmonic', 'fourier', 'background']
         if isinstance(engine, str):
-            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else {section: engine for section in _SECTIONS}
+            engine = dict(_PACKAGED_DEFAULT_ENGINE) if engine == 'ace' else dict.fromkeys(_SECTIONS, engine)
 
         def _find_inputs_outputs(emulator_dir):
             import json
@@ -1477,6 +1642,7 @@ class ACECosmology(PrimordialCosmology):
             # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
             self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+        self._bao_filters = {}
 
     def add_requirements(self, requirements):
         super().add_requirements(requirements)
@@ -1598,6 +1764,12 @@ class ACECosmology(PrimordialCosmology):
         self._param_clip_ranges = _add_h_from_H0(
             _intersect_ranges(self._emulator_metadata[emulator_key].get('ranges', {})
                               for emulator_key in self._loaded_emulators), replace=False)
+        # declared linear cuts of the training domain (e.g. w0 + wa < -0.5), kept once each
+        self._linear_constraints = []
+        for emulator_key in self._loaded_emulators:
+            for names, bound in self._emulator_metadata[emulator_key].get('linear_constraints', []):
+                if (names, bound) not in self._linear_constraints:
+                    self._linear_constraints.append((names, bound))
         _warn_priors_beyond_ranges(self.params, self._param_clip_ranges)
 
     def __call__(self):
@@ -1634,15 +1806,15 @@ class ACECosmology(PrimordialCosmology):
         # ranges so every internal evaluation (networks, splines, BAO filter) stays finite,
         # record per-parameter validity, and mask all results to NaN below when invalid.
         clip_ranges = self._param_clip_ranges
-        params_in_range = {}
+        range_violations = {}
+        unclipped_get_param = get_param
         if clip_ranges:
-            unclipped_get_param = get_param
 
             def get_param(name):
                 value = unclipped_get_param(name)
                 if name in clip_ranges:
                     low, high = clip_ranges[name]
-                    params_in_range[name] = (value >= low) & (value <= high)
+                    range_violations[name] = (jnp.maximum(low - value, 0.) + jnp.maximum(value - high, 0.)) / (high - low)
                     value = jnp.clip(value, low, high)
                 return value
 
@@ -1704,7 +1876,7 @@ class ACECosmology(PrimordialCosmology):
                 else:
                     raise NotImplementedError(f'no background formula for {method_key!r}')
             elif kind == 'jaxace':
-                ace_output = run_ace(spec['z'] if 'z' in spec else 0.)
+                ace_output = run_ace(spec.get('z', 0.))
                 if method_key.startswith('fourier.sigma8_z'):
                     # sigma8_z is total-matter; of='delta_cb' is served with the same value
                     # (see _PACKAGED_EMULATORS).  For theta: fsigma8(z) = f_z * sigma8_z.
@@ -1763,14 +1935,26 @@ class ACECosmology(PrimordialCosmology):
                     # cosmoprimo interpolator needs concrete k knots, so first resample the pk
                     # (whose emulator k grid divided by traced h is itself traced) onto a fixed
                     # h/Mpc grid covering the emulator range for any reasonable h.
-                    from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
+                    from cosmoprimo import PowerSpectrumInterpolator1D
                     k_fixed = np.geomspace(1e-5, 50., 300)
                     pk_fixed = _interp_loglog(k_fixed, k_grid / h, (pk * h**3).T)
                     pk_interp = PowerSpectrumInterpolator1D(k_fixed, pk_fixed, **_kw_pk)
                     filter_cosmo = cosmoprimo_cosmo if self._conversion == 'cosmoprimo' else None
-                    bao = PowerSpectrumBAOFilter(pk_interp, engine=spec['static']['engine'], cosmo=filter_cosmo,
-                                                 cosmo_fid=self._fiducial if self._conversion == 'cosmoprimo' else None)
-                    result = bao.smooth_pk_interpolator()(spec['k']).T
+                    filter_cosmo_fid = self._fiducial if self._conversion == 'cosmoprimo' else None
+
+                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z,
+                                           filter_cosmo_fid=filter_cosmo_fid):
+                        # the same fixed grid the emulated spectrum was resampled onto, so the
+                        # filter is prepared on the fiducial and called on every point after
+                        if filter_cosmo_fid is None:
+                            return pk_interp
+                        return pk_interp.clone(
+                            pk=filter_cosmo_fid.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
+
+                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
+                                                  engine=spec['static']['engine'],
+                                                  cosmo=filter_cosmo, cosmo_fid=filter_cosmo_fid)
+                    result = bao_filter.smooth_pk_interpolator()(spec['k']).T
                 else:
                     result = _interp_loglog(spec['k'], k_grid / h, (pk * h**3).T).T
             elif kind == 'jaxcapse':
@@ -1808,12 +1992,14 @@ class ACECosmology(PrimordialCosmology):
                 emulator_params = jnp.stack([spec['z'] if name == 'z' else jnp.full(shape, get_param(name)) for name in input_names])
                 result = emulator.run_emulator(emulator_params)
             self._results[spec_key] = result
-        if params_in_range:
-            # Out-of-range guard: every result was computed from clipped (finite) inputs;
-            # mask them all to NaN when any parameter fell outside its training range.
-            valid = jnp.all(jnp.array(list(params_in_range.values())))
-            for spec_key in self._requirements:
-                self._results[spec_key] = jax.tree.map(lambda arr: jnp.where(valid, arr, jnp.nan), self._results[spec_key])
+        # Out-of-range guard: every result was computed from clipped (finite) inputs; the distance
+        # outside the training domain -- box ranges in units of their width, plus the excess over
+        # any declared linear cut -- is the `ace_range` Constraint, a hard or soft wall in the Posterior.
+        violation = sum(range_violations.values(), jnp.zeros(()))
+        for names, bound in self._linear_constraints:
+            if all(name in self.params for name in names):
+                violation = violation + jnp.maximum(sum(unclipped_get_param(name) for name in names) - bound, 0.)
+        self.training_range.value = violation
         # Here set derived_params
         for param, getter in self._get_derived.items():
             self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
@@ -1944,6 +2130,34 @@ class _SectionEmulator(CalculatorEmulator):
       at the centre for ever.
     """
 
+    def to_calculator(self, calculator=None, **kwargs):
+        """Deploy, with an ``add_requirements`` bound to the class so a copy keeps it.
+
+        A consumer left un-emulated -- a template on an arm the emulator did not replace -- calls
+        ``add_requirements`` on every build. The base deployment answers that from the instance,
+        which ``copy()`` discards: it re-runs ``__init__``, and the deployed one is a no-op. So
+        ``sample`` and ``profile``, which copy before building, died on a missing
+        ``_requirements`` where ``build`` alone looked clean.
+
+        Requirements are fixed at training, so this is a no-op for one that was emulated and
+        raises for one that was not, naming it here rather than leaving a missing leaf later.
+        """
+        deployed = super().to_calculator(calculator=calculator, **kwargs)
+        emulated = {spec_key[0] for spec_key in deployed._requirements}
+
+        def add_requirements(self, requirements):
+            missing = sorted(set(requirements) - emulated)
+            if missing:
+                raise ValueError(f'{missing} not emulated by this cosmology, which serves '
+                                 f'{sorted(emulated)}. It was deployed from an emulator trained '
+                                 'on the requirements registered at the time; re-train with the '
+                                 'new ones in place, or leave the arm that needs them exact.')
+
+        # The class is synthesised per deployment (`type(f'Emulated{...}', ...)`), so this
+        # reaches only this deployment's own class.
+        type(deployed).add_requirements = add_requirements
+        return deployed
+
     def set_children_leafnames(self):
         aux, calculator = self.aux, self.calculator
         # in the order `tree_flatten` produces: a dict child flattens in sorted key order
@@ -1970,7 +2184,7 @@ class _SectionEmulator(CalculatorEmulator):
         if cached is not None:
             return cached
         aux = self.aux
-        specs = {spec_key: spec for spec_key, spec in aux['ordered_specs']}
+        specs = dict(aux['ordered_specs'])
         inputs = {param.basename for param in aux['params']}
 
         def describe(spec_key):
@@ -2017,7 +2231,7 @@ class _SectionEmulator(CalculatorEmulator):
             # broadcasts the scalar it divides into a vector. Measured: two derived sigma8 leaves
             # turned a 12-wide derived row into a 14-wide one, and emcee died on the mismatch
             # several hundred steps in, where the walkers' blobs no longer lined up.
-            method_key, kwargs = getter
+            _method_key, kwargs = getter
             described = dict(describe(_spec_key(*getter)))
             described.update({coord: np.atleast_1d(kwargs[coord])
                               for coord in _COORDS if coord in kwargs})
@@ -2573,7 +2787,12 @@ class BackgroundEmulator(_RoutedSectionEmulator):
         """
         transforms = super()._transforms()
         if self._omega_basis(self.space.params):
-            transforms.update({name: 'log' for name in self._DENSITIES.values()})
+            # only the densities this space actually varies: the basis change converts those and
+            # leaves the rest alone, so declaring a transform for a fraction the mapping never
+            # introduces is refused by `Space.map` ("['Omega_b'] are not among the mapped
+            # parameters"). A pipeline varying `omega_cdm` and holding `omega_b` is ordinary.
+            transforms.update({fraction: 'log' for density, fraction in self._DENSITIES.items()
+                               if density in self.space.params})
         return transforms
 
     def training_space(self):
@@ -2708,6 +2927,25 @@ class CosmologyEmulator(_SectionEmulator):
         if missing:
             raise RuntimeError(f'no sector predicts the leaves {missing}')
         return out
+
+    def predict_in_box(self, **params):
+        """:meth:`predict`, each sector clipped into its own constraints; their distances keyed
+        ``<sector>_<constraint>`` (see :meth:`constraint_specs`)."""
+        out, violations = {}, {}
+        for sector, sub in self._sectors.items():
+            predicted, sub_violations = sub.predict_in_box(**params)
+            out.update(predicted)
+            violations.update({f'{sector}_{name}': value for name, value in sub_violations.items()})
+        missing = [name for name in self.children_leafnames if name not in out]
+        if missing:
+            raise RuntimeError(f'no sector predicts the leaves {missing}')
+        return out, violations
+
+    def constraint_specs(self):
+        return [(f'{sector}_{name}', scale) for sector, sub in self._sectors.items() for name, scale in sub.constraint_specs()]
+
+    def range_limits(self):
+        return {name: sub.range_limits() for name, sub in self._sectors.items()}
 
     def to_calculator(self, calculator=None, center=True):
         # The sectors get their calculator BEFORE the deploy, not after. The base runs no

@@ -92,6 +92,45 @@ class TestCosmoprimoCosmology:
         np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag,
                                     cosmo.get('thermodynamics.rs_drag'))
 
+    @pytest.mark.parametrize('engine', ['wallish2018', 'peakaverage', 'hinton2017'])
+    def test_the_bao_filter_is_built_at_the_fiducial_and_held(self, engine):
+        """A `fourier.pk_now` filter is built once, on the fiducial, and called at every point
+        after, so the peak finding is paid once for a whole chain.
+
+        What that buys, and what is tested here, is that the answer at a point does not depend on
+        which points came before it -- true of `hinton2017`, whose preparation reads the input
+        spectrum, only because the spectrum it is built on is the fiducial's rather than the
+        first point's.
+        """
+        from desilike.base import build
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        k = np.geomspace(1e-3, 0.5, 60)
+        cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI', requirements={
+            'fourier.pk_now': [{'of': 'delta_cb', 'engine': engine, 'z': [0.5, 1.1], 'k': k}]})
+        build(cosmo)
+        spec_key = next(key for key in cosmo._requirements if key[0] == 'fourier.pk_now')
+
+        def run(point, restart=False):
+            for param in cosmo.params:
+                if param.basename in point:
+                    param.update(value=point[param.basename])
+            if restart:
+                cosmo._bao_filters = {}
+            cosmo()
+            return np.asarray(cosmo._results[spec_key]), cosmo._bao_filters[spec_key]
+
+        low, high = {'h': 0.66, 'omega_cdm': 0.118}, {'h': 0.72, 'omega_cdm': 0.126}
+        _, first = run(low, restart=True)
+        after_low, second = run(high)
+        # one filter for the requirement, whatever the engine and however many points it sees
+        assert second is first
+        _, third = run(high, restart=True)             # a run that starts at the other point
+        after_restart, fourth = run(high)
+        assert fourth is third and third is not first
+        # and the answer is the same either way: what the filter holds is the fiducial, not a point
+        np.testing.assert_allclose(after_low, after_restart, rtol=0., atol=0.)
+
     def test_external_engine_invalid_input_raises_eager_nans_under_jit(self):
         """External engines (camb, class) run through pure_callback with concrete values, so
         cosmoprimo's usual 'raise outside jax tracing, NaN inside' fallback (exception_or_nan)
@@ -131,7 +170,7 @@ class TestCosmoprimoCosmology:
         # Unphysical point, eager: raises (loud, useful for direct/debugging use). pure_callback
         # wraps the original CosmologyInputError, even outside jax.jit.
         bad_eager = {**defaults, 'omega_cdm': -0.05}
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 -- the wrapping exception type is an implementation detail
             pipe(bad_eager, return_derived=True)
 
         # Same shape of unphysical point (distinct value: the failed eager call above already
@@ -168,12 +207,27 @@ class TestCosmoprimoCosmology:
         assert jit_out is None  # __call__ returns None; no crash is the point of this test
 
 
+@pytest.fixture
+def jaxace():
+    """The ACE emulators run on jaxace, which is not on PyPI (it ships with the Zenodo artifacts)."""
+    return pytest.importorskip('jaxace')
+
+
+@pytest.fixture
+def ace_emulator_dir():
+    """The trained ACE emulators, fetched next to the repository rather than packaged."""
+    base = TestACECosmology.emulator_base_dir
+    if not base.is_dir():
+        pytest.skip(f'no ACE emulators at {base}')
+    return base
+
+
 class TestACECosmology:
 
     import desilike as _desilike
     emulator_base_dir = Path(_desilike.__file__).parent.parent.parent / 'ace-emulators'
 
-    def test_ace(self):
+    def test_ace(self, jaxace, ace_emulator_dir):
         from desilike.base import build, get_params
         from desilike.parameter import Parameter, VariableCollection
         from desilike.theories.primordial_cosmology import ACECosmology
@@ -191,7 +245,7 @@ class TestACECosmology:
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': 0.1}]})
         build(cosmo)()
 
-    def test_section_proxy(self):
+    def test_section_proxy(self, jaxace, ace_emulator_dir):
         """cosmo.get_fourier().pk(...)/get_background().comoving_transverse_distance(...) match
         the equivalent flat cosmo.get(...) calls exactly, for a second PrimordialCosmology subclass."""
         from desilike.base import build, get_params
@@ -214,7 +268,7 @@ class TestACECosmology:
         np.testing.assert_allclose(cosmo.get_background().comoving_transverse_distance(z=0.1),
                                     cosmo.get('background.comoving_transverse_distance', z=0.1))
 
-    def test_packaged(self):
+    def test_packaged(self, jaxace):
         """engine='ace' serves DirectSpectrum2Template's and the CMB likelihoods' requirements
         from the packaged jaxace / jaxmapse / jaxcapse trained emulators, matching cosmoprimo
         (class for pk / sigma8_z / rs_drag, camb for the Cl) at the DESI fiducial."""
@@ -363,10 +417,11 @@ class TestACECosmology:
         cl_tt_fiducial = np.asarray(cosmo.get_harmonic().lensed_cl(ellmax=ellmax)['tt'])
         assert not np.allclose(cl_tt[2:], cl_tt_fiducial[2:], rtol=1e-4, atol=0.)
 
-    def test_packaged_out_of_range(self):
-        """Parameters outside the packaged emulators' training ranges yield NaN results
-        (eager and jit) instead of a non-finite crash in downstream spline solves, and a
-        warning flags priors wider than the training range at build time."""
+    def test_packaged_out_of_range(self, jaxace):
+        """Parameters outside the packaged emulators' training ranges are reported by the
+        ``ace_range`` Constraint (eager and jit), the results staying finite (evaluated at clipped
+        inputs, no crash in downstream spline solves), and a warning flags priors wider than the
+        training range at build time."""
         import warnings as _warnings
         import jax
         from desilike.base import build, get_params
@@ -393,21 +448,58 @@ class TestACECosmology:
                     cosmo.get('fourier.pk_now', of='delta_cb', engine='peakaverage', z=z_test, k=k),
                     cosmo.get('harmonic.lensed_cl', ellmax=100)['tt'])
 
+        from desilike.base import get_params
         results = run(defaults)
         assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
-        results = run({**defaults, 'h': 3.})  # far outside the ACE training range: NaN, no crash
-        assert all(np.all(np.isnan(np.asarray(result))) for result in results)
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        results = run({**defaults, 'h': 3.})  # far outside the ACE training range: finite, flagged
+        assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
+        assert float(np.asarray(cosmo.training_range.value)) > 0.
+        assert get_params(cosmo, filter='constraint').names() == ['ace_range']
 
         # jit path, through a downstream consumer (results must be read off a pipeline output,
         # not off cosmo._results, which lives inside the compiled pipe's own trace)
         from desilike.theories.galaxy_clustering.template import DirectSpectrum2Template
         template = DirectSpectrum2Template(z=z_test, fiducial='DESI', cosmo=ACECosmology(engine='ace', fiducial='DESI'))
-        pipe_template = jax.jit(build(template))
+        graph_template = build(template)
+        pipe_template = jax.jit(lambda params: graph_template(params, return_derived=True))
         defaults = {param.name: param._value for param in get_params(template)}
-        assert np.all(np.isfinite(np.asarray(pipe_template(defaults))))
-        assert np.all(np.isnan(np.asarray(pipe_template({**defaults, 'h': 3.}))))
+        value, derived = pipe_template(defaults)
+        assert np.all(np.isfinite(np.asarray(value))) and float(derived['ace_range']) == 0.
+        value, derived = pipe_template({**defaults, 'h': 3.})
+        assert np.all(np.isfinite(np.asarray(value))) and float(derived['ace_range']) > 0.
 
-    def test_training_ranges_accepts_a_cosmology(self):
+    def test_linear_constraint_parsing(self):
+        """Declared linear training-domain cuts of Capse-style emulators are parsed for the guard."""
+        from desilike.theories.primordial_cosmology import _parse_linear_constraint
+        assert _parse_linear_constraint('w0 + wa < -0.5') == (['w0_fld', 'wa_fld'], -0.5)
+        assert _parse_linear_constraint('w0+wa<=0') == (['w0_fld', 'wa_fld'], 0.)
+        assert _parse_linear_constraint('w0 * wa < 1') is None
+        assert _parse_linear_constraint('w0 + unknown < 1') is None
+
+    def test_w0wa_linear_cut(self, jaxace):
+        """The 'w0 + wa < -0.5' cut of the 20k Capse set enters ``ace_range``: zero inside, the
+        excess over -0.5 outside, while every per-parameter range is satisfied."""
+        from desilike.base import build, get_params
+        from desilike.theories.primordial_cosmology import ACECosmology
+        # desi-clustering's DEFAULT_ACE_ENGINE
+        engine = {'background': 'ACE_mnuw0wacdm_ln10As_basis', 'fourier': 'mnuw0wacdm_class',
+                  'harmonic': 'capse_mnuw0wacdm_20k_hybrid_ee_20260831'}
+        try:
+            cosmo = ACECosmology(engine=engine, fiducial='DESI', requirements={'harmonic.lensed_cl': [{'ellmax': 100}]})
+            pipe = build(cosmo)
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            pytest.skip(f'20k Capse set not available: {exc}')
+        assert cosmo._linear_constraints == [(['w0_fld', 'wa_fld'], -0.5)]
+        defaults = {param.name: param._value for param in get_params(cosmo)}
+        pipe({**defaults, 'w0_fld': -1., 'wa_fld': 0.3})        # w0 + wa = -0.7: inside
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        pipe({**defaults, 'w0_fld': -0.6, 'wa_fld': 0.})        # w0 + wa = -0.6: inside
+        assert float(np.asarray(cosmo.training_range.value)) == 0.
+        pipe({**defaults, 'w0_fld': -0.4, 'wa_fld': 0.})        # w0 + wa = -0.4: 0.1 over the cut
+        assert np.allclose(float(np.asarray(cosmo.training_range.value)), 0.1)
+
+    def test_training_ranges_accepts_a_cosmology(self, jaxace):
         """A cosmology can be handed over directly, so no caller has to branch on how far it got.
 
         Before a build nothing is loaded, so the answer comes from the engine spec the instance
@@ -477,7 +569,7 @@ class TestACECosmology:
         ACECosmology.truncate_priors(params, engine='does_not_exist')
         assert params['h'].prior.limits == (0.1, 10.)
 
-    def test_packaged_direct_template(self):
+    def test_packaged_direct_template(self, jaxace):
         """DirectSpectrum2Template(cosmo=ACECosmology(engine='ace')) compiles and runs as pure
         JAX: qpar = qper = 1 and f consistent between fk, f0 and fsigma8 / sigma8 at the
         fiducial, with finite gradients with respect to cosmological parameters."""
@@ -502,7 +594,7 @@ class TestACECosmology:
         grad = jax.grad(lambda p: jax.numpy.sum(pipe(p)))(defaults)
         assert np.isfinite(float(grad['logA'])) and float(grad['logA']) > 0.
 
-    def test_fiducial_from_calculator(self):
+    def test_fiducial_from_calculator(self, jaxace, ace_emulator_dir):
         """_get_fiducial(name, calculator=cosmo) re-runs cosmo's own pipeline at the named
         fiducial's parameter values (cosmoprimo-recognized ones only, e.g. h, omega_cdm, ...),
         keeps cosmo's own extra/nuisance params (mu1, Sigma1, ...) unchanged, and returns an
@@ -588,7 +680,7 @@ def _space(*names):
 def _relative(emulator, point, leaf='fourier.pk|of=delta_cb,delta_cb', kmin=0., kmax=np.inf):
     predicted, exact = emulator.predict(**point)[leaf], emulator.compute(point)[leaf]
     ratio = np.asarray(predicted) / np.asarray(exact)
-    return ratio[..., (K >= kmin) & (K <= kmax)] if 'pk' in leaf else ratio
+    return ratio[..., (kmin <= K) & (kmax >= K)] if 'pk' in leaf else ratio
 
 
 class TestFourierEmulator:
@@ -791,6 +883,19 @@ class TestCosmologyEmulator:
                                    np.squeeze(exact['fourier.pk|of=delta_cb,delta_cb']), rtol=2e-3)
         np.testing.assert_allclose(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:], exact[cl][2:], rtol=5e-3)
 
+        # the composite forwards each sector's constraints, keyed `<sector>_<constraint>`
+        from cosmoprimo.emulators.tools import Emulator as CosmoprimoEmulator
+        if hasattr(CosmoprimoEmulator, 'constraints'):
+            from desilike.base import get_params
+            listed = get_params(deployed, filter='constraint')
+            assert {param.basename for param in listed} >= {'harmonic_box', 'fourier_box', 'background_box'}
+            assert all(float(np.asarray(node.value)) == 0. for node in deployed.emulator_constraints.values())
+            build(deployed)({**point, 'omega_cdm': 0.14})            # above (0.11, 0.13), for every sector
+            assert all(float(np.asarray(deployed.emulator_constraints[f'{sector}_box'].value)) > 0.
+                       for sector in ('harmonic', 'fourier', 'background', 'thermodynamics'))
+            assert np.all(np.isfinite(np.asarray(deployed.get('fourier.pk', of='delta_cb', z=Z, k=K))))
+            assert np.all(np.isfinite(np.asarray(deployed.get('harmonic.unlensed_cl', ellmax=60)['tt'][2:])))
+
 
     def test_a_reloaded_emulator_deploys_in_the_theta_basis(self, tmp_path):
         """`h` in the space routes through `theta_MC_100`, and that is the case a deploy broke.
@@ -859,3 +964,133 @@ def test_a_derived_leaf_keeps_its_own_redshift():
             np.testing.assert_allclose(predicted[leaf], exact[leaf], rtol=1e-3)
     # the requirement itself keeps the merged grid it was registered on
     assert np.shape(predicted['fourier.sigma8_z|of=delta_cb,delta_cb']) == (2,)
+
+
+class TestEmulatedEngine:
+    """A cosmology driven by a trained cosmoprimo emulator, rather than by a Boltzmann code.
+
+    The other direction from the emulators above: there, desilike emulates its own calculator and
+    the grids come from whatever the consumers registered; here the emulation happened in
+    cosmoprimo, on grids fixed when it was trained, and desilike is only asked to read the
+    sections back. Both paths are kept -- this one is checked against the engine it was trained
+    on, and against the calculator-level emulators, rather than replacing them.
+    """
+
+    #: What a full-shape, BAO or supernova likelihood asks a cosmology for.
+    REQUIREMENTS = {
+        'fourier.pk': [{'of': 'delta_cb', 'z': [0.5, 1.1], 'k': np.geomspace(1e-3, 0.5, 40)},
+                       {'of': 'theta_cb', 'z': [0.5, 1.1], 'k': np.geomspace(1e-3, 0.5, 40)}],
+        'fourier.sigma8_z': [{'of': 'delta_cb', 'z': [0.5, 1.1]}],
+        'background.efunc': [{'z': [0.5, 1.1]}],
+        'background.comoving_transverse_distance': [{'z': [0.5, 1.1]}],
+        'thermodynamics.rs_drag': None,
+        'params.Omega_m': None,
+    }
+
+    @pytest.fixture(scope='class')
+    def emulator_path(self, tmp_path_factory):
+        from cosmoprimo.emulators import Space as CosmoprimoSpace, emulate
+        from cosmoprimo.fiducial import DESI
+
+        path = str(tmp_path_factory.mktemp('emulated_engine') / 'cosmology.h5')
+        # the pipeline's own fiducial: everything the emulator does not vary is pinned to the
+        # cosmology it was trained on, so training from another one is a silent offset
+        emulate(DESI(engine='eisenstein_hu'),
+                CosmoprimoSpace(bounds={'h': (0.64, 0.72), 'omega_cdm': (0.11, 0.13)}),
+                budget=1, section={'fourier': dict(k=np.geomspace(1e-3, 0.5, 40),
+                                                   z=np.array([0., 0.5, 1.1, 2.]),
+                                                   of=('delta_cb', 'theta_cb')),
+                                   'background': dict(z=np.array([0., 0.5, 1.1, 2.]),
+                                                      of=('efunc', 'comoving_radial_distance',
+                                                          'comoving_transverse_distance')),
+                                   'thermodynamics': dict(of=('rs_drag',))}).write(path)
+        return path
+
+    def _cosmology(self, engine, fiducial='DESI', requirements=None):
+        from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+        cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial,
+                                    requirements=requirements or self.REQUIREMENTS)
+        for param in cosmo.params:
+            param.update(fixed=param.basename not in ('h', 'omega_cdm'))
+        return cosmo
+
+    def _run(self, cosmo, **params):
+        from desilike.base import build
+
+        return build(cosmo, output=lambda: cosmo)(params)
+
+    def test_outside_the_box_is_a_constraint(self, emulator_path):
+        """The emulated engine runs in its clipping mode: outside the trained box the results stay
+        finite (the prediction at the clipped point) and the distance is the cosmology's
+        ``cosmoprimo_emulator_range`` Constraint -- eagerly and under jit."""
+        import jax
+        from cosmoprimo.emulators.tools import Emulator as CosmoprimoEmulator
+        from desilike.base import build, get_params
+        if not hasattr(CosmoprimoEmulator, 'constraints'):
+            pytest.skip('this cosmoprimo has no emulator constraints')
+        cosmo = self._cosmology(emulator_path)
+        assert get_params(cosmo, filter='constraint').names() == ['cosmoprimo_emulator.box']   # a bounds-only space
+        self._run(cosmo, h=0.673, omega_cdm=0.1201)
+        assert all(float(np.asarray(node.value)) == 0. for node in cosmo.emulator_constraints.values())
+        self._run(cosmo, h=0.76, omega_cdm=0.1201)                          # h above (0.64, 0.72)
+        assert float(np.asarray(cosmo.emulator_constraints['box'].value)) > 0.
+        assert all(np.all(np.isfinite(np.asarray(leaf))) for result in cosmo._results.values()
+                   for leaf in jax.tree_util.tree_leaves(result))
+        graph = build(self._cosmology(emulator_path))
+        jitted = jax.jit(lambda params: graph(params, return_derived=True)[1])
+        assert float(jitted({'h': 0.673, 'omega_cdm': 0.1201})['cosmoprimo_emulator.box']) == 0.
+        assert float(jitted({'h': 0.76, 'omega_cdm': 0.1201})['cosmoprimo_emulator.box']) > 0.
+
+    def test_a_saved_emulator_is_a_jax_native_engine(self, emulator_path):
+        """Not an external one: a path that `cosmoprimo.cosmology.get_engine` resolves to an
+        emulator is traceable, and classing it as external would wrap it in a pure_callback with
+        finite-difference derivatives -- slower than the emulator it wraps, and no longer
+        differentiable through."""
+        assert not self._cosmology(emulator_path)._is_external
+
+    def test_every_requirement_matches_the_engine_it_was_trained_on(self, emulator_path):
+        emulated = self._run(self._cosmology(emulator_path), h=0.673, omega_cdm=0.1201)
+        exact = self._run(self._cosmology('eisenstein_hu'), h=0.673, omega_cdm=0.1201)
+        for method_key, kwargs_list in self.REQUIREMENTS.items():
+            for kwargs in (kwargs_list or [{}]):
+                got = np.asarray(emulated.get(method_key, **kwargs), dtype='f8')
+                want = np.asarray(exact.get(method_key, **kwargs), dtype='f8')
+                assert np.allclose(got, want, rtol=2e-2), method_key
+
+    def test_pk_now_is_filtered_from_the_emulated_spectrum(self, emulator_path):
+        """The one requirement that is not a plain section read. Building the filter here instead
+        would hand it a fiducial that can only answer for what was emulated (measured:
+        `'delta_m' was not emulated`, out of the filter's own reference spectrum)."""
+        k, z = np.geomspace(1e-3, 0.5, 40), [0.5, 1.1]
+        requirements = dict(self.REQUIREMENTS)
+        requirements['fourier.pk_now'] = [{'of': 'delta_cb', 'engine': 'peakaverage', 'z': z, 'k': k}]
+        state = self._run(self._cosmology(emulator_path, requirements=requirements),
+                          h=0.673, omega_cdm=0.1201)
+        pk_now = state.get('fourier.pk_now', of='delta_cb', engine='peakaverage', z=z, k=k)
+        pk = state.get('fourier.pk', of='delta_cb', z=z, k=k)
+        assert np.all(np.isfinite(pk_now))
+        assert np.allclose(pk_now, pk, rtol=0.2)      # the same spectrum, wiggles removed
+        assert np.max(np.abs(pk_now / pk - 1.)) > 1e-4
+
+    def test_it_runs_under_jit_and_grad(self, emulator_path):
+        cosmo = self._cosmology(emulator_path)
+
+        def summary(h):
+            state = self._run(cosmo, h=h, omega_cdm=0.1201)
+            return (state.get('fourier.pk', of='delta_cb', z=0.5, k=1e-3)
+                    + state.get('thermodynamics.rs_drag'))
+
+        assert np.allclose(jax.jit(summary)(0.673), summary(0.673), rtol=1e-10)
+        assert np.isfinite(jax.grad(summary)(0.673))
+
+    def test_a_fiducial_the_emulator_cannot_answer_for_is_refused(self, emulator_path):
+        """Everything outside the emulator's space was held at its training fiducial, so a
+        different value there is not interpolated, not extrapolated and not reported -- it is
+        ignored. Measured before the guard: 3% in every spectrum, with nothing saying why."""
+        from cosmoprimo.emulators import CoverageError
+        from cosmoprimo.fiducial import DESI
+
+        with pytest.raises(CoverageError, match='n_s'):
+            self._run(self._cosmology(emulator_path, fiducial=DESI(n_s=0.94)),
+                      h=0.673, omega_cdm=0.1201)

@@ -17,8 +17,8 @@ import jax.numpy as jnp
 import lsstypes as types
 from matplotlib import pyplot as plt
 
-from ...base import Calculator, Parameter, compile, copy, replace, get_params as _get_params
-from ...base import _iter_calculators
+from ...base import Calculator, Parameter, Variable, build, copy, replace, get_params as _get_params
+from ...base import _iter_nodes
 from ...theories.galaxy_clustering.template import Spectrum2Template
 from ... import plotting
 
@@ -35,16 +35,16 @@ def _compute_flattheory_nobao(observable):
     Raises :class:`ValueError` if no template is found (i.e. the theory does not support
     BAO wiggle removal).
     """
-    if not any(isinstance(calc, Spectrum2Template) for calc in _iter_calculators(observable.theory)):
+    if not any(isinstance(calc, Spectrum2Template) for calc in _iter_nodes(observable.theory)):
         raise ValueError(
             'Cannot compute no-BAO theory: no Spectrum2Template instance found in theory dependency tree.')
     # Copy the whole observable (its theory tree included) so that replacing the template
     # below does not mutate the original observable or its theory.
     nobao_observable = copy(observable, level=None)
-    template_node = next(calc for calc in _iter_calculators(nobao_observable.theory)
+    template_node = next(calc for calc in _iter_nodes(nobao_observable.theory)
                          if isinstance(calc, Spectrum2Template))
     replace(nobao_observable, template_node, template_node.clone(only_now=True))
-    nobao_graph = compile(nobao_observable)
+    nobao_graph = build(nobao_observable)
     current_params = {param.name: param._value for param in _get_params(nobao_graph)
                       if param._value is not None}
     nobao_graph(current_params)
@@ -229,7 +229,7 @@ class Spectrum2PolesObservable(Calculator):
         self.data, self.window, self.covariance = _format_clustering_data_window_covariance(
             data=data, window=window, covariance=covariance,
             coords=k, ells=ells, coordin=kin, ellsin=ellsin, coord_name='k')
-        self.flatdata = self.data.value()
+        self.flatdata = Variable(f'{self.name}.flatdata', value=jnp.asarray(self.data.value()))
         self._window_matrix = self.window.value()
         # Node dep (theory) and its update() live in __init__.
         self.theory = theory
@@ -318,6 +318,9 @@ class Spectrum2PolesObservable(Calculator):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
+            # Per-multipole coordinate: the multipoles may be fit over different ranges,
+            # so this must not reuse the x left over from the loop above.
+            x = data_pole.coords('k')
             std = self.covariance.at.observable.get(**label).std()
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
@@ -386,12 +389,12 @@ class Spectrum2PolesObservable(Calculator):
         return fig
 
     def tree_flatten(self):
-        return [self.flattheory, self.flatdata], None
+        return [self.flattheory], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory, obj.flatdata = children
+        obj.flattheory, = children
         return obj
 
 
@@ -448,7 +451,7 @@ class Correlation2PolesObservable(Calculator):
         self.data, self.window, self.covariance = _format_clustering_data_window_covariance(
             data=data, window=window, covariance=covariance,
             coords=s, ells=ells, coordin=sin, ellsin=ellsin, coord_name='s')
-        self.flatdata = self.data.value()
+        self.flatdata = Variable(f'{self.name}.flatdata', value=jnp.asarray(self.data.value()))
         self._window_matrix = self.window.value()
         self.theory = theory
         self.theory.update(s=next(iter(self.window.theory)).coords('s'),
@@ -521,6 +524,9 @@ class Correlation2PolesObservable(Calculator):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
+            # Per-multipole coordinate: the multipoles may be fit over different ranges,
+            # so this must not reuse the x left over from the loop above.
+            x = data_pole.coords('s')
             std = self.covariance.at.observable.get(**label).std()
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
@@ -590,12 +596,12 @@ class Correlation2PolesObservable(Calculator):
         return fig
 
     def tree_flatten(self):
-        return [self.flattheory, self.flatdata], None
+        return [self.flattheory], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory, obj.flatdata = children
+        obj.flattheory, = children
         return obj
 
 
@@ -654,7 +660,7 @@ class Spectrum3PolesObservable(Calculator):
         self.data, self.window, self.covariance = _format_clustering_data_window_covariance(
             data=data, window=window, covariance=covariance,
             coords=k, ells=ells, coordin=kin, ellsin=ellsin, coord_name='k')
-        self.flatdata = self.data.value()
+        self.flatdata = Variable(f'{self.name}.flatdata', value=jnp.asarray(self.data.value()))
         self._window_matrix = self.window.value()
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
@@ -761,10 +767,10 @@ class Spectrum3PolesObservable(Calculator):
         return fig
 
     def tree_flatten(self):
-        return [self.flattheory, self.flatdata], None
+        return [self.flattheory], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory, obj.flatdata = children
+        obj.flattheory, = children
         return obj

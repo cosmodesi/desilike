@@ -115,8 +115,8 @@ class StandAloneMHSampler:
 
     """
 
-    def __init__(self, posterior, fast=[], f_fast=1, f_drag=0, pool=None,
-                 rng=np.random.default_rng()):
+    def __init__(self, posterior, fast=None, f_fast=1, f_drag=0, pool=None,
+                 rng=None):
         """Initialize the sampler.
 
         Parameters
@@ -143,7 +143,7 @@ class StandAloneMHSampler:
 
         """
         self.posterior = posterior
-        self.fast = fast
+        self.fast = [] if fast is None else fast
         self.f_fast = int(f_fast)
         if self.f_fast < 1:
             raise ValueError("'f_fast' cannot be smaller than 1.")
@@ -154,7 +154,7 @@ class StandAloneMHSampler:
             self.map = map
         else:
             self.map = pool.map
-        self.rng = rng
+        self.rng = np.random.default_rng() if rng is None else rng
 
     def update(self, pos=None, log_p=None, blobs=None, cov=None):
         """Update the sampler's starting position and/or proposal.
@@ -340,6 +340,12 @@ class StandAloneMHSampler:
         return chains, blobs, log_p
 
 
+# Smallest eigenvalue ratio an adapted proposal covariance may have before it is refused.
+# Measured on the two-parameter Gaussian of the sampler tests, a healthy adaptation window sits
+# at 18 to 84, so 1e-6 is four orders of magnitude clear of anything that works.
+_MIN_EIGENVALUE_RATIO = 1e-6
+
+
 class MH(Kernel):
     """Metropolis-Hastings sampler with fast-slow decomposition.
 
@@ -428,11 +434,25 @@ class MH(Kernel):
         if self._total_steps < self._adaptation_steps:
             self._accumulated_samples.append(chains.reshape(-1, self._ndim))
             all_samps = np.concatenate(self._accumulated_samples, axis=0)
-            if len(all_samps) > self._ndim:
-                try:
-                    self._standalone.update(cov=np.cov(all_samps.T))
-                except np.linalg.LinAlgError:
-                    pass
+            # Distinct positions, not rows: a rejected step repeats the position it came from, so
+            # at the acceptance an unadapted proposal starts with -- 0.7% measured on the sampler
+            # tests -- a window of 299 rows carried 2 distinct points.  `np.cov` of those spans a
+            # line, and once a proposal that flat is installed every later sample lies on it, so
+            # the next estimate is at least as degenerate and the chain never recovers.  Refusing
+            # the update instead leaves the previous proposal in place and costs only that window:
+            # the chain keeps sampling and adapts as soon as it has the points to do it with.
+            #
+            # cholesky below rejects an exactly singular covariance, which is what two distinct
+            # points give.  Three or four give one that is positive definite, passes, and is the
+            # case that locks in -- so the eigenvalue ratio is the guard that matters.
+            if len(np.unique(all_samps, axis=0)) > self._ndim:
+                cov = np.cov(all_samps.T)
+                eigenvalues = np.linalg.eigvalsh(cov)
+                if eigenvalues.min() > _MIN_EIGENVALUE_RATIO * eigenvalues.max():
+                    try:
+                        self._standalone.update(cov=cov)
+                    except np.linalg.LinAlgError:
+                        pass
 
         if batched:
             return chains, None, {'logposterior': log_p}

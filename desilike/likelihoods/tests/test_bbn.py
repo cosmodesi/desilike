@@ -3,7 +3,7 @@
 import numpy as np
 import jax
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood
 
 
@@ -12,7 +12,7 @@ def test_schoneberg2024():
     mean/covariance against the DESI fiducial's omega_b/N_eff, and is jit/grad-compatible."""
     like = Schoneberg2024BBNLikelihood()
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
 
     logpdf = pipe(defaults)

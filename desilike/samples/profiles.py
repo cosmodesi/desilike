@@ -232,27 +232,25 @@ class Profiles:
         if other.params is not None:
             self.params = (other.params if self.params is None
                            else self.params + other.params)
+        self_nruns, other_nruns = self.nruns, other.nruns
 
         # Concatenate logpdf along axis 0
         if other.logpdf is not None:
             self.logpdf = (other.logpdf.copy() if self.logpdf is None
                            else np.concatenate([self.logpdf, other.logpdf], axis=0))
 
-        # Concatenate per-run plain dicts along axis 0
+        # Concatenate per-run plain dicts along axis 0. A run may lack an entry (no error when
+        # the minimiser returned no covariance): pad it with NaN, so that row i stays run i.
         for name in ('start', 'best', 'error'):
-            other_d = getattr(other, name)
-            if other_d is None:
-                continue
-            self_d = getattr(self, name)
-            if self_d is None:
-                setattr(self, name, {k: v.copy() for k, v in other_d.items()})
+            self_d, other_d = getattr(self, name) or {}, getattr(other, name) or {}
+            if not other_d and not self_d:
                 continue
             merged = {}
             for k in dict.fromkeys(list(self_d) + list(other_d)):
-                if k in self_d and k in other_d:
-                    merged[k] = np.concatenate([self_d[k], other_d[k]], axis=0)
-                else:
-                    merged[k] = (self_d if k in self_d else other_d)[k].copy()
+                tail = np.shape((self_d if k in self_d else other_d)[k])[1:]
+                parts = [np.asarray(d[k]) if k in d else np.full((nruns,) + tail, np.nan)
+                         for d, nruns in [(self_d, self_nruns), (other_d, other_nruns)]]
+                merged[k] = np.concatenate(parts, axis=0)
             setattr(self, name, merged)
 
         # Interval: concatenate (lo, hi) tuples along axis 0
@@ -609,9 +607,9 @@ class Profiles:
         def _fmt(val, ref=None):
             if ref is None or ref == 0.:
                 return f'{val:.{sigfigs}g}'
-            mag = int(np.floor(np.log10(abs(ref)))) - (sigfigs - 1)
-            rounded = round(float(val), -mag)
-            decimals = max(0, -mag)
+            mag = np.int32(np.floor(np.log10(abs(ref)))) - (sigfigs - 1)
+            rounded = np.round(float(val), -mag)
+            decimals = np.max([0, -mag])
             return f'{rounded:.{decimals}f}'
 
         rows = []

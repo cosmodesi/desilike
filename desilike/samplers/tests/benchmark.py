@@ -38,7 +38,7 @@ import numpy as np
 
 from desilike import setup_logging
 import jax.numpy as jnp
-from desilike.base import get_params, Posterior, SumLikelihood, compile, GaussianLikelihood as BaseGaussianLikelihood, Prior
+from desilike.base import get_params, Posterior, SumLikelihood, build, GaussianLikelihood as BaseGaussianLikelihood, Prior
 from desilike.parameter import Parameter
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                   DampedBAOWigglesPTSpectrum2Poles,
@@ -46,8 +46,8 @@ from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
 from desilike.observables.galaxy_clustering import Correlation2PolesObservable
 from desilike.likelihoods import ObservablesGaussianLikelihood
 from desilike.samples import diagnostics
-import desilike.samplers as samplers
-import desilike.profilers as profilers
+from desilike import samplers
+from desilike import profilers
 
 
 # ── multi-tracer BAO posterior ───────────────────────────────────────────────
@@ -111,7 +111,7 @@ def build_posterior_bao_multi(s=S, ells=ELLS, tracers=None, marginalize=True):
         observable = Correlation2PolesObservable(
             data=data, theory=theory, s=s, ells=ells,
             window=window, sin=s, ellsin=ells, covariance=covariance)
-        data = compile(observable, output=lambda: observable.flattheory)()
+        data = build(observable, output=lambda: observable.flattheory)()
         observable.update(data=data)
         like = ObservablesGaussianLikelihood(observables=observable)
 
@@ -290,7 +290,7 @@ def _build_posterior(posterior, marginalize=True):
 def print_priors(params):
     print(f"{'param':20} {'prior':50} {'reference':50} derived")
     for p in params:
-        print(f"{p.name:20} {str(p.prior):50} {str(p.ref):50} {p.derived}")
+        print(f"{p.name:20} {p.prior!s:50} {p.ref!s:50} {p.derived}")
 
 
 def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', output_dir=None):
@@ -311,7 +311,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', outp
         Root output_dir for sampler checkpoints.  ``None`` disables checkpointing.
     """
 
-    profiler_posterior = compile(_build_posterior(posterior, marginalize=True))
+    profiler_posterior = build(_build_posterior(posterior, marginalize=True))
     # ── profilers ─────────────────────────────────────────────────────────────
     profiler_results = {}
     if profiler_names:
@@ -387,7 +387,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', outp
                             param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
                             print(param, param.ref)
 
-                sampler = samplers.Sampler(compile(sampler_posterior), kernel=kernel, output_dir=sampler_dir, **sampler_kwargs)
+                sampler = samplers.Sampler(build(sampler_posterior), kernel=kernel, output_dir=sampler_dir, **sampler_kwargs)
                 t_start = time.perf_counter()
                 chain = sampler.run(**run_kwargs)
                 elapsed = time.perf_counter() - t_start

@@ -32,7 +32,7 @@ import jax
 import pytest
 import yaml
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.cobaya import wrap_cobaya_likelihood
 
@@ -100,7 +100,7 @@ def test_evaluate_and_cross_check_against_cosmoprimo():
     like = wrap_cobaya_likelihood(_SyntheticLikelihood, cosmo=cosmo)
 
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf))
@@ -171,7 +171,7 @@ def test_extended_requirements_cross_check():
     cosmo = _make_cosmo()
     like = wrap_cobaya_likelihood(_ExtendedLikelihood, cosmo=cosmo)
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
     assert np.isfinite(float(pipe(defaults)))
 
@@ -261,6 +261,11 @@ def _setup_camspec_lite(tmp_path):
     _write_camspec_lite_sacc_fixture(fits_path)
 
     yaml_path = Path(inspect.getfile(planck_Camspec_NPIPE_lite)).with_suffix('.yaml')
+    if not yaml_path.is_file():
+        # The defaults file ships beside the likelihood module; some cobaya installs (the one in
+        # the shared stack included) do not carry it, and there is nothing to read the nuisance
+        # defaults from.
+        pytest.skip(f'cobaya install has no {yaml_path.name} beside planck_Camspec_NPIPE_lite')
     with open(yaml_path) as file:
         info_yaml = yaml.safe_load(file)
 
@@ -293,8 +298,8 @@ def test_matches_native_jax_camspec_port(tmp_path):
     like_wrapped = wrap_cobaya_likelihood(planck_Camspec_NPIPE_lite, info=info_yaml, packages_path=str(packages_path),
                                            cosmo=CosmoprimoCosmology(engine='camb', fiducial=fiducial))
 
-    pipe_native = compile(like_native)
-    pipe_wrapped = compile(like_wrapped)
+    pipe_native = build(like_native)
+    pipe_wrapped = build(like_wrapped)
     defaults_native = {p.name: p._value for p in get_params(like_native)}
     defaults_wrapped = {p.name: p._value for p in get_params(like_wrapped)}
 
@@ -317,11 +322,11 @@ def test_matches_full_native_cobaya_pipeline(tmp_path):
     Two precision knobs matter and are **not** inherited automatically from cosmoprimo by
     cobaya's native ``camb`` theory (found by sweeping them until the gap closed):
 
-    * ``lmax``: cosmoprimo's ``Harmonic.ellmax_cl`` is fixed at the *fiducial* cosmology's
-      construction (the ``ellmax_cl=`` kwarg), not by the per-call
-      ``harmonic.lensed_cl(ellmax=...)`` argument (which only slices the precomputed table)
-      -- so cobaya's own ``lmax`` extra_arg must match the fiducial's ``ellmax_cl``, not the
-      (possibly smaller) likelihood-requested ellmax.
+    * ``lmax``: ``CosmoprimoCosmology`` computes Cl up to
+      ``max(likelihood-requested ellmax, fiducial's ellmax_cl)`` (the fiducial's explicit
+      ``ellmax_cl=`` kwarg acts as a floor; ``harmonic.lensed_cl(ellmax=...)`` then only
+      slices that table) -- so cobaya's own ``lmax`` extra_arg must match the fiducial's
+      (here larger) ``ellmax_cl``, not the likelihood-requested ellmax.
     * ``lens_potential_accuracy``: cosmoprimo always sets this to 1 internally for lensed Cl;
       cobaya's native theory defaults it differently unless set explicitly.
 
@@ -333,12 +338,12 @@ def test_matches_full_native_cobaya_pipeline(tmp_path):
     pytest.importorskip('camb')
     from cobaya.model import get_model
 
-    planck_Camspec_NPIPE_lite, fits_path, packages_path, info_yaml = _setup_camspec_lite(tmp_path)
+    planck_Camspec_NPIPE_lite, _fits_path, packages_path, info_yaml = _setup_camspec_lite(tmp_path)
 
     fiducial = ('DESI', dict(lensing=True, ellmax_cl=_CAMSPEC_ELLMAX_CL, non_linear='mead'))
     like_wrapped = wrap_cobaya_likelihood(planck_Camspec_NPIPE_lite, info=info_yaml, packages_path=str(packages_path),
                                            cosmo=CosmoprimoCosmology(engine='camb', fiducial=fiducial))
-    pipe_wrapped = compile(like_wrapped)
+    pipe_wrapped = build(like_wrapped)
     defaults_wrapped = {p.name: p._value for p in get_params(like_wrapped)}
     logpdf_wrapped = float(pipe_wrapped(defaults_wrapped))
     assert np.isfinite(logpdf_wrapped)
@@ -381,7 +386,7 @@ def test_unsupported_requirement_raises():
 
     like = wrap_cobaya_likelihood(_UnsupportedLikelihood, cosmo=_make_cosmo())
     with pytest.raises(NotImplementedError, match='source_Cl'):
-        compile(like)
+        build(like)
 
 
 if __name__ == '__main__':

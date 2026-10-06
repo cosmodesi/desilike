@@ -14,7 +14,7 @@ import numpy as np
 import jax
 import pytest
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.supernovae import (
     PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood,
@@ -27,23 +27,20 @@ def _write_covariance(fn, n, value=1e-4):
     cov = np.eye(n) * value
     with open(fn, 'w') as file:
         file.write(f'{n}\n')
-        for row in cov:
-            file.write(' '.join(str(v) for v in row) + '\n')
+        file.writelines(' '.join(str(v) for v in row) + '\n' for row in cov)
 
 
 def _make_pantheon(data_dir, z):
     with open(data_dir / 'lcparam_full_long.txt', 'w') as file:
         file.write('# zcmb zhel mb dmb\n')
-        for zi in z:
-            file.write(f'{zi} {zi} {35. + 5 * np.log10(zi)} 0.1\n')
+        file.writelines(f'{zi} {zi} {35. + 5 * np.log10(zi)} 0.1\n' for zi in z)
     _write_covariance(data_dir / 'sys_full_long.txt', len(z))
 
 
 def _make_pantheonplus(data_dir, z):
     with open(data_dir / 'Pantheon+SH0ES.dat', 'w') as file:
         file.write('zHD zHEL m_b_corr\n')
-        for zi in z:
-            file.write(f'{zi} {zi} {35. + 5 * np.log10(zi)}\n')
+        file.writelines(f'{zi} {zi} {35. + 5 * np.log10(zi)}\n' for zi in z)
     _write_covariance(data_dir / 'Pantheon+SH0ES_STAT+SYS.cov', len(z))
 
 
@@ -52,8 +49,7 @@ def _make_pantheonplusshoes(data_dir, z, calibrator_mask=None):
         calibrator_mask = np.zeros(len(z), dtype=bool)
     with open(data_dir / 'Pantheon+SH0ES.dat', 'w') as file:
         file.write('zHD zHEL m_b_corr IS_CALIBRATOR CEPH_DIST\n')
-        for zi, is_calib in zip(z, calibrator_mask):
-            file.write(f'{zi} {zi} {35. + 5 * np.log10(zi)} {int(is_calib)} 32.5\n')
+        file.writelines(f'{zi} {zi} {35. + 5 * np.log10(zi)} {int(is_calib)} 32.5\n' for zi, is_calib in zip(z, calibrator_mask))
     _write_covariance(data_dir / 'Pantheon+SH0ES_STAT+SYS.cov', len(z))
 
 
@@ -82,8 +78,7 @@ def _make_des(data_dir, z):
     with open(data_dir / 'DES-SN5YR_HD.csv', 'w') as file:
         file.write('# comment\n')
         file.write('zHD,zHEL,MU,MUERR_FINAL\n')
-        for zi in z:
-            file.write(f'{zi},{zi},{35. + 5 * np.log10(zi)},0.1\n')
+        file.writelines(f'{zi},{zi},{35. + 5 * np.log10(zi)},0.1\n' for zi in z)
     _write_covariance(data_dir / 'STAT+SYS.txt', len(z))
 
 
@@ -93,8 +88,7 @@ def _make_des_dovekie(data_dir, z):
     with open(data_dir / 'DES-Dovekie_HD.csv', 'w') as file:
         file.write('# comment\n')
         file.write('VARNAMES: CID IDSURVEY zHD zHEL MU MUERR\n')
-        for i, zi in enumerate(z):
-            file.write(f'SN: SN{i} 10 {zi} {zi} {35. + 5 * np.log10(zi)} 0.1\n')
+        file.writelines(f'SN: SN{i} 10 {zi} {zi} {35. + 5 * np.log10(zi)} 0.1\n' for i, zi in enumerate(z))
     n = len(z)
     precision = np.eye(n) * 1e4  # inverse of the 1e-4 covariance used by _write_covariance
     np.savez(data_dir / 'STAT+SYS.npz', nsn=np.array([n]), cov=precision[np.triu_indices(n)], allow_pickle=False)
@@ -121,7 +115,7 @@ def test_likelihood(tmp_path, Likelihood, make_fixture):
     like = Likelihood(data_dir=str(tmp_path), cosmo=cosmo)
 
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
 
     logpdf = pipe(defaults)
@@ -131,7 +125,7 @@ def test_likelihood(tmp_path, Likelihood, make_fixture):
     assert np.isclose(float(logpdf), float(jit_logpdf))
 
     grad = jax.grad(pipe)(defaults)
-    assert all(np.isfinite(v) for v in grad.values())
+    assert all(np.all(np.isfinite(v)) for v in grad.values())
 
 
 def test_pantheonplus_zcut(tmp_path):
@@ -171,7 +165,7 @@ def test_pantheonplusshoes_calibrator(tmp_path):
 
     # The z=0.005 calibrator is kept despite z < 0.01, because it is a calibrator.
     assert len(like.light_curve_params['zcmb']) == 5
-    compile(like)()
+    build(like)()
     is_calibrator = like.light_curve_params['is_calibrator']
     assert is_calibrator.sum() == 1
     expected = like.light_curve_params['cepheid_distance'][is_calibrator][0] + like.Mb.value
@@ -193,7 +187,7 @@ def test_desy5_dovekie_install(tmp_path, monkeypatch):
 
     cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
     like = DESY5DovekieSNLikelihood(cosmo=cosmo)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'

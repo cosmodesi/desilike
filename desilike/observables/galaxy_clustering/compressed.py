@@ -25,12 +25,18 @@ import numpy as np
 import jax.numpy as jnp
 import lsstypes as types
 
-from ...base import Calculator
-from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, TurnOverTheory
+from ...base import Calculator, Variable
+from ...theories.galaxy_clustering.template import BAOTheory, BAOPhaseShiftTheory, ShapeFitTheory, TurnOverTheory
 
 
 def _format_compression_data(data, covariance, parameters):
     """Return (data, flatdata, parameters, covariance) from flexible inputs.
+
+    A parameter may be measured several times (e.g. two correlated F_AP measurements):
+    repeated names are stored as one multi-value leaf, and the returned *parameters*
+    list is per data row (names repeated), so the theory prediction is repeated too.
+    Repeated names must be consecutive, so that the flat data order (hence the
+    covariance row order) is preserved.
 
     Parameters
     ----------
@@ -40,18 +46,20 @@ def _format_compression_data(data, covariance, parameters):
     covariance : None, array-like, or lsstypes.CovarianceMatrix
         Covariance matrix.  1-D input is treated as a diagonal.
     parameters : list of str or None
-        Parameter names.  Required when *data* is not an lsstypes object.
+        Parameter names, one per data row.  Required when *data* is not an lsstypes object.
 
     Returns
     -------
     data : lsstypes.ObservableTree
     flatdata : numpy array, shape (n,)
-    parameters : list of str
+    parameters : list of str, one per data row
     covariance : lsstypes.CovarianceMatrix or None
     """
     if isinstance(data, types.ObservableLike):
         obs = data
-        parameters = list(obs.parameters)
+        parameters = []
+        for name in obs.parameters:
+            parameters += [name] * obs.get(parameters=name).size
         flatdata = obs.value()
     else:
         if parameters is None:
@@ -61,8 +69,17 @@ def _format_compression_data(data, covariance, parameters):
             flatdata = np.zeros(len(parameters), dtype='f8')
         else:
             flatdata = np.asarray(data, dtype='f8').ravel()
-        leaves = [types.ObservableLeaf(value=np.atleast_1d(v)) for v in flatdata]
-        obs = types.ObservableTree(leaves, parameters=parameters)
+        if len(flatdata) != len(parameters):
+            raise ValueError(f'data size {len(flatdata)} does not match number of parameters {len(parameters)}')
+        labels, groups = [], []
+        for name, value in zip(parameters, flatdata):
+            if labels and name == labels[-1]:
+                groups[-1].append(value)
+            else:
+                labels.append(name)
+                groups.append([value])
+        leaves = [types.ObservableLeaf(value=np.asarray(group, dtype='f8')) for group in groups]
+        obs = types.ObservableTree(leaves, parameters=labels)
 
     cov = None
     if covariance is not None:
@@ -94,7 +111,9 @@ class BaseCompressionObservable(Calculator):
     covariance : None, array-like, or lsstypes.CovarianceMatrix, default=None
         Covariance matrix passed to the likelihood.
     parameters : list of str, default=None
-        Names of theory attributes to compare to data.
+        Names of theory attributes to compare to data, one per data row.
+        A name may be repeated (consecutively) to compare several correlated
+        measurements to the same theory prediction.
         Required when *data* is not an lsstypes object.
     name : str, default='compressed'
         Observable name used to match covariance matrices in multi-observable likelihoods.
@@ -108,20 +127,21 @@ class BaseCompressionObservable(Calculator):
     def __init__(self, theory, data=None, covariance=None, parameters=None, name='compressed'):
         self.theory = theory
         self.name = str(name)
-        self.data, self.flatdata, self.parameters, self.covariance = _format_compression_data(
+        self.data, flatdata, self.parameters, self.covariance = _format_compression_data(
             data=data, covariance=covariance, parameters=parameters)
+        self.flatdata = Variable(f'{self.name}.flatdata', value=jnp.asarray(flatdata))
 
     def __call__(self):
         self.flattheory = jnp.array([getattr(self.theory, param) for param in self.parameters])
         return self.flattheory
 
     def tree_flatten(self):
-        return [self.flattheory, self.flatdata], None
+        return [self.flattheory], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.flattheory, obj.flatdata = children
+        obj.flattheory, = children
         return obj
 
 
@@ -202,6 +222,56 @@ class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
     def __init__(self, data=None, covariance=None, parameters=None, name='baoshift', theory=None, **kwargs):
         if theory is None:
             theory = BAOPhaseShiftTheory(**kwargs)
+        elif kwargs:
+            theory.update(**kwargs)
+        super().__init__(theory=theory,
+                         data=data, covariance=covariance, parameters=parameters, name=name)
+
+
+class ShapeFitCompressionObservable(BaseCompressionObservable):
+    r"""Compare ShapeFit measurements to theory predictions.
+
+    Wraps :class:`ShapeFitTheory`.  Valid parameter names are the same as
+    :class:`BAOCompressionObservable` plus ``'dm'``, ``'dn'``, ``'df'``,
+    ``'m'``, ``'n'`` and ``'f_sqrt_Ap'``.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
+
+    Parameters
+    ----------
+    data : None, array-like, or lsstypes.ObservableLike, default=None
+        Measured values.
+    covariance : None, array-like, or lsstypes.CovarianceMatrix, default=None
+        Covariance matrix.
+    parameters : list of str, default=None
+        Parameter names; required when *data* is not an lsstypes object.
+    name : str, default='shapefit'
+        Observable name.
+    theory : ShapeFitTheory, optional
+        Pre-constructed theory Calculator.  If provided, any extra *kwargs* are
+        forwarded to ``theory.update()``.  If absent, a new
+        :class:`ShapeFitTheory` is constructed from *kwargs*.
+    z : float, default=1.
+        Effective redshift.
+    eta : float, default=1./3.
+        DV exponent.
+    kp : float, default=0.03
+        Pivot wavenumber [h/Mpc] of the ShapeFit parameterization.
+    n_varied : bool, default=False
+        Use the second-order ShapeFit parameter ``n``.
+    with_now : str, default='peakaverage'
+        Engine for the no-wiggle power spectrum.
+    fiducial : str or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology.
+    cosmo : PrimordialCosmology, optional
+        Cosmology provider.
+    """
+
+    def __init__(self, data=None, covariance=None, parameters=None, name='shapefit', theory=None, **kwargs):
+        if theory is None:
+            theory = ShapeFitTheory(**kwargs)
         elif kwargs:
             theory.update(**kwargs)
         super().__init__(theory=theory,

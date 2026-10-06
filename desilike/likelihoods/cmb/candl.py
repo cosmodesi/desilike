@@ -9,7 +9,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from desilike.base import Likelihood
-from desilike.parameter import Parameter, VariableCollection
+from desilike.parameter import Parameter, Variable, VariableCollection
 
 
 class _BaseCandlLikelihood(Likelihood):
@@ -100,7 +100,7 @@ class _BaseCandlLikelihood(Likelihood):
     # (matches cmb/camspec.py; not tied to the cosmology's T_cmb parameter).
     T0_cmb = 2.7255
 
-    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, ell_cuts=None, **kwargs):
+    def __init__(self, data_set_file, variant=None, cosmo=None, params=None, split_diag_priors=False, cosmo_params=None, ell_cuts=None, clear_internal_priors=None, **kwargs):
         import candl
 
         if variant is not None:
@@ -117,8 +117,11 @@ class _BaseCandlLikelihood(Likelihood):
                 mask = mask & self.like.generate_crop_mask()
             self.like.crop_mask = mask
             self.like.crop_for_data_selection()
+            self._recompute_covariance_chol_dec()
         else:
             self.like = getattr(candl, self._candl_attr)(data_set_file, **kwargs)
+
+        self._clear_internal_priors(clear_internal_priors)
 
         dl_requirements = self.like.requirements_dict.get('Dl', {})
         self._ellmax_standard = max([ellmax for name, ellmax in dl_requirements.items() if name.lower() != 'kk'], default=0)
@@ -126,8 +129,7 @@ class _BaseCandlLikelihood(Likelihood):
 
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            ellmax_cl = max(self._ellmax_standard, self._ellmax_potential)
-            cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=ellmax_cl, non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
         self._cosmo_params = dict(cosmo_params or {})
         self._cosmo_prior_names = [name for name in self.like.required_prior_parameters if name not in self.like.required_nuisance_parameters]
@@ -135,6 +137,74 @@ class _BaseCandlLikelihood(Likelihood):
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+        # After the ell_cuts crop: `crop_for_data_selection()` shortens `_data_bandpowers`, and it
+        # is the cropped vector the likelihood compares against.  (`like.effective_ells` is *not*
+        # cropped -- use `N_bins` for per-bin bookkeeping.)
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.like._data_bandpowers))
+
+    def _clear_internal_priors(self, clear):
+        """Drop Gaussian priors candl would otherwise apply inside its own ``log_like``.
+
+        Needed when several candl likelihoods are summed and more than one declares a prior on
+        the SAME parameter: each applies its own, and the parameter is constrained twice.
+        Measured on CMB-SP4A, where ACT DR6 declares tau ~ N(0.0566, 0.00580) and SPT-3G D1
+        declares tau ~ N(0.0510, 0.00600): the combination gives tau = 0.0539 +- 0.00417
+        against 0.0549 +- 0.00549 for a single prior -- tighter by ~sqrt(2) and pulled to a
+        weighted mean of two different centres. The official SPT-3G cobaya setup avoids this
+        with the same option name.
+
+        Parameters
+        ----------
+        clear : bool, str, list, default=None
+            ``None`` / ``False`` keeps every prior (candl's own behaviour). ``True`` drops all
+            of them -- rarely what you want, since the NUISANCE priors are per-arm and
+            legitimate. A name or list of names drops only the priors on those parameters,
+            which is how you de-duplicate one shared parameter while keeping the rest.
+        """
+        if not clear:
+            return
+        priors = list(getattr(self.like, 'priors', None) or [])
+        if not priors:
+            return
+        names = None if clear is True else set([clear] if isinstance(clear, str) else list(clear))
+
+        def parameters_of(prior):
+            found = getattr(prior, 'par_names', None)
+            if found is None:
+                found = getattr(prior, 'par_name', None)
+            if found is None:
+                return []
+            return [found] if isinstance(found, str) else list(found)
+
+        kept, dropped = [], []
+        for prior in priors:
+            parameters = parameters_of(prior)
+            if names is None or any(parameter in names for parameter in parameters):
+                dropped.extend(parameters)
+            else:
+                kept.append(prior)
+        if not dropped:
+            raise ValueError(f'clear_internal_priors={clear!r} matched none of the priors this '
+                             f'likelihood declares, on '
+                             f'{sorted({p for prior in priors for p in parameters_of(prior)})}; '
+                             f'a silently ineffective clear would leave the prior double-counted')
+        self.like.priors = kept
+        # `required_prior_parameters` must follow the priors: `_cosmo_prior_names` is built from
+        # it, so a stale entry would keep this likelihood asking the cosmology for a parameter
+        # whose prior no longer exists here.
+        if hasattr(self.like, 'required_prior_parameters'):
+            remaining, seen = [], set()
+            for prior in kept:
+                for parameter in parameters_of(prior):
+                    if parameter not in seen:
+                        seen.add(parameter)
+                        remaining.append(parameter)
+            self.like.required_prior_parameters = remaining
+        # not self.log_info: at __init__ time the Calculator machinery has not attached the
+        # logging mixin's methods to this instance yet
+        import logging
+        logging.getLogger(type(self).__name__).info(
+            f'cleared candl-internal priors on {sorted(set(dropped))}')
 
     def _build_ell_cuts_mask(self, ell_cuts):
         """Boolean mask for per-spectrum ell cuts on the FULL (uncropped) candl likelihood.
@@ -166,13 +236,38 @@ class _BaseCandlLikelihood(Likelihood):
                     mask[bin_idx] = False
         return mask
 
+    def _recompute_covariance_chol_dec(self):
+        """Recompute ``self.like.covariance_chol_dec`` (and ``_logdet_cov``/``_norm_const``,
+        if used) from the just-cropped ``self.like.covariance``.
+
+        ``candl.Like``/``LensLike.__init__`` computes ``covariance_chol_dec`` once, from
+        whatever ``self.covariance`` looks like at that point in ``__init__`` -- *before*
+        the ``crop_for_data_selection()`` call our ``ell_cuts`` masking triggers above runs.
+        ``crop_for_data_selection()`` itself only crops ``covariance``/``_data_bandpowers``/
+        ``window_functions``, not the already-cached Cholesky factor, so without this,
+        ``covariance_chol_dec`` silently stays at its original (uncropped) shape while
+        everything else shrinks -- surfacing later as a shape mismatch inside candl's own
+        ``gaussian_logl`` (``jnp.linalg.solve(covariance_chol_dec, delta_bdp)``).
+        """
+        import candl.likelihood as candl_likelihood
+        like = self.like
+        if 'hartlap_correction' in like.data_set_dict:
+            like.covariance_chol_dec = candl_likelihood.cholesky_decomposition(
+                like.covariance, N_sims=like.data_set_dict['hartlap_correction']['N_sims'],
+                N_bins=like.N_bins_total)
+        else:
+            like.covariance_chol_dec = candl_likelihood.cholesky_decomposition(like.covariance)
+        if like.data_set_dict.get('likelihood_form') == 'gaussian' and getattr(like, 'add_logdet', False):
+            like._logdet_cov = 2. * jnp.sum(jnp.log(jnp.diag(like.covariance_chol_dec)))
+            like._norm_const = 0.5 * (like._logdet_cov + like.N_data * jnp.log(2. * jnp.pi))
+
     def __post_init__(self, *args, **kwargs):
         if self._ellmax_standard:
             self.cosmo.add_requirements({'harmonic.lensed_cl': [{'ellmax': self._ellmax_standard}]})
         if self._ellmax_potential:
             self.cosmo.add_requirements({'harmonic.lens_potential_cl': [{'ellmax': self._ellmax_potential}]})
         for name in self._cosmo_prior_names:
-            self.cosmo.add_requirements({'params.{}'.format(self._cosmo_params.get(name, name)): None})
+            self.cosmo.add_requirements({f'params.{self._cosmo_params.get(name, name)}': None})
 
     def propose_params(self, split_diag_priors=False):
         """Build one free desilike Parameter per ``self.like.required_nuisance_parameters``,
@@ -223,13 +318,42 @@ class _BaseCandlLikelihood(Likelihood):
             Dl[spec_type] = dl_full[2:ellmax + 1]
         return Dl
 
-    def __call__(self):
+    def _params_dict(self):
+        """Nuisance values, the cosmological parameters candl applies its own priors to, and Dl."""
         params_dict = {name: param.value for name, param in self.params.items()}
         for name in self._cosmo_prior_names:
             params_dict[name] = self.cosmo[self._cosmo_params.get(name, name)]
         params_dict['Dl'] = self._build_Dl()
+        return params_dict
 
-        logpdf = self.like.log_like(params_dict)
+    @property
+    def flattheory(self):
+        """The binned model band powers, in the order of the data vector.
+
+        A property, not something ``__call__`` sets: it is the same binning `log_like_for_bdp`
+        does internally, and doing it twice on the sampling path would cost every step for the
+        sake of a vector only a caller wanting the model reads.
+
+        Whether the binning is a separate step is candl's business and differs by class, so this
+        follows whatever that class's own ``log_like_for_bdp`` does rather than assuming: `Like`
+        bins `get_model_specs` afterwards, `LensLike` returns band powers from it already binned
+        (binning those again raised `dot_general requires contracting dimensions to have the same
+        shape, got (10,) and (3000,)`).
+        """
+        specs = self.like.get_model_specs(self._params_dict())
+        return self.like.bin_model_specs(specs) if self._bins_model_specs else specs
+
+    #: Whether candl's ``get_model_specs`` still has to be binned -- see :attr:`flattheory`.
+    _bins_model_specs = True
+
+    def __call__(self):
+        params_dict = self._params_dict()
+
+        # `log_like_for_bdp` rather than `log_like`: the two differ only in where the band powers
+        # come from -- candl's own docstring names this use case ("calculating the derivative for
+        # different mock data sets") -- and both apply `prior_logl` identically, so the
+        # split-prior subtraction below is unaffected.
+        logpdf = self.like.log_like_for_bdp(params_dict, jnp.asarray(self.flatdata))
         for name in self._split_param_names:
             # Remove the diagonal piece now owned by desilike's Parameter.prior (added back by
             # the Prior calculator), to avoid double-counting; see the class Note for why this
@@ -254,6 +378,10 @@ class CandlLensLikelihood(_BaseCandlLikelihood):
     """Generic wrapper around a `candl <https://github.com/Lbalkenhol/candl>`_ ``LensLike``
     (CMB lensing) likelihood. See :class:`_BaseCandlLikelihood`."""
     _candl_attr = 'LensLike'
+
+    #: candl's `LensLike.get_model_specs` returns band powers already binned; its own
+    #: `log_like_for_bdp` compares them to the data directly, with no `bin_model_specs` step.
+    _bins_model_specs = False
 
 
 class ACTDR6TTTEEELikelihood(CandlLikelihood):
@@ -381,8 +509,9 @@ class _BaseClikCandlLikelihood(Likelihood):
         Path to the ``.clik`` directory.
     cosmo : PrimordialCosmology, default=None
         Cosmology calculator.  Defaults to
-        ``CosmoprimoCosmology(engine='camb', fiducial='DESI')`` with
-        lensing and ``ellmax_cl`` matched to the clik file's requirements.
+        ``CosmoprimoCosmology(engine='camb', fiducial='DESI')``; lensing,
+        ``ellmax_cl`` and the non-linear matter power are derived by the
+        cosmology from the registered requirements.
     params : Parameter, VariableCollection, dict, default=None
         Override the auto-discovered nuisance parameters.
     **kwargs
@@ -404,14 +533,22 @@ class _BaseClikCandlLikelihood(Likelihood):
 
         if cosmo is None:
             from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-            ellmax_cl = max(self._ellmax_standard, self._ellmax_potential)
-            cosmo = CosmoprimoCosmology(engine='camb', fiducial=('DESI', dict(lensing=True, ellmax_cl=ellmax_cl, non_linear='mead')))
+            cosmo = CosmoprimoCosmology(engine='camb')
         self.cosmo = cosmo
 
         vc = self.propose_params()
         if params is not None:
             vc = vc + VariableCollection(params)
         self.params = {param.basename: param for param in vc}
+        # Only the Gaussian clik arms have a data vector to register.  plik-lite goes through
+        # clipy's `cmbonly`, which is `-0.5 (X_data - X_model)^T C^-1 (X_data - X_model)`, so the
+        # vector is `X_data` and `__call__` evaluates that form here (see there for why it is not
+        # enough to overwrite `like.X_data`).  The tabulated low-ell arms -- commander through
+        # `gibbs.py`, and the Sroll2 EE likelihood -- are genuinely non-Gaussian and have no
+        # linear data slot: `flatdata` stays None, which is how a caller building a synthetic
+        # data vector can tell that this arm cannot take one.
+        self._is_gaussian_clik = hasattr(self.like, 'X_data') and hasattr(self.like, 'inv_cov')
+        self.flatdata = Variable(f'{type(self).__name__}.flatdata', value=jnp.asarray(self.like.X_data)) if self._is_gaussian_clik else None
 
     def __post_init__(self, *args, **kwargs):
         if self._ellmax_standard:
@@ -466,10 +603,42 @@ class _BaseClikCandlLikelihood(Likelihood):
             Dl[spec_type] = dl_full[2:ellmax + 1]
         return Dl
 
+    @property
+    def flattheory(self):
+        """``X_model``, the Gaussian arms' model vector.
+
+        The tabulated arms -- commander, Sroll2 -- are not Gaussian in any data vector and have no
+        model vector at all, so for them this attribute does not exist (`hasattr` is False), which
+        is how a caller wanting the model learns that this arm cannot provide one.
+        """
+        if not self._is_gaussian_clik:
+            raise AttributeError(
+                f'{type(self).__name__} is a tabulated likelihood: it is not Gaussian in a data '
+                f'vector, so it has no `flattheory`.')
+        params_dict = {name: param.value for name, param in self.params.items()}
+        params_dict['Dl'] = self._build_Dl()
+        cls, nuisance = self.like.normalize_from_candl(params_dict)
+        return self.like._X_model(cls, nuisance)
+
     def __call__(self):
         params_dict = {name: param.value for name, param in self.params.items()}
         params_dict['Dl'] = self._build_Dl()
-        self.logpdf = self.like.log_like(params_dict)
+        if self._is_gaussian_clik:
+            # The chi-squared is evaluated here rather than by clipy so that the data vector is
+            # the Variable.  Overwriting `like.X_data` would not work: clipy jits its own
+            # `__call__` with `static_argnums=(0,)`, so the vector it read on the first call is
+            # baked into the compiled function and a later assignment is silently ignored.
+            # `_X_model` carries no such state -- it is the model side only.
+            cls, nuisance = self.like.normalize_from_candl(params_dict)
+            residual = jnp.asarray(self.flatdata) - self.like._X_model(cls, nuisance)
+            self.logpdf = -0.5 * residual @ (self.like.inv_cov @ residual)
+        else:
+            self.logpdf = self.like.log_like(params_dict)
+        # Non-finite Dl (e.g. the NaN masking of out-of-training-range emulator results in
+        # ACECosmology) must reject the sample: clipy's tabulated low-ell likelihoods clamp
+        # NaN in table lookups and would otherwise return finite garbage.
+        finite = jnp.all(jnp.array([jnp.all(jnp.isfinite(Dl)) for Dl in params_dict['Dl'].values()]))
+        self.logpdf = jnp.where(finite, self.logpdf, -jnp.inf)
         return self.logpdf
 
     @classmethod
@@ -555,7 +724,7 @@ class PlanckPR3TTLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -592,7 +761,7 @@ class PlanckPR3TTTEEELikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -632,7 +801,7 @@ class PlanckPR3TTTEEELiteLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -669,7 +838,7 @@ class PlanckPR3LowlTTLikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -706,7 +875,7 @@ class PlanckPR3LowlEELikelihood(_BaseClikCandlLikelihood):
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -734,20 +903,39 @@ class PlanckPR3LowlEESroll2Likelihood(_BaseClikCandlLikelihood):
     **kwargs
         Forwarded to ``clipy.clik_candl``.
 
+    .. warning::
+
+        **The .clik this wraps is not distributed any more.** Its only published source,
+        ``web.fe.infn.it/~pagano/low_ell_datasets/sroll2/``, is gone -- the tarball, the
+        directory and the whole ``~pagano`` user page all 404 (checked 2026-09-01), and the
+        Wayback Machine holds no snapshot. ``sroll20.ias.u-psud.fr`` serves the SRoll 2.0 sky
+        MAPS, not the likelihood built from them. Pass ``clik_file=`` if you obtain a copy.
+
+        For the same likelihood from data that IS distributed, use
+        :class:`~desilike.likelihoods.cmb.planck_native.PlanckPR3LowlEESroll2NativeLikelihood`:
+        the tabulated form (cobaya's ``planck_2018_lowl.EE_sroll2``), installable from the
+        ``CobayaSampler/planck_native_data`` release. That is also the implementation the SP4A
+        configuration declares, so it -- not this class -- is the like-for-like choice there.
+
     Reference
     ---------
     Pagano et al. 2020  https://arxiv.org/abs/1908.09856
-    Data               https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/
+    Data               https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/ (dead)
     """
 
     installer_section = 'PlanckPR3LowlEESroll2Likelihood'
     _clik_basename = 'simall_100x143_sroll2_v3_EE_Aplanck.clik'
-    _tgz_url = 'https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.tgz'
+    # Dead (404, see the class warning). NOT replaceable by the cobaya asset: the
+    # CobayaSampler/planck_native_data release ships planck_sroll2_lowE.zip, whose single member
+    # is sroll2_prob_table.txt -- a likelihood TABLE, which clipy cannot read. That asset is what
+    # PlanckPR3LowlEESroll2NativeLikelihood installs.
+    # _tgz_url = 'https://web.fe.infn.it/~pagano/low_ell_datasets/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.tgz'
+    _tgz_url = None
 
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:
             from desilike.install import Installer
-            clik_file = os.path.join(Installer().data_dir(self.installer_section), self._clik_basename)
+            clik_file = os.path.join(Installer().data_dir(self.installer_section, ro=True), self._clik_basename)
         super().__init__(clik_file, cosmo=cosmo, params=params, **kwargs)
 
     @classmethod
@@ -761,6 +949,12 @@ class PlanckPR3LowlEESroll2Likelihood(_BaseClikCandlLikelihood):
         from desilike.install import exists_path, download, extract
         target = os.path.join(data_dir, cls._clik_basename)
         if installer.reinstall or not exists_path(target):
+            if cls._tgz_url is None:
+                raise ValueError(
+                    f'{cls.__name__} cannot be installed: {cls._clik_basename} has no reachable '
+                    'source (see the class warning). Either pass clik_file= with your own copy, '
+                    'or use PlanckPR3LowlEESroll2NativeLikelihood, the tabulated form of the same '
+                    'likelihood, which installs from CobayaSampler/planck_native_data.')
             tgz_fn = os.path.join(data_dir, cls._clik_basename + '.tgz')
             download(cls._tgz_url, tgz_fn)
             extract(tgz_fn, data_dir)

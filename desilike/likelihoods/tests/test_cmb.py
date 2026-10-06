@@ -25,7 +25,7 @@ import numpy as np
 import jax
 import pytest
 
-from desilike.base import compile, get_params
+from desilike.base import build, get_params
 from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.cmb import (TTTEEEHighlPlanckNPIPECamspecLikelihood,
                                        TTHighlPlanckNPIPECamspecLikelihood,
@@ -45,7 +45,7 @@ def _write_camspec_fixture(data_dir):
     with open(data_dir / 'like_NPIPE_12.6_unified_data_ranges.txt', 'w') as file:
         for cl in all_cls:
             lo, hi = elllims[cl]
-            file.write('{} {} {}\n'.format(cl, lo, hi))
+            file.write(f'{cl} {lo} {hi}\n')
 
     nx = sum(hi - lo + 1 for lo, hi in elllims.values())
     covariance = (np.eye(nx, dtype='f4') * 1e-2)
@@ -69,7 +69,7 @@ def test_likelihood(tmp_path, Likelihood):
     assert like.has_foregrounds
 
     params = get_params(like)
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in params}
 
     logpdf = pipe(defaults)
@@ -98,6 +98,7 @@ def test_tt_only_excludes_polarization(tmp_path):
     assert not hasattr(like, 'calEE')
 
 
+@pytest.mark.download
 def test_camspec_npipe_lite_install(tmp_path, monkeypatch):
     """Install CamspecNPIPELiteLikelihood to a temporary directory and run it.
 
@@ -112,12 +113,13 @@ def test_camspec_npipe_lite_install(tmp_path, monkeypatch):
     CamspecNPIPELiteLikelihood.install(Installer())
 
     like = CamspecNPIPELiteLikelihood()
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'
 
 
+@pytest.mark.download
 def test_act_dr6_spt_lensing_install(tmp_path, monkeypatch):
     """Install ACTDR6SPTLensingLikelihood and run the actplanck_baseline variant.
 
@@ -127,13 +129,16 @@ def test_act_dr6_spt_lensing_install(tmp_path, monkeypatch):
     """
     from desilike.install import Installer
 
+    # Not on PyPI: `pip install .` from the spt_act_likelihood repository.
+    pytest.importorskip('act_dr6_spt_lenslike')
+
     monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
     monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))
 
     ACTDR6SPTLensingLikelihood.install(Installer())
 
     like = ACTDR6SPTLensingLikelihood(variant='actplanck_baseline')
-    pipe = compile(like)
+    pipe = build(like)
     defaults = {p.name: p._value for p in get_params(like)}
     logpdf = pipe(defaults)
     assert np.isfinite(float(logpdf)), f'logpdf not finite: {logpdf}'

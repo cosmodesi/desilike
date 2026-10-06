@@ -11,13 +11,13 @@ FOLPS full-shape:
     → FOLPSTracerSpectrum2Poles → Spectrum2PolesObservable
     → ObservablesGaussianLikelihood → Posterior.
 
-FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
+FOLPS full-shape with an emulator on FOLPSPTSpectrum2Poles:
     Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
     fitted once before timing.
 
-FOLPS eisenstein_hu vs TaylorEmulator (``folps_vs_emu``):
+FOLPS eisenstein_hu vs emulated (``folps_vs_emu``):
     Head-to-head: ``engine='eisenstein_hu'`` (JAX-native, no emulator) vs
-    ``engine='camb'`` + ``TaylorEmulator(order=1)`` on the PT sub-graph.
+    ``engine='camb'`` + ``an emulator (budget=1)`` on the PT sub-graph.
 
 COMET full-shape (GP-emulator-based):
     COMETTracerSpectrum2Poles (+ COMETTracerSpectrum3Poles, optionally) →
@@ -38,8 +38,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from desilike.base import compile, get_params, Posterior, Prior, replace, SumLikelihood
-from desilike import TaylorEmulator
+from desilike.base import build, get_params, Posterior, Prior, replace, SumLikelihood
+from desilike.emulators import Emulator, Space
+from desilike.theories import ACECosmology
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
                                                  DampedBAOWigglesTracerCorrelation2Poles,
@@ -74,7 +75,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
 
     window = np.eye(n)
     rng = np.random.default_rng(42)
-    data = compile(theory)()
+    data = build(theory)()
     covariance = np.diag(np.full(n, 1e-6))
 
     observable = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells,
@@ -96,9 +97,39 @@ Z_TRACERS = {'LRG1': 0.4, 'LRG2': 0.6, 'LRG3': 0.8, 'LRG': 0.8, 'ELG': 1.1, 'QSO
 K3 = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
 ELLS3_FOLPS = ((0, 0, 0), (2, 0, 2))
 
+# Packaged / local ACE emulator set (pure-JAX Boltzmann replacement): background + linear pk
+# serve DirectSpectrum2Template, the Capse Cl networks are unused here but kept so the very
+# same cosmo can also feed a CMB likelihood.
+ACE_ENGINE = {'background': 'ACE_mnuw0wacdm_ln10As_basis',
+              'fourier': 'mnuw0wacdm_class',
+              'harmonic': 'capse_mnuw0wacdm_250001'}
+
+
+def _ace_base_dir(engine):
+    """Directory holding the non-packaged emulators of *engine* (e.g. the local Capse set).
+
+    ``None`` (the ACECosmology default, ``Installer().install_dir / 'ace-emulators'``) unless
+    a directory-based emulator is requested and only found next to the desilike checkout.
+    """
+    from pathlib import Path
+    from desilike.install import Installer
+    from desilike.theories.primordial_cosmology import _PACKAGED_EMULATORS
+
+    names = list(engine.values()) if isinstance(engine, dict) else [engine]
+    dir_names = [name for name in names if name not in _PACKAGED_EMULATORS and name != 'ace']
+    if not dir_names:
+        return None
+    candidates = [Path(Installer().install_dir) / 'ace-emulators',
+                  Path(__file__).parent.parent.parent.parent]  # desilike checkout's parent
+    for candidate in candidates:
+        if all((candidate / name).is_dir() for name in dir_names):
+            return candidate
+    raise FileNotFoundError(f'emulator directories {dir_names} not found under any of {candidates}')
+
 
 def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False, emulator_order=None,
-                          include_3poles=False, k3=K3, ells3=ELLS3_FOLPS, engine='camb'):
+                          include_3poles=False, k3=K3, ells3=ELLS3_FOLPS, engine='camb',
+                          prior_basis='physical_aap'):
     """FOLPS full-shape pipeline, optionally multi-tracer and/or with bispectrum.
 
     When ``tracers`` is ``None`` a single un-namespaced pipeline is built.
@@ -114,22 +145,36 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     With ``include_3poles=True`` each tracer also gets a FOLPSTracerSpectrum3Poles
     (bispectrum) sharing the same PT sub-graph as the power spectrum.
     ``k3`` (shape (N, 2)) and ``ells3`` control the bispectrum k-grid and multipoles.
-    ``engine`` selects the Boltzmann solver (``'camb'``, ``'eisenstein_hu'``, …).
+    ``engine`` selects the Boltzmann solver: a cosmoprimo engine name (``'camb'``,
+    ``'eisenstein_hu'``, …) for :class:`CosmoprimoCosmology`, or ``'ace'`` / an
+    emulator-set dict (e.g. :data:`ACE_ENGINE`) for the pure-JAX :class:`ACECosmology`.
+    ``prior_basis`` is the FOLPS bias/counterterm/stochastic parameterization.
     """
     n2 = len(ells) * len(k)
     n3 = len(ells3) * len(k3)
     rng = np.random.default_rng(42)
     tracer_list = [None] if tracers is None else list(tracers)
 
-    cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI')
-    for param in get_params(cosmo).select(basename=['w0_fld', 'wa_fld']):
+    is_ace = isinstance(engine, dict) or engine == 'ace'
+    if is_ace:
+        base_dir = _ace_base_dir(engine)
+        cosmo = ACECosmology(engine=engine, base_dir=base_dir, fiducial='DESI')
+    else:
+        cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI')
+    params = get_params(cosmo)
+    for param in params.select(basename=['w0_fld', 'wa_fld']):
         param.update(fixed=False)
+    if is_ace:
+        # The emulators are only trained over a finite hypercube and return NaN outside it;
+        # clip the (much wider) default priors to the training ranges.
+        params = ACECosmology.truncate_priors(params, engine=engine, base_dir=base_dir)
+    cosmo.update(params=params)
     likelihoods = []
     for tracer in tracer_list:
         z = Z_TRACERS.get(tracer, 0.8)
         template = DirectSpectrum2Template(z=z, cosmo=cosmo)
         tracer_arg = (tracer,) if tracer is not None else None
-        theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=tracer_arg)
+        theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=tracer_arg, prior_basis=prior_basis)
         params = get_params(theory, level=1)
         if marginalize:
             for param in params.select(basename=['alpha*', 'sn*']):
@@ -137,10 +182,10 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         theory.update(params=params)
 
         if emulator_order is not None:
-            print(f'  fitting TaylorEmulator (order={emulator_order}) on PT sub-graph …', end=' ', flush=True)
+            print(f'  fitting an emulator (budget={emulator_order}) on PT sub-graph …', end=' ', flush=True)
             t0 = time.perf_counter()
-            pt_emulator = TaylorEmulator(compile(theory.pt), order=emulator_order)
-            pt_emulator.fit()
+            pt_emulator = Emulator(theory.pt, Space(theory.pt))
+            pt_emulator.train(budget=emulator_order, verbose=False)
             print(f'done ({(time.perf_counter() - t0) * 1e3:.0f} ms)')
             replace(theory, theory.pt, pt_emulator.to_calculator())
 
@@ -150,7 +195,7 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         covariances = [np.diag(np.full(n2, 1e4))]
 
         if include_3poles:
-            theory3 = FOLPSTracerSpectrum3Poles(k=k3, pt=theory.pt, ells=ells3, tracers=tracer_arg)
+            theory3 = FOLPSTracerSpectrum3Poles(k=k3, pt=theory.pt, ells=ells3, tracers=tracer_arg, prior_basis=prior_basis)
             data3 = rng.normal(scale=1e8, size=n3)
             observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
             observables.append(observable3)
@@ -204,12 +249,10 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     n2 = len(ells) * len(k)
 
     # COMET's GP emulator is only trained/valid over a finite cosmological hypercube;
-    # _apply_cosmo_range_comet_emulator() already narrows omega_cdm/omega_b/n_s/logA to
-    # it but (as of writing) leaves 'h' at CosmoprimoCosmology's generic (0.1, 10.0)
-    # prior -- low h (≲0.5) makes comet's spline interpolation (interp1d/cubic2) produce
-    # NaN (verified directly), which a profiler exploring the full prior box (e.g. Minuit)
-    # can and does hit. Narrow it here, on a cosmo built upfront and threaded through (a
-    # post-hoc get_params(theory).select('h').update(...) does *not* propagate -- the
+    # out-of-range samples yield NaN outputs (see _comet_params_validity), which a profiler
+    # exploring the full prior box (e.g. Minuit) can and does hit. Narrow omega_b here for
+    # benchmark stability, on a cosmo built upfront and threaded through (a post-hoc
+    # get_params(theory).select('h').update(...) does *not* propagate -- the
     # Posterior/likelihood machinery ends up reading a different copy of the parameter).
     cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
     params = get_params(cosmo)
@@ -224,7 +267,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     # Anchor mock data to the theory prediction at default parameters.  Using a fixed
     # absolute noise scale (1e2) with COMET amplitudes (~1e3-1e4) makes chi2 ride the
     # model amplitude to its prior boundary rather than recovering a meaningful best fit.
-    data2 = np.asarray(compile(theory)()).ravel()
+    data2 = np.asarray(build(theory)()).ravel()
     observable2 = Spectrum2PolesObservable(data=data2, theory=theory, k=k, ells=ells)
     observables = [observable2]
     covariances = [np.diag(800**2 * np.ones_like(data2))]
@@ -235,7 +278,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
         else:
             pt3 = COMETPTSpectrum3Poles(k=k3, z=z, ells=ells3, cosmo=cosmo)
             theory3 = COMETTracerSpectrum3Poles(k=k3, z=z, ells=ells3, prior_basis=prior_basis, pt=pt3)
-        data3 = np.asarray(compile(theory3)()).ravel()
+        data3 = np.asarray(build(theory3)()).ravel()
         observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
         observables.append(observable3)
         covariances.append(1000**2 * np.ones_like(data2))
@@ -326,7 +369,7 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
        profile_kwargs=None, **kwargs):
     """Compile and benchmark one pipeline variant."""
     print(f'\n=== {label} ===')
-    pipe = compile(build_fn())
+    pipe = build(build_fn())
 
     params = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
     solved_params = pipe.params.select(solved=True).names()
@@ -396,7 +439,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -405,7 +448,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_noemu' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + TaylorEmulator(order=1)')
+        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + an emulator (budget=1)')
         print(f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -422,7 +465,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
 
     if 'folps_emu_3poles' in test:
         print(f'\n{"─" * 60}')
-        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+        print(f'FOLPS + an emulator (budget=1) on PT: ells={ELLS_FOLPS}, '
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -431,7 +474,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
     if 'folps_multi_emu' in test:
         tracers = TRACERS_FOLPS
         print(f'\n{"─" * 60}')
-        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + TaylorEmulator(order=1) on PT: '
+        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + an emulator (budget=1) on PT: '
             f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size per tracer={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
@@ -452,6 +495,20 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             vary_param=f'logA', warmup=2, number=2, run=('eager', 'jit'))
         run('2pt+3pt with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(tracers=tracers, marginalize=True, include_3poles=True),
             vary_param=f'logA', warmup=2, number=2, run=('eager', 'jit'))
+
+    if 'folps_ace_3poles' in test:
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS 2pt+3pt with ACECosmology ({", ".join(f"{k}={v}" for k, v in ACE_ENGINE.items())}): '
+            f'ells2={ELLS_FOLPS}, ells3={ELLS3_FOLPS}, '
+            f'k2=linspace(0.02, 0.2, {len(K)}) ({len(K)} pts), k3 diagonal ({len(K3)} pts), '
+            f"prior_basis='physical_aap', data size={len(ELLS_FOLPS) * len(K) + len(ELLS3_FOLPS) * len(K3)}")
+        print(f'{"─" * 60}')
+        run('2pt+3pt without analytic marg.',
+            lambda: build_posterior_folps(marginalize=False, include_3poles=True, engine=ACE_ENGINE, prior_basis='physical_aap'),
+            vary_param='logA', warmup=2, number=2, run=('eager', 'jit'))
+        run('2pt+3pt with analytic marg. (alpha*+sn* → best)',
+            lambda: build_posterior_folps(marginalize=True, include_3poles=True, engine=ACE_ENGINE, prior_basis='physical_aap'),
+            vary_param='logA', warmup=2, number=2, run=('eager', 'jit'))
 
     if 'comet' in test:
         print(f'\n{"─" * 60}')
@@ -479,7 +536,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('direct (Pell, pt=False)', dict(direct=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -496,7 +553,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
             ('shared PT, marg a0/a2/a4/NP0/NP20/NP22 (10 params)', dict(direct=False, marginalize=True)),
         ]:
             print(f'\n=== {label} ===')
-            pipe = compile(build_posterior_comet(**build_kw))
+            pipe = build(build_posterior_comet(**build_kw))
             params_dict = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
             print(f'  sampled parameters ({len(params_dict)}): {", ".join(params_dict)}')
             print(f'  logpdf at center: {float(pipe(params_dict)):.4f}\n')
@@ -509,7 +566,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
         print(f'COMET marg breakdown: primal vs JVP vs extra likelihood pass')
         print(f'ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points)')
         print(f'{"─" * 60}')
-        posterior = compile(build_posterior_comet(direct=False, marginalize=True))
+        posterior = build(build_posterior_comet(direct=False, marginalize=True))
         # Extract the group_fn from the first (and only) group
         for (group_alpha_names, group_alpha_sizes, group_alpha_shapes,
              group_theory_pipe, comp_meta, marg_local, best_local,
@@ -523,7 +580,7 @@ def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
                 p = dict(_params)
                 offset = 0
                 for name, size, shape in zip(_names, _sizes, _shapes):
-                    p[name] = alpha_vec[offset:offset + size].reshape(shape if shape else ())
+                    p[name] = alpha_vec[offset:offset + size].reshape(shape or ())
                     offset += size
                 return _pipe(p)
 

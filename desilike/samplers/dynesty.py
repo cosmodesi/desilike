@@ -48,7 +48,7 @@ class Dynesty(PopulationKernel):
 
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
-        self._prior_logpdf, self._prior_ppf, _ = prior
+        self._prior_logpdf, self._prior_ppf, _, _ = prior
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']
@@ -66,6 +66,7 @@ class Dynesty(PopulationKernel):
                 sampler_cls = (_dynesty.DynamicNestedSampler if self.dynamic
                                else _dynesty.NestedSampler)
                 if self._output_dir is not None:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)  # holds dynesty.pkl
                     try:
                         self._sampler = sampler_cls.restore(str(self._output_dir / 'dynesty.pkl'))
                         self._sampler.loglikelihood.loglikelihood = self._likelihood_logpdf_with_derived

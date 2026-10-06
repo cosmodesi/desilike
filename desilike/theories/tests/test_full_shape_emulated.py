@@ -2,7 +2,7 @@
 
 Pattern (mirrors benchmark.py::build_posterior_folps with emulator_order set):
   1. Build the theory with its real PT sub-calculator.
-  2. Compile the PT sub-graph and fit a degree-1 TaylorEmulator on it.
+  2. Emulate the PT sub-graph over its parameters ref box.
   3. Replace the real PT with the emulated version (via replace()).
   4. Compile the full tracer pipeline and compare against an exact reference.
 
@@ -20,7 +20,8 @@ import jax
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike import compile, TaylorEmulator
+from desilike import build
+from desilike.emulators import Emulator, Space
 from desilike.base import replace
 
 
@@ -29,33 +30,95 @@ _K = np.linspace(0.02, 0.2, 15)
 _ELLS = (0, 2)
 _S = np.linspace(50., 150., 10)
 _EMU_ORDER = 1
+# Training costs one full PT evaluation per finite-difference node, ~(2 * ndim + 1) of them, so
+# the box dimension sets the runtime of this whole file (measured on Kaiser: 3.96s at ndim=5,
+# 1.87s at ndim=2, i.e. linear).  `_check` only ever shifts a BIAS parameter (`b1`, `b1p`), which
+# is downstream of the emulator, so no assertion here evaluates it off-centre along any of those
+# axes -- carrying all of them is cost for nothing.  Two keep the multi-parameter plumbing under
+# test at a bit under half the price; `max_axes=None` asks for the full box, which one test per
+# file still does so the all-axes path stays covered.
+# A COUNT, not a list of names: which parameters are varied depends on the template (a default
+# template gives h/logA/n_s/omega_b/omega_cdm, a `BAOSpectrum2Template(apmode='qparqper')` gives
+# the dilation parameters instead), so naming them fits one case and raises on the next.
+# NOTE: test_full_shape.py carries its own copy of this helper; keep the two in step.
+_EMU_MAX_AXES = 2
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
-def _emulate(theory, inner_pt=None):
+def _fd_box(calculator, width=3., max_axes=_EMU_MAX_AXES):
+    """A box `value +- width * fd.eps` per varied parameter.
+
+    The legacy TaylorEmulator expanded about the centre with those same FD steps, so this keeps
+    the emulated region comparable. not the `ref` box: these parameters have none, and the
+    prior is far too wide to evaluate.
+
+    *max_axes* caps how many varied parameters the box spans, taking them in name order so the
+    choice is reproducible (``None`` keeps every one).  A parameter left out is frozen at its
+    trained value, which `_check` already accounts for.
+    """
+    from desilike.base import build
+    limits = {}
+    for param in build(calculator).params:
+        # varied only. A fixed parameter does not move, so emulating over it buys nothing and
+        # costs an axis -- 11 axes instead of 5 for a FOLPS pt -- and it is how the box came to
+        # ask for a negative neutrino mass: m_ncdm is fixed, with a leftover fd step.
+        if param.derived or not getattr(param, 'varied', True):
+            continue
+        value = float(np.sum(np.atleast_1d(param.value)))
+        eps = getattr(getattr(param, 'fd', None), 'eps', None) or max(abs(value), 1.) * 0.02
+        low, high = value - width * eps, value + width * eps
+        # A varied parameter sitting at a prior edge is still possible; skip it rather than clip.
+        # `differentiate` handles the same situation by shifting its stencil inside the prior and
+        # keeping the expansion centre put, which a Taylor expansion can do and a collocation grid
+        # cannot: shifting the box moves its midpoint off the parameter value, and the midpoint is
+        # the node `_check` asserts the emulator is exact at.
+        bounds = getattr(getattr(param, 'prior', None), 'limits', None)
+        if bounds is not None and np.isfinite(bounds).all() and (low < float(bounds[0]) or high > float(bounds[1])):
+            continue
+        limits[param.name] = (low, high)
+    if max_axes is not None:
+        if not limits:
+            raise ValueError(f'{calculator} has no varied parameter to emulate over')
+        limits = {name: limits[name] for name in sorted(limits)[:max_axes]}
+    return limits
+
+
+def _train(inner_pt, max_axes=_EMU_MAX_AXES):
+    """Train an emulator on *inner_pt* over its finite-difference box."""
+    emu = Emulator(inner_pt, Space(bounds=_fd_box(inner_pt, max_axes=max_axes)))
+    emu.train(budget=_EMU_ORDER)
+    return emu
+
+
+def _emulate(theory, inner_pt=None, max_axes=_EMU_MAX_AXES):
     """Emulate ``inner_pt`` (default: ``theory.pt``) in-place; return compiled pipeline."""
     if inner_pt is None:
         inner_pt = theory.pt
-    pt_pipe = compile(inner_pt)
-    emu = TaylorEmulator(pt_pipe, order=_EMU_ORDER)
-    emu.fit()
-    emulated_pt = emu.to_calculator()
-    replace(theory, inner_pt, emulated_pt)
-    return compile(theory)
+    replace(theory, inner_pt, _train(inner_pt, max_axes=max_axes).to_calculator(inner_pt))
+    return build(theory)
 
 
 def _check(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     """Center-exact match (atol=1e-8) and shifted accuracy (relative < tol)."""
     center = {p.name: p.value for p in pipe_exact.params}
-    exact_center = np.asarray(pipe_exact(center))
-    emu_center = np.asarray(pipe_emu(center))
-    np.testing.assert_allclose(emu_center, exact_center, atol=1e-8, rtol=0.,
+    # Each pipeline gets the parameters it actually has. A parameter the emulator's space left
+    # out is frozen at its trained value, so the emulated pipeline exposes fewer than the exact
+    # one -- and it refuses a name it does not have rather than silently ignoring it.
+    emu_names = set(pipe_emu.params.names())
+    assert emu_names <= set(center), f'emulated pipeline gained parameters: {sorted(emu_names - set(center))}'
+    emu_center = {name: value for name, value in center.items() if name in emu_names}
+    exact_center_value = np.asarray(pipe_exact(center))
+    emu_center_value = np.asarray(pipe_emu(emu_center))
+    # rtol as well as atol: "exact at the centre" means to machine precision, and an
+    # absolute-only tolerance says something different at every scale -- on the bispectrum,
+    # whose values are ~1e9, atol=1e-8 demands a relative 1e-17 and fails on rounding alone.
+    np.testing.assert_allclose(emu_center_value, exact_center_value, atol=1e-8, rtol=1e-10,
                                err_msg='emulator mismatch at expansion center')
     if shift_param in center:
         shifted = {**center, shift_param: center[shift_param] * 1.05}
         exact_s = np.asarray(pipe_exact(shifted))
-        emu_s = np.asarray(pipe_emu(shifted))
+        emu_s = np.asarray(pipe_emu({name: value for name, value in shifted.items() if name in emu_names}))
         reldiff = float(np.max(np.abs(emu_s - exact_s) / (np.abs(exact_s) + 1e-30)))
         assert reldiff < reldiff_tol, \
             f'shifted [{shift_param}+5%]: max reldiff={reldiff:.3f} > {reldiff_tol:.2f}'
@@ -68,7 +131,7 @@ def test_kaiser_spectrum_emulated():
     from desilike.theories.galaxy_clustering.full_shape import KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles
     from desilike.theories.galaxy_clustering.template import BAOSpectrum2Template
 
-    pipe_exact = compile(KaiserTracerSpectrum2Poles(
+    pipe_exact = build(KaiserTracerSpectrum2Poles(
         k=_K, ells=_ELLS,
         template=BAOSpectrum2Template(z=0.5, fiducial=_FID, apmode='qparqper')))
 
@@ -76,7 +139,9 @@ def test_kaiser_spectrum_emulated():
         k=_K, ells=_ELLS,
         pt=KaiserPTSpectrum2Poles(k=_K, ells=_ELLS,
                                    template=BAOSpectrum2Template(z=0.5, fiducial=_FID, apmode='qparqper')))
-    pipe_emu = _emulate(theory_emu)
+    # `max_axes=None`: the one test in this file that trains over EVERY varied parameter, so the
+    # full-box path stays covered.  Kaiser is the cheapest PT here, which is why it carries it.
+    pipe_emu = _emulate(theory_emu, max_axes=None)
 
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
@@ -86,7 +151,7 @@ def test_kaiser_correlation_emulated():
     from desilike.theories.galaxy_clustering.full_shape import KaiserTracerCorrelation2Poles
     from desilike.theories.galaxy_clustering.template import BAOSpectrum2Template
 
-    pipe_exact = compile(KaiserTracerCorrelation2Poles(
+    pipe_exact = build(KaiserTracerCorrelation2Poles(
         s=_S, ells=_ELLS,
         template=BAOSpectrum2Template(z=0.5, fiducial=_FID, apmode='qparqper')))
 
@@ -99,13 +164,13 @@ def test_kaiser_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
 
-# ── TNS ────────────────────────────────────────────────────────────────────────
+# ── tns ────────────────────────────────────────────────────────────────────────
 
 def test_tns_spectrum_emulated():
     """TNSPTSpectrum2Poles emulated as pt= in TNSTracerSpectrum2Poles."""
     from desilike.theories.galaxy_clustering.full_shape import TNSPTSpectrum2Poles, TNSTracerSpectrum2Poles
 
-    pipe_exact = compile(TNSTracerSpectrum2Poles(k=_K, ells=_ELLS))
+    pipe_exact = build(TNSTracerSpectrum2Poles(k=_K, ells=_ELLS))
 
     theory_emu = TNSTracerSpectrum2Poles(k=_K, ells=_ELLS,
                                           pt=TNSPTSpectrum2Poles(k=_K, ells=_ELLS))
@@ -118,7 +183,7 @@ def test_tns_correlation_emulated():
     """TNSPTSpectrum2Poles emulated inside TNSTracerCorrelation2Poles."""
     from desilike.theories.galaxy_clustering.full_shape import TNSTracerCorrelation2Poles
 
-    pipe_exact = compile(TNSTracerCorrelation2Poles(s=_S, ells=_ELLS))
+    pipe_exact = build(TNSTracerCorrelation2Poles(s=_S, ells=_ELLS))
 
     theory_emu = TNSTracerCorrelation2Poles(s=_S, ells=_ELLS)
     pipe_emu = _emulate(theory_emu, inner_pt=theory_emu.pt.pt)
@@ -126,7 +191,7 @@ def test_tns_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1')
 
 
-# ── LPT Velocileptors ──────────────────────────────────────────────────────────
+# ── lpt Velocileptors ──────────────────────────────────────────────────────────
 
 def test_lpt_spectrum_emulated():
     """LPTVelocileptorsPTSpectrum2Poles emulated as pt= in LPTVelocileptorsTracerSpectrum2Poles."""
@@ -134,7 +199,7 @@ def test_lpt_spectrum_emulated():
     from desilike.theories.galaxy_clustering.full_shape import (LPTVelocileptorsPTSpectrum2Poles,
                                                                 LPTVelocileptorsTracerSpectrum2Poles)
 
-    pipe_exact = compile(LPTVelocileptorsTracerSpectrum2Poles(k=_K, ells=_ELLS))
+    pipe_exact = build(LPTVelocileptorsTracerSpectrum2Poles(k=_K, ells=_ELLS))
 
     theory_emu = LPTVelocileptorsTracerSpectrum2Poles(
         k=_K, ells=_ELLS,
@@ -149,7 +214,7 @@ def test_lpt_correlation_emulated():
     pytest.importorskip('velocileptors')
     from desilike.theories.galaxy_clustering.full_shape import LPTVelocileptorsTracerCorrelation2Poles
 
-    pipe_exact = compile(LPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS))
+    pipe_exact = build(LPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS))
 
     theory_emu = LPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS)
     pipe_emu = _emulate(theory_emu, inner_pt=theory_emu.pt.pt)
@@ -157,7 +222,7 @@ def test_lpt_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1p')
 
 
-# ── REPT Velocileptors ─────────────────────────────────────────────────────────
+# ── rept Velocileptors ─────────────────────────────────────────────────────────
 
 def test_rept_spectrum_emulated():
     """REPTVelocileptorsPTSpectrum2Poles emulated as pt= in REPTVelocileptorsTracerSpectrum2Poles."""
@@ -165,7 +230,7 @@ def test_rept_spectrum_emulated():
     from desilike.theories.galaxy_clustering.full_shape import (REPTVelocileptorsPTSpectrum2Poles,
                                                                 REPTVelocileptorsTracerSpectrum2Poles)
 
-    pipe_exact = compile(REPTVelocileptorsTracerSpectrum2Poles(k=_K, ells=_ELLS))
+    pipe_exact = build(REPTVelocileptorsTracerSpectrum2Poles(k=_K, ells=_ELLS))
 
     theory_emu = REPTVelocileptorsTracerSpectrum2Poles(
         k=_K, ells=_ELLS,
@@ -180,7 +245,7 @@ def test_rept_correlation_emulated():
     pytest.importorskip('velocileptors')
     from desilike.theories.galaxy_clustering.full_shape import REPTVelocileptorsTracerCorrelation2Poles
 
-    pipe_exact = compile(REPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS))
+    pipe_exact = build(REPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS))
 
     theory_emu = REPTVelocileptorsTracerCorrelation2Poles(s=_S, ells=_ELLS)
     pipe_emu = _emulate(theory_emu, inner_pt=theory_emu.pt.pt)
@@ -193,9 +258,13 @@ def test_rept_correlation_emulated():
 def test_pybird_spectrum_emulated():
     """PyBirdPTSpectrum2Poles emulated as pt= in PyBirdTracerSpectrum2Poles."""
     pytest.importorskip('pybird')
+    try:
+        import pybird.module  # noqa: F401
+    except ImportError as exc:  # installed pybird is not numpy 2 compatible
+        pytest.skip(f'installed pybird is not numpy 2 compatible: {exc}')
     from desilike.theories.galaxy_clustering.full_shape import PyBirdPTSpectrum2Poles, PyBirdTracerSpectrum2Poles
 
-    pipe_exact = compile(PyBirdTracerSpectrum2Poles(k=_K, ells=_ELLS))
+    pipe_exact = build(PyBirdTracerSpectrum2Poles(k=_K, ells=_ELLS))
 
     theory_emu = PyBirdTracerSpectrum2Poles(k=_K, ells=_ELLS,
                                              pt=PyBirdPTSpectrum2Poles(k=_K, ells=_ELLS))
@@ -207,9 +276,13 @@ def test_pybird_spectrum_emulated():
 def test_pybird_correlation_emulated():
     """PyBirdPTCorrelation2Poles emulated as pt= in PyBirdTracerCorrelation2Poles."""
     pytest.importorskip('pybird')
+    try:
+        import pybird.module  # noqa: F401
+    except ImportError as exc:  # installed pybird is not numpy 2 compatible
+        pytest.skip(f'installed pybird is not numpy 2 compatible: {exc}')
     from desilike.theories.galaxy_clustering.full_shape import PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles
 
-    pipe_exact = compile(PyBirdTracerCorrelation2Poles(s=_S, ells=_ELLS))
+    pipe_exact = build(PyBirdTracerCorrelation2Poles(s=_S, ells=_ELLS))
 
     # PyBirdTracerCorrelation2Poles.pt is PyBirdPTCorrelation2Poles (direct PT, not nested)
     theory_emu = PyBirdTracerCorrelation2Poles(s=_S, ells=_ELLS,
@@ -226,7 +299,7 @@ def test_folps_spectrum_emulated():
     pytest.importorskip('folps')
     from desilike.theories.galaxy_clustering.full_shape import FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles
 
-    pipe_exact = compile(FOLPSTracerSpectrum2Poles(k=_K, ells=_ELLS))
+    pipe_exact = build(FOLPSTracerSpectrum2Poles(k=_K, ells=_ELLS))
 
     theory_emu = FOLPSTracerSpectrum2Poles(k=_K, ells=_ELLS,
                                             pt=FOLPSPTSpectrum2Poles(k=_K, ells=_ELLS))
@@ -273,7 +346,7 @@ def test_folps_correlation_emulated():
     pytest.importorskip('folps')
     from desilike.theories.galaxy_clustering.full_shape import FOLPSTracerCorrelation2Poles
 
-    pipe_exact = compile(FOLPSTracerCorrelation2Poles(s=_S, ells=_ELLS))
+    pipe_exact = build(FOLPSTracerCorrelation2Poles(s=_S, ells=_ELLS))
 
     theory_emu = FOLPSTracerCorrelation2Poles(s=_S, ells=_ELLS)
     # theory_emu.pt is FOLPSTracerSpectrum2Poles; .pt.pt is FOLPSPTSpectrum2Poles
@@ -285,7 +358,7 @@ def test_folps_correlation_emulated():
 def test_folps_spectrum3_poles_prior_bases():
     """FOLPSTracerSpectrum3Poles: each prior_basis compiles and produces the right output shape.
 
-    Uses a TaylorEmulator on the PT sub-graph to avoid the memory-intensive
+    Uses an emulator on the PT sub-graph to avoid the memory-intensive
     combine_bias_terms_spectrum3_poles call while still exercising the full
     bias-parameter conversion path for every prior_basis variant.
     """
@@ -295,11 +368,24 @@ def test_folps_spectrum3_poles_prior_bases():
     _K3 = np.column_stack([np.linspace(0.02, 0.1, 5)] * 2)
     _ELLS3 = ((0, 0, 0), (2, 0, 2))
 
-    for prior_basis in ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap'):
-        theory = FOLPSTracerSpectrum3Poles(k=_K3, ells=_ELLS3, prior_basis=prior_basis,
-                                           pt=FOLPSPTSpectrum2Poles())
-        pipe = _emulate(theory)
-        out = np.asarray(pipe())
+    # `prior_basis` selects a bias-parameter conversion, which sits DOWNSTREAM of the PT
+    # sub-graph: the four theories below configure their `pt` identically, so training an
+    # emulator per iteration trained the same thing four times over (measured at 879s, the
+    # slowest test in the suite by 2.4x).  Train once and deploy it into each theory instead.
+    # Each deployment gets its own `pt` instance, because `to_calculator` takes the constructor
+    # arguments -- template and cosmology included -- off the calculator it is handed, and
+    # sharing one across the four would leave them aliasing a single template.
+    bases = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
+    theories, pts = [], []
+    for prior_basis in bases:
+        pt = FOLPSPTSpectrum2Poles()
+        theories.append(FOLPSTracerSpectrum3Poles(k=_K3, ells=_ELLS3, prior_basis=prior_basis, pt=pt))
+        pts.append(pt)
+
+    emu = _train(pts[0])
+    for prior_basis, theory, pt in zip(bases, theories, pts):
+        replace(theory, pt, emu.to_calculator(pt))
+        out = np.asarray(build(theory)())
         assert out.shape == (len(_ELLS3), len(_K3)), f'unexpected shape {out.shape} for prior_basis={prior_basis!r}'
 
 
@@ -308,7 +394,7 @@ def test_folps_spectrum3_poles_emulated():
     pytest.importorskip('folps')
     from desilike.theories.galaxy_clustering.full_shape import FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum3Poles
 
-    pipe_exact = compile(FOLPSTracerSpectrum3Poles())
+    pipe_exact = build(FOLPSTracerSpectrum3Poles())
 
     theory_emu = FOLPSTracerSpectrum3Poles(pt=FOLPSPTSpectrum2Poles())
     pipe_emu = _emulate(theory_emu)

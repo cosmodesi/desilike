@@ -44,8 +44,8 @@ class Minuit(Kernel):
     def init(self):
         try:
             import iminuit  # noqa: F401
-        except ImportError:
-            raise ImportError("'iminuit' is required but not installed. Run: pip install iminuit")
+        except ImportError as exc:
+            raise ImportError("'iminuit' is required but not installed. Run: pip install iminuit") from exc
 
     def run(self, state: ProfilerState, chi2, grad=None, max_iterations=int(1e5), **kwargs) -> ProfilerState:
         import iminuit

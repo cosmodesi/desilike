@@ -139,9 +139,14 @@ def _params_from_cobaya(cobaya_params):
             # if logp genuinely needs it as an input, the missing kwarg will raise clearly.
             continue
         if 'prior' in spec:
+            # cobaya allows a bare number as `ref`, meaning "start exactly here" (SP4A declares
+            # `Ecal: {prior: {min: 0.8, max: 1.2}, ref: 1.0}`). desilike has no zero-width
+            # reference distribution, so that becomes the parameter's value instead.
+            ref = spec.get('ref')
+            value = float(ref) if isinstance(ref, (int, float)) else None
             variables.append(Parameter(name, prior=_convert_prior(spec['prior']),
-                                        ref=_convert_prior(spec.get('ref')),
-                                        latex=spec.get('latex')))
+                                        ref=None if value is not None else _convert_prior(ref),
+                                        value=value, latex=spec.get('latex')))
         elif value is not None:
             variables.append(Parameter(name, value=float(value), fixed=True, latex=spec.get('latex')))
         # else: derived-only output (e.g. {'derived': True}), or a bare renamed alias --
@@ -354,7 +359,7 @@ class CobayaLikelihood(Likelihood):
         if cosmo is None:
             from ..theories.primordial_cosmology import CosmoprimoCosmology
             cosmo = CosmoprimoCosmology(engine='camb', fiducial='DESI')
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo = cosmo  # Calculator dep; _trace_graph discovers it from __dict__
         self._param_map = {**_DEFAULT_PARAM_MAP, **(param_map or {})}
         vc = _params_from_cobaya(getattr(self._cobaya_like, 'params', None))
         if params is not None:
@@ -382,7 +387,7 @@ class CobayaLikelihood(Likelihood):
                 if name == 'Cl':
                     self._ellmax = max(self._ellmax or 0, ellmax)
                     cosmo_requirements.setdefault('harmonic.lensed_cl', []).append({'ellmax': self._ellmax})
-                    if set(spec.lower() for spec in value).intersection({'pp', 'tp', 'ep', 'pt', 'pe'}):
+                    if {spec.lower() for spec in value}.intersection({'pp', 'tp', 'ep', 'pt', 'pe'}):
                         self._need_lens_potential = True
                         cosmo_requirements.setdefault('harmonic.lens_potential_cl', []).append({'ellmax': self._ellmax})
                 else:

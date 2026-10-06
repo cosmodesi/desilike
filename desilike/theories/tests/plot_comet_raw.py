@@ -10,7 +10,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from desilike.base import compile
+from desilike.base import build
 from desilike.theories import CosmoprimoCosmology
 from desilike.theories.galaxy_clustering import (
     KaiserTracerSpectrum2Poles,
@@ -38,7 +38,7 @@ template = DirectSpectrum2Template(cosmo=cosmo, z=Z)
 
 # --- Kaiser ---
 theory_kaiser = KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template)
-pipe_kaiser = compile(theory_kaiser)
+pipe_kaiser = build(theory_kaiser)
 pk_kaiser = np.asarray(pipe_kaiser({'b1': B1P}))
 
 # --- Raw PTEmu.Pell call (no desilike machinery) ---
@@ -51,7 +51,7 @@ emu.define_fiducial_cosmology(params_fid=DESI_PARAMS, de_model='lambda')
 # --- COMET via desilike (pt=False: calls PTEmu.Pell directly) ---
 theory_comet = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                           prior_basis=PRIOR_BASIS, nbar=NBAR)
-pipe_comet = compile(theory_comet)
+pipe_comet = build(theory_comet)
 pk_comet = np.asarray(pipe_comet({'b1': B1P}))
 
 # Diagnostic: internal COMET AP/growth params and b1_canonical after the call
@@ -76,7 +76,7 @@ print(f'  cosmo params: h={cp["h"]:.6f}  wc={cp["wc"]:.6f}  wb={cp["wb"]:.6f}  A
 # --- desilike COMET with numpy backend (isolates JAX vs numpy) ---
 theory_comet_np = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                              prior_basis=PRIOR_BASIS, nbar=NBAR, backend='numpy')
-pipe_comet_np = compile(theory_comet_np)
+pipe_comet_np = build(theory_comet_np)
 pk_comet_np = np.asarray(pipe_comet_np({'b1': B1P}))
 print(f'  P0(k=0.1) desilike-jax  = {np.interp(0.1, k, pk_comet[0]):.4f}')
 print(f'  P0(k=0.1) desilike-numpy= {np.interp(0.1, k, pk_comet_np[0]):.4f}')
@@ -189,13 +189,13 @@ bi_ell_labels = {(0, 0, 0): r'$B_{000}$', (2, 0, 2): r'$B_{202}$'}
 theory_comet_bi_jax = COMETTracerSpectrum3Poles(cosmo=cosmo, pt=False, z=Z, k=k_bi,
                                                  ells=bi_ells, prior_basis='EggScoSmi+Comet',
                                                  nbar=NBAR)
-pipe_comet_bi_jax = compile(theory_comet_bi_jax)
+pipe_comet_bi_jax = build(theory_comet_bi_jax)
 bk_comet_jax = np.asarray(pipe_comet_bi_jax({'b1': b1_canonical}))
 
 theory_comet_bi_np = COMETTracerSpectrum3Poles(cosmo=cosmo, pt=False, z=Z, k=k_bi,
                                                 ells=bi_ells, prior_basis='EggScoSmi+Comet',
                                                 nbar=NBAR, backend='numpy')
-pipe_comet_bi_np = compile(theory_comet_bi_np)
+pipe_comet_bi_np = build(theory_comet_bi_np)
 bk_comet_np = np.asarray(pipe_comet_bi_np({'b1': b1_canonical}))
 
 # raw PTEmu.Bell_Sugi — same raw_params as the Pell call (already includes NB0, MB0, cB1, cB2, avirB)

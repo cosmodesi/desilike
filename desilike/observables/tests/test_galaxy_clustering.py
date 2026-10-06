@@ -35,15 +35,15 @@ def _make_correlation_theory(s, ells=(0, 2)):
 def test_spectrum2poles_no_window():
     """Spectrum2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 30)
     ells = (0, 2)
     theory = _make_spectrum_theory(k, ells)
     obs = Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells)
 
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert obs.flattheory.shape == (len(ells) * len(k),)
@@ -54,7 +54,7 @@ def test_spectrum2poles_no_window():
 def test_spectrum2poles_with_data():
     """Spectrum2PolesObservable: data provided, flatdata set correctly."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -64,8 +64,8 @@ def test_spectrum2poles_with_data():
     cov = np.diag(np.ones(len(ells) * len(k)) * 0.1)
     obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells, covariance=cov)
 
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     np.testing.assert_array_equal(obs.flatdata, data)
@@ -75,7 +75,7 @@ def test_spectrum2poles_with_data():
 def test_spectrum2poles_with_window():
     """Spectrum2PolesObservable: window matrix applied correctly."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
 
     k_data = np.linspace(0.02, 0.25, 15)
     kin = np.linspace(0.01, 0.3, 30)
@@ -90,8 +90,8 @@ def test_spectrum2poles_with_window():
     obs = Spectrum2PolesObservable(data=None, theory=theory, k=k_data, ells=ells,
                                    window=window, kin=kin)
 
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert obs.flattheory.shape == (n_data,)
@@ -104,15 +104,15 @@ def test_spectrum2poles_with_window():
 def test_correlation2poles_no_window():
     """Correlation2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
     from desilike.observables.galaxy_clustering import Correlation2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
 
     s = np.linspace(20., 180., 20)
     ells = (0, 2)
     theory = _make_correlation_theory(s, ells)
     obs = Correlation2PolesObservable(data=None, theory=theory, s=s, ells=ells)
 
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert obs.flattheory.shape == (len(ells) * len(s),)
@@ -122,7 +122,7 @@ def test_correlation2poles_no_window():
 def test_correlation2poles_with_data():
     """Correlation2PolesObservable: data and covariance stored correctly."""
     from desilike.observables.galaxy_clustering import Correlation2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
 
     s = np.linspace(20., 180., 15)
     ells = (0, 2)
@@ -133,8 +133,8 @@ def test_correlation2poles_with_data():
     cov_diag = np.ones(n) * 1e-4
     obs = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells, covariance=cov_diag)
 
-    pipe = compile(obs)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(obs)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     np.testing.assert_array_equal(obs.flatdata, data)
@@ -149,7 +149,7 @@ def test_gaussian_likelihood_basic():
     """ObservablesGaussianLikelihood: logpdf is finite, theory() shape matches flatdata."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -161,8 +161,8 @@ def test_gaussian_likelihood_basic():
     obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
     like = ObservablesGaussianLikelihood(observables=obs, covariance=cov)
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert np.isfinite(float(like.logpdf))
@@ -173,7 +173,7 @@ def test_gaussian_likelihood_obs_covariance():
     """ObservablesGaussianLikelihood: uses observable's covariance when none provided."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -185,8 +185,8 @@ def test_gaussian_likelihood_obs_covariance():
     obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells, covariance=cov)
     like = ObservablesGaussianLikelihood(observables=obs)
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     np.testing.assert_allclose(like.precision, np.linalg.inv(cov), rtol=1e-10)
@@ -197,7 +197,7 @@ def test_gaussian_likelihood_scale_covariance():
     """ObservablesGaussianLikelihood: scale_covariance rescales precision."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -220,12 +220,12 @@ def test_gaussian_likelihood_scale_covariance():
     obs2 = Spectrum2PolesObservable(data=data, theory=theory2, k=k, ells=ells)
     like2 = ObservablesGaussianLikelihood(observables=obs2, covariance=cov, scale_covariance=2.)
 
-    pipe1 = compile(like1)
-    p1 = {p.name: float(p.value) for p in pipe1.params}
+    pipe1 = build(like1)
+    p1 = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe1.params}
     pipe1(p1)
 
-    pipe2 = compile(like2)
-    p2 = {p.name: float(p.value) for p in pipe2.params}
+    pipe2 = build(like2)
+    p2 = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe2.params}
     pipe2(p2)
 
     np.testing.assert_allclose(like2.precision * 2., like1.precision, rtol=1e-10)
@@ -235,7 +235,7 @@ def test_gaussian_likelihood_multi_observable():
     """ObservablesGaussianLikelihood: two observables sharing a template are concatenated correctly."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
                                                       BAOSpectrum2Template)
 
@@ -257,8 +257,8 @@ def test_gaussian_likelihood_multi_observable():
     cov = np.diag(np.ones(2 * n) * 0.1)
     like = ObservablesGaussianLikelihood(observables=[obs1, obs2], covariance=cov)
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     assert like.flatdata.shape == (2 * n,)
@@ -272,7 +272,7 @@ def test_gaussian_likelihood_hartlap():
     """ObservablesGaussianLikelihood: Hartlap correction scales precision correctly."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
 
     k = np.linspace(0.01, 0.3, 10)
     ells = (0, 2)
@@ -287,8 +287,8 @@ def test_gaussian_likelihood_hartlap():
     like = ObservablesGaussianLikelihood(observables=obs, covariance=cov,
                                          correct_covariance=dict(correction='hartlap2007', nobs=nobs))
 
-    pipe = compile(like)
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe = build(like)
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     hartlap = (nobs - n - 2.) / (nobs - 1.)
@@ -361,7 +361,7 @@ def _make_correlation2_lsstypes():
         coords_values = [np.mean(e, axis=-1) for e in edges]
         counts = 1. + rng.uniform(size=tuple(v.size for v in coords_values))
         return types.Count2(counts=counts, norm=np.ones_like(counts),
-                            **{coord: val for coord, val in zip(coords, coords_values)},
+                            **dict(zip(coords, coords_values)),
                             **{f'{coord}_edges': val for coord, val in zip(coords, edges)},
                             coords=coords, attrs=dict(los='x'))
 
@@ -374,7 +374,7 @@ def test_spectrum2poles_lsstypes():
     """Spectrum2PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum2_lsstypes(size=8)
@@ -398,12 +398,12 @@ def test_spectrum2poles_lsstypes():
         ellsin=window.theory.ells, covariance=covariance.value(), name='obs2')
     np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
 
-    # both paths compile and produce finite logpdf
+    # both paths build and produce finite logpdf
     like = Spectrum2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
     from desilike.likelihoods import ObservablesGaussianLikelihood
     likelihood = ObservablesGaussianLikelihood(observables=[like], covariance=covariance)
-    pipe = compile(likelihood)
-    pipe({p.name: float(p.value) for p in pipe.params})
+    pipe = build(likelihood)
+    pipe({p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params})
     assert np.isfinite(float(likelihood.logpdf))
 
 
@@ -411,7 +411,7 @@ def test_spectrum3poles_lsstypes():
     """Spectrum3PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
     from desilike.observables.galaxy_clustering import Spectrum3PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum3_lsstypes(size=5)
@@ -436,11 +436,40 @@ def test_spectrum3poles_lsstypes():
     np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
 
 
+def test_spectrum3poles_scoccimarro():
+    """Spectrum3PolesObservable: a Scoccimarro data set drives the theory into that basis."""
+    import lsstypes as types
+    from desilike.observables.galaxy_clustering import Spectrum3PolesObservable
+    from desilike.base import build, get_params
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum3Poles
+
+    # (k1, k2, k3) triangles, k1 <= k2 <= k3, as the jaxpower estimator bins them, and plain
+    # integer ells -- the two things that tell the theory which basis it is in.
+    k = np.array([[0.05, 0.05, 0.05], [0.05, 0.08, 0.10], [0.06, 0.10, 0.12], [0.08, 0.10, 0.15]])
+    edges = np.stack([k - 0.005, k + 0.005], axis=-1)
+    ells = [0, 2]
+    data = types.Mesh3SpectrumPoles([types.Mesh3SpectrumPole(
+        k=k, k_edges=edges, num_raw=np.zeros(len(k)), basis='scoccimarro', ell=ell) for ell in ells])
+
+    theory = FOLPSTracerSpectrum3Poles(template=DirectSpectrum2Template(z=0.8), nk=120, nfftlog=128)
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+    # No window: the observable then builds the trivial selection, which is enough to check that
+    # the ells and the (N, 3) coordinates reach the theory.
+    observable = Spectrum3PolesObservable(data=data, theory=theory, covariance=covariance)
+    assert theory._basis == 'scoccimarro' and theory.ells == tuple(ells)
+    assert np.array_equal(theory.k, k)
+
+    pipe = build(observable)
+    pipe({param.name: param.value for param in get_params(observable)})
+    flattheory = np.asarray(observable.flattheory)
+    assert flattheory.shape == (data.size,) and np.isfinite(flattheory).all()
+
+
 def test_correlation2poles_lsstypes():
     """Correlation2PolesObservable: lsstypes input gives same flatdata as numpy input."""
     import lsstypes as types
     from desilike.observables.galaxy_clustering import Correlation2PolesObservable
-    from desilike.base import compile
+    from desilike.base import build
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerCorrelation2Poles,
                                                       DampedBAOWigglesPTSpectrum2Poles,
                                                       BAOSpectrum2Template)
@@ -470,8 +499,8 @@ def test_correlation2poles_lsstypes():
     like = Correlation2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
     from desilike.likelihoods import ObservablesGaussianLikelihood
     likelihood = ObservablesGaussianLikelihood(observables=[like], covariance=covariance)
-    pipe = compile(likelihood)
-    pipe({p.name: float(p.value) for p in pipe.params})
+    pipe = build(likelihood)
+    pipe({p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params})
     assert np.isfinite(float(likelihood.logpdf))
 
 
@@ -480,7 +509,7 @@ def test_gaussian_likelihood_lsstypes_covariance():
     import lsstypes as types
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.base import compile
+    from desilike.base import build
     from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum2_lsstypes(size=8)
@@ -495,16 +524,18 @@ def test_gaussian_likelihood_lsstypes_covariance():
 
     # Single-observable likelihood with lsstypes covariance
     like_single = ObservablesGaussianLikelihood(observables=[obs1], covariance=covariance)
-    pipe_single = compile(like_single)
-    pipe_single({p.name: float(p.value) for p in pipe_single.params})
+    pipe_single = build(like_single)
+    pipe_single({p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe_single.params})
+    # Building the joint likelihood below reconfigures the template these two share, which
+    # invalidates this graph; we are done calling it (only its `logpdf` is read at the end).
 
     # Multi-observable likelihood with lsstypes block-diagonal covariance
     cov_joint = types.CovarianceMatrix(
         observable=types.ObservableTree([data] * 2, observables=['obs1', 'obs2']),
         value=sp.linalg.block_diag(covariance.value(), covariance.value()))
     like_joint = ObservablesGaussianLikelihood(observables=[obs1, obs2], covariance=cov_joint)
-    pipe_joint = compile(like_joint)
-    pipe_joint({p.name: float(p.value) for p in pipe_joint.params})
+    pipe_joint = build(like_joint)
+    pipe_joint({p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe_joint.params})
 
     assert np.isfinite(float(like_single.logpdf))
     assert np.isfinite(float(like_joint.logpdf))
@@ -517,7 +548,7 @@ def test_gaussian_likelihood_lsstypes_covariance():
 def test_spectrum2poles_templates_scalar():
     """templates: scalar Parameter contribution is added to flattheory and is discoverable in the graph."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import Parameter, compile
+    from desilike.base import Parameter, build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -534,10 +565,10 @@ def test_spectrum2poles_templates_scalar():
     assert obs.templates[0][0].name == 'my_template'
     np.testing.assert_array_equal(obs.templates[0][1], template_array)
 
-    pipe = compile(obs)
+    pipe = build(obs)
     assert any(p.name == 'my_template' for p in pipe.params)
 
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     expected = obs._window_matrix @ np.ravel(theory.poles) + template_array * pipe_params['my_template']
@@ -547,7 +578,7 @@ def test_spectrum2poles_templates_scalar():
 def test_spectrum2poles_templates_vector():
     """templates: vector Parameter contribution (shape=(m,)) is added to flattheory."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import Parameter, compile
+    from desilike.base import Parameter, build
 
     k = np.linspace(0.01, 0.3, 20)
     ells = (0, 2)
@@ -565,7 +596,7 @@ def test_spectrum2poles_templates_vector():
                                    templates=[(param, template_array)])
     assert obs.templates[0][1].shape == (n, m)
 
-    pipe = compile(obs)
+    pipe = build(obs)
     pipe_params = {}
     for p in pipe.params:
         pipe_params[p.name] = np.asarray(p.value) if p.shape else float(p.value)
@@ -578,7 +609,7 @@ def test_spectrum2poles_templates_vector():
 def test_spectrum2poles_templates_dict():
     """templates: dict argument is converted to Parameter, discovered in graph."""
     from desilike.observables.galaxy_clustering import Spectrum2PolesObservable
-    from desilike.base import Parameter, compile
+    from desilike.base import Parameter, build
 
     k = np.linspace(0.01, 0.3, 15)
     ells = (0, 2)
@@ -595,10 +626,10 @@ def test_spectrum2poles_templates_dict():
     assert isinstance(obs.templates[0][0], Parameter)
     assert obs.templates[0][0].name == 'dict_template'
 
-    pipe = compile(obs)
+    pipe = build(obs)
     assert any(p.name == 'dict_template' for p in pipe.params)
 
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
     assert obs.flattheory.shape == (n,)
 
@@ -622,7 +653,7 @@ def test_spectrum2poles_templates_shape_error():
 def test_correlation2poles_templates():
     """Correlation2PolesObservable: scalar template contribution is added to flattheory."""
     from desilike.observables.galaxy_clustering import Correlation2PolesObservable
-    from desilike.base import Parameter, compile
+    from desilike.base import Parameter, build
 
     s = np.linspace(20., 180., 20)
     ells = (0, 2)
@@ -637,10 +668,10 @@ def test_correlation2poles_templates():
                                       templates=[(param, template_array)])
     assert len(obs.templates) == 1
 
-    pipe = compile(obs)
+    pipe = build(obs)
     assert any(p.name == 'xi_template' for p in pipe.params)
 
-    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe_params = {p.name: np.asarray(p.value) if p.shape else float(p.value) for p in pipe.params}
     pipe(pipe_params)
 
     expected = obs._window_matrix @ np.ravel(theory.poles) + template_array * pipe_params['xi_template']

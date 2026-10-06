@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from desilike.base import compile
+from desilike.base import build
 from desilike.theories import CosmoprimoCosmology
 from desilike.theories.galaxy_clustering import (
     KaiserTracerSpectrum2Poles,
@@ -37,18 +37,18 @@ cosmo = CosmoprimoCosmology(engine='class', fiducial='DESI')
 template = DirectSpectrum2Template(cosmo=cosmo, z=Z)
 
 theory_kaiser = KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template)
-pipe_kaiser = compile(theory_kaiser)
+pipe_kaiser = build(theory_kaiser)
 pk_kaiser = np.asarray(pipe_kaiser({'b1': B1P}))
 
 #pt = COMETPTSpectrum2Poles(cosmo=cosmo, z=Z, k=k, ells=ells)
 theory_comet = COMETTracerSpectrum2Poles(cosmo=cosmo, pt=False, z=Z, k=k, ells=ells,
                                           prior_basis=PRIOR_BASIS, nbar=NBAR)
-pipe_comet = compile(theory_comet)
+pipe_comet = build(theory_comet)
 pk_comet = np.asarray(pipe_comet({'b1': B1P}))
 
 theory_folps = FOLPSTracerSpectrum2Poles(k=k, ells=ells, prior_basis=PRIOR_BASIS,
                                          template=template, nbar=NBAR)
-pipe_folps = compile(theory_folps)
+pipe_folps = build(theory_folps)
 pk_folps = np.asarray(pipe_folps({'b1': B1P}))
 
 models = [('Kaiser', pk_kaiser, 'C2', '-'),
@@ -98,12 +98,12 @@ bi_ell_labels = {(0, 0, 0): r'$B_{000}$', (2, 0, 2): r'$B_{202}$'}
 
 theory_folps_bi = FOLPSTracerSpectrum3Poles(k=k_bi, ells=bi_ells, prior_basis=PRIOR_BASIS,
                                              template=template, nbar=NBAR)
-pipe_folps_bi = compile(theory_folps_bi)
+pipe_folps_bi = build(theory_folps_bi)
 bk_folps = np.asarray(pipe_folps_bi({'b1': B1P}))
 
 theory_comet_bi = COMETTracerSpectrum3Poles(cosmo=cosmo, z=Z, k=k_bi, ells=bi_ells,
                                              prior_basis=PRIOR_BASIS, nbar=NBAR)
-pipe_comet_bi = compile(theory_comet_bi)
+pipe_comet_bi = build(theory_comet_bi)
 bk_comet = np.asarray(pipe_comet_bi({'b1': B1P}))
 
 bi_models = [('FOLPS', bk_folps, 'C0', '-'),

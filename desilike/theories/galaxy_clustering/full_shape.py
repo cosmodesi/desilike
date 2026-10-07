@@ -3120,26 +3120,6 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # options, so training and sampling always agree on it.
         self.template.update(with_now=with_now)
 
-        # HDKI / EFT_DE: the h1 / h3 / h5 functions and Omega_m as REQUIREMENTS of the template
-        # cosmology, on the eta grid fkptjax's ODE spans. They then reach __call__ (an external,
-        # numpy calculator: pure_callback) as concrete leaves whatever the cosmology's engine.
-        # Reading them off `template.cosmo._cosmo` at call time (the fallback kept in
-        # _mg_kwargs) only works when that object is concrete -- an external engine such as
-        # mochiclass; with a JAX-native engine (the propto_omega emulator) it holds tracers
-        # inside the callback and a jitted chain fails. Same for Omega_m, read below through
-        # cosmo['Omega_m']: a 'params.Omega_m' requirement makes it a leaf.
-        if (str(model).strip().upper() == 'HDKI'
-                and str(mg_variant or '').strip().upper() in ('EFT_DE', 'EFTDE')):
-            self._eft_eta = np.linspace(-3.912023 - 0.2, 0., 512)
-            self._eft_z = np.expm1(-self._eft_eta)
-            self.template.cosmo.add_requirements({f'background.{name}': [{'z': self._eft_z}]
-                                                  for name in ('h1', 'h3', 'h5')})
-            # ... and the cosmology as a DIRECT dependency of this node: desilike injects the
-            # concrete leaves of a node's own dependencies into the callback, not those of its
-            # dependencies' dependencies, and `template.cosmo` is two levels down.
-            self.cosmo = self.template.cosmo
-            self.cosmo.add_requirements({'params.Omega_m': None})
-
         # Fixed at the GR limit (0.) by default, like the other MG parameters below;
         # fixed=False sampling is opt-in (only for model='HDKI', mg_variant='mu_OmDE').
         self.mu0 = Parameter('mu0', value=0., fixed=True,
@@ -3340,20 +3320,6 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 'eftcamb_h5_interp',
             )
             missing = [name for name in required if out.get(name) is None]
-            if missing and getattr(self, '_eft_eta', None) is not None:
-                # The registered leaves (see __init__): concrete inside this callback for any
-                # engine. Rebuilt as splines per call, so mu(k, eta) follows the cosmology.
-                from scipy.interpolate import CubicSpline
-                for name in list(missing):
-                    key = 'background.' + name[len('eftcamb_'):-len('_interp')]
-                    try:
-                        values = np.asarray(self.cosmo.get(key, z=self._eft_z), dtype='f8')
-                    except KeyError:
-                        break
-                    if not np.all(np.isfinite(values)):
-                        raise ValueError(f'{key}(eta) is not finite on the EFT_DE eta grid; check the smg / EFT parameters')
-                    out[name] = CubicSpline(self._eft_eta, values, extrapolate=True)
-                missing = [name for name in required if out.get(name) is None]
             if missing:
                 # No interpolators were handed in: take them from the template's cosmology.
                 #
@@ -3422,9 +3388,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         qper = self.template.qper
         jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
 
-        # through the direct dependency when there is one (EFT_DE, see __init__): its leaves
-        # are the concrete ones inside this callback
-        Om = getattr(self, 'cosmo', self.template.cosmo)['Omega_m']
+        Om = self.template.cosmo['Omega_m']
         xnow = -3.912023
         # Everything the tables need from the cosmology, and the tables themselves, can fail at
         # a model the sampler proposes but the prior vetoes: the traced posterior evaluates the
@@ -3432,7 +3396,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # mode), and an exception inside this pure_callback takes the whole MPI run down. So two
         # failure modes become NaN tables -- desilike maps a NaN logL to -inf and the point is
         # rejected: the EFT functions h1/h3/h5 not finite on the eta grid (`_mg_kwargs` raises
-        # ValueError: the engine-level emulator outside its region, 2026-09-12), and fkptjax's
+        # ValueError), and fkptjax's
         # ODE solver refusing the growth history (RuntimeError, below). Only after a successful
         # first call, which fixes the table shapes; any other exception still surfaces.
         refused = None
@@ -6428,10 +6392,6 @@ class FKPTShapeEmulator(CalculatorEmulator):
     #: 23 one-loop integrals, two zero pads, the sigma^2 scalars, f0).
     _LOOP_COLUMNS = range(3, 26)
     _PAD_COLUMNS = (26, 27)
-    #: What the no-wiggle spectrum is divided by before it is fitted: ``'sigma8'`` (the shape
-    #: :math:`P_\mathrm{nw} / \sigma_8^2`, point 2 of the class docstring) or ``'amplitude'``
-    #: (:math:`P_\mathrm{nw} / A_s`, see :class:`FKPTAmplitudeEmulator`).
-    _shape_divisor = 'sigma8'
 
     # ── the hooks ─────────────────────────────────────────────────────────────
     def select_params(self, names):
@@ -6594,7 +6554,7 @@ class FKPTShapeEmulator(CalculatorEmulator):
         # the linear spectrum: shape and wiggle, the amplitude carried by sigma8 alone
         pk_w, pk_now = np.asarray(values[layout['pk_w']]), np.asarray(values[layout['pk_now']])
         with np.errstate(divide='ignore', invalid='ignore'):
-            out['shape_nw'] = pk_now / (sigma8**2 if self._shape_divisor == 'sigma8' else amplitude)
+            out['shape_nw'] = pk_now / sigma8**2
             out['wiggle'] = pk_w / pk_now - 1.
         # everything fitted as it is, up to its power of the amplitude
         for name, (child, degree) in fitted.items():
@@ -6621,7 +6581,7 @@ class FKPTShapeEmulator(CalculatorEmulator):
         sigma8 = out[scalars['sigma8']]
         growth = out[scalars['f']]
         out[scalars['fsigma8']] = growth * sigma8
-        pk_now = values['shape_nw'] * (sigma8**2 if self._shape_divisor == 'sigma8' else amplitude)
+        pk_now = values['shape_nw'] * sigma8**2
         out[layout['pk_now']] = pk_now
         out[layout['pk_w']] = pk_now * (1. + values['wiggle'])
         for name, source in layout['duplicates'].items():
@@ -6647,25 +6607,6 @@ class FKPTShapeEmulator(CalculatorEmulator):
         self._amplitude_ref = float(state['amplitude_ref'])
         self._constants = {name: np.asarray(value) for name, value in state['constants'].items()}
         self._layout_cache = None
-
-
-class FKPTAmplitudeEmulator(FKPTShapeEmulator):
-    r""":class:`FKPTShapeEmulator` with the no-wiggle spectrum fitted as :math:`P_\mathrm{nw} / A_s`.
-
-    Point 2 of the parent's docstring divides the no-wiggle spectrum by the fitted
-    :math:`\sigma_8^2` so that one amplitude degree of freedom serves ``pk_lin`` and ``sigma8``
-    and the ``sigma8`` error cancels in the :math:`b_1^2` term.  That is a gain for a network,
-    whose error on each output is what it is; for a polynomial regression it is a loss: the
-    ratio of two smooth functions is a harder polynomial target than either, and measured on the
-    same 8736 nodes of the EFT-of-dark-energy ref box (degree 4, held-out, 2026-09-14) the shape
-    :math:`P_\mathrm{nw} / \sigma_8^2` fitted to 1.65e-2 where :math:`P_\mathrm{nw} / A_s` fitted
-    to 5.5e-3 -- three times better, with ``sigma8`` itself at 5.7e-3.  So this class keeps the
-    amplitude exact (point 1), the wiggles as a ratio (point 3) and the identities (point 4), and
-    fits the no-wiggle spectrum divided by the exact amplitude alone.  Same nodes, same
-    checkpoint, same 62 outputs under the same names; the two are distinguished by
-    :attr:`_shape_divisor`, which the saved state's class name carries.
-    """
-    _shape_divisor = 'amplitude'
 
 
 class GeoFPTAXPTSpectrum2Poles(Calculator):

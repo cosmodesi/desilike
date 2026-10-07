@@ -3111,13 +3111,13 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # DECREASES with k below ~3e-3 h/Mpc (d ln P / d ln k = -0.9 measured at k = 1e-3 for
         # c_B = 1.0, c_M = 0.7, w0 = -0.68, wa = 0.62). 'peakaverage' (and 'wallish2018') return
         # NaN on such a spectrum, and the whole no-wiggle table and the kernel constants follow:
-        # 14% of the nodes of an MLP emulator training over the EFT-of-DE box came back
-        # non-finite for this reason alone. 'hinton2017' (a polynomial broadband fit) is finite
+        # 14% of the training nodes of an emulator over the EFT-of-DE box came back non-finite
+        # for this reason alone. 'hinton2017' (a polynomial broadband fit) is finite
         # there and is the closest to 'peakaverage' where both work (measured on a fiducial-like
         # model, LRG1 multipoles: 0.08%, 0.24%, 0.50% on P0, P2, P4, against 0.26 / 0.81 / 1.65%
         # for 'savgol' and 0.16 / 0.71 / 2.74% for 'ehpoly'). The pipeline passes it for EFT_DE
-        # (desi-clustering tools_MG._fkptjax_pt_options); the choice is part of the theory
-        # options, so training and sampling always agree on it.
+        # (desi-clustering tools_MG.propose_fiducial_fkptjax_theory_options); the choice is part
+        # of the theory options, so training and sampling always agree on it.
         self.template.update(with_now=with_now)
 
         # Fixed at the GR limit (0.) by default, like the other MG parameters below;
@@ -3342,8 +3342,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 # negligible against the kernel ODE solve that follows.
                 #
                 # Explicit ``eftcamb_h*_interp`` (constructor or mg_params_override) still win:
-                # they are the fixed-cosmology cross-check path of the notebooks, and a partial
-                # override keeps only what it names.
+                # they are the fixed-cosmology cross-check path, and a partial override keeps
+                # only what it names.
                 background = None
                 for candidate in (getattr(self.template.cosmo, '_cosmo', None),
                                   getattr(self.template.cosmo, 'cosmo', None),
@@ -3395,10 +3395,11 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # likelihood regardless (desilike's Posterior short-circuits on the prior only in eager
         # mode), and an exception inside this pure_callback takes the whole MPI run down. So two
         # failure modes become NaN tables -- desilike maps a NaN logL to -inf and the point is
-        # rejected: the EFT functions h1/h3/h5 not finite on the eta grid (`_mg_kwargs` raises
-        # ValueError), and fkptjax's
-        # ODE solver refusing the growth history (RuntimeError, below). Only after a successful
-        # first call, which fixes the table shapes; any other exception still surfaces.
+        # rejected: the EFT functions h1/h3/h5 not finite on the eta grid (cosmoprimo's
+        # `eft_interpolators` raises CosmologyComputationError), and fkptjax's ODE solver
+        # refusing the growth history (RuntimeError, below). Only after a successful first call,
+        # which fixes the table shapes; any other exception still surfaces.
+        from cosmoprimo import CosmologyComputationError
         refused = None
         try:
             mg_kwargs = self._mg_kwargs()
@@ -3429,7 +3430,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 mg_kwargs['f0'] = self.template.f0
                 mg_kwargs['fk'] = jnp.full_like(self.template.k, self.template.f0)
 
-        except ValueError as exc:
+        except (ValueError, CosmologyComputationError) as exc:
             if getattr(self, '_fkpt_table_shapes', None) is None:
                 raise
             refused = exc
@@ -6276,11 +6277,11 @@ class FKPTShapeEmulator(CalculatorEmulator):
     r"""The fkpt pt with its amplitude handled exactly and its linear spectrum fitted as a shape.
 
     The generic :class:`~desilike.emulators.CalculatorEmulator` fits every leaf of the pt's pytree
-    as it comes, over every varied parameter.  For the EFT-of-dark-energy box that is what the MLP
-    emulator has to do -- the routed :class:`FKPTEmulator` cannot be used there, because it would
+    as it comes, over every varied parameter.  For the EFT-of-dark-energy box that generic expansion
+    is the starting point -- the routed :class:`FKPTEmulator` cannot be used there, because it would
     freeze ``w0``/``wa`` and route them through GR background scalars while, for
-    :math:`\alpha_i = c_i \Omega_\mathrm{de}(a)`, they change the kernels themselves -- and it is
-    measured to be the wrong thing to fit (`refactor_proposal.md`, 2026-09-11, LRG1).  Splicing
+    :math:`\alpha_i = c_i \Omega_\mathrm{de}(a)`, they change the kernels themselves -- and it was
+    measured to be the wrong thing to fit (LRG1, 2026-09-11).  Splicing
     the exact value of every other output into the emulated pipeline, the ``dchi2`` between the
     emulated and the exact likelihood at the posterior (median 11.6) was made of the two EASIEST
     outputs: the linear spectrum ``pk_lin [w]`` (16.4 on its own, at a 3.5e-3 fit error) and the
@@ -6308,7 +6309,7 @@ class FKPTShapeEmulator(CalculatorEmulator):
        :meth:`select_node_params` keeps it sampled, so that a node set drawn over the full box --
        and its checkpoint -- is reused, the fit seeing the same nodes projected onto one fewer
        parameter.  (``logA`` spans [2, 3.7] on that box, a factor 5.5 in amplitude that every
-       network used to have to learn.)
+       fitted output used to have to follow.)
     2. **One amplitude degree of freedom for** ``pk_lin`` **and** ``sigma8``.  The no-wiggle
        linear spectrum is fitted as the SHAPE :math:`S(k) = P_\mathrm{nw}(k) / \sigma_8^2` and
        ``sigma8`` (at the reference amplitude) once; the spectra are rebuilt as
@@ -6317,11 +6318,11 @@ class FKPTShapeEmulator(CalculatorEmulator):
        :math:`(b_{1}^\mathrm{p} \sigma_8^\mathrm{fid} + f \mu^2 \sigma_8)^2 S`: the ``sigma8``
        error cancels exactly in the :math:`b_1^2` term, which is most of the monopole, and
        survives only in the RSD terms -- the measured sensitivities (17 per 0.1% for ``sigma8``,
-       9 for ``pk_lin``, opposite signs) say the net is about 1 per 0.1%, i.e. the 10.1 becomes
-       ~0.4 at the current ``sigma8`` fit error.
+       9 for ``pk_lin``, opposite signs) say the net is about 1 per 0.1%, i.e. the 10.1 above
+       becomes ~0.4 at the same ``sigma8`` fit error.
     3. **The wiggles are fitted on their own.**  The wiggly spectrum is fitted as
        :math:`W(k) = P_\mathrm{w} / P_\mathrm{nw} - 1`, an O(0.1) oscillation, in place of a second
-       spectrum spanning four decades in k.  Two independent networks each good to 0.3% gave a
+       spectrum spanning four decades in k.  Two independent fits each good to 0.3% gave a
        wiggle part good only to 5% (the error on the difference of two fits does not cancel, and
        the difference is 8% of the spectrum), which is 8% of the BAO feature that constrains
        :math:`\alpha_\parallel, \alpha_\perp`.  The cost is that :math:`P_\mathrm{nw}`'s error now
@@ -6329,15 +6330,15 @@ class FKPTShapeEmulator(CalculatorEmulator):
        :math:`(1 - D)`; point 1 is what pays for that.
     4. **Nothing is fitted that is a function of something else fitted, or constant.**  The AP
        grid ``(jac, kap, muap)`` is rebuilt from ``(qpar, qper)`` through :func:`_ap_k_mu` (three
-       arrays, one of them ``(n_k, n_mu)``, that used to be three networks); ``fsigma8`` is
+       arrays, one of them ``(n_k, n_mu)``, that used to be three fitted outputs); ``fsigma8`` is
        :math:`f \sigma_8`; the ``f0`` leaf and the trailing ``f0`` of the no-wiggle table are the
        wiggle table's; the no-wiggle table's ``f_k / f_0`` row is the wiggle table's; the two k
-       rows, the zero pads and ``sigma8_fid`` are constants of the emulator.  76 networks become
-       62, and none of the removed ones was cheap: the AP arrays alone were 4% of the state.
+       rows, the zero pads and ``sigma8_fid`` are constants of the emulator.  76 fitted outputs
+       become 62, and none of the removed ones was cheap: the AP arrays alone were 4% of the state.
        Every one of these identities is CHECKED at every node while transforming, and a node
        that breaks one raises rather than being fitted around -- a pt that stops satisfying
-       them (another template, say) should fail here, not predict wrongly.  The seven networks
-       the ablation found to never enter chi2 through the power spectrum -- ``f``, ``fsigma8``,
+       them (another template, say) should fail here, not predict wrongly.  The seven outputs
+       an ablation found never to enter chi2 through the power spectrum -- ``f``, ``fsigma8``,
        ``f0`` and the four kernel constants -- are handled by the same identities except ``f``
        and the kernel constants, which are kept: ``f`` is what ``fsigma8`` is rebuilt from, and
        the kernel constants are read by the bispectrum path.
@@ -6349,7 +6350,7 @@ class FKPTShapeEmulator(CalculatorEmulator):
     outputs by those, and :meth:`transform` receives exactly what the checkpoint holds.
 
     Two things this class does not do.  It does not divide :math:`\sigma_8` out of the loop
-    columns (the routed emulators do): that would feed the ``sigma8`` network's error into every
+    columns (the routed emulators do): that would feed the ``sigma8`` fit's error into every
     loop term at degree 2, and after point 1 the loops vary only with the growth, which is the
     physics they must learn anyway.  And it keeps every other parameter on the grid -- ``w0``,
     ``wa``, ``h``, the EFT coefficients: this is the generic expansion with one exact direction,

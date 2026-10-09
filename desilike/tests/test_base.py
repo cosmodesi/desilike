@@ -948,6 +948,42 @@ def test_analytic_marginalization():
     assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
+def test_copy_does_not_share_parameters():
+    """A Parameter updated on a copy leaves the original, and later copies, alone.
+
+    Regression test: desi-clustering's run_fit profiles a copy of the likelihood with its solved
+    parameters set to derived='best', then samples another copy.  With shared Parameters the
+    sampler's copy inherited 'best' and sampled the profile likelihood instead of the
+    marginalised one.
+    """
+    from desilike.base import get_params
+    sigma_d, sigma_alpha = 0.1, 2.0
+    A = Parameter('A', value=1.0)
+    alpha = Parameter('alpha', value=0.0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
+    likelihood = _LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
+    params = {'A': 1.1}
+    marg = float(build(Posterior(copy(likelihood), Prior()))(params))
+
+    profiler_likelihood = copy(likelihood)
+    for param in get_params(profiler_likelihood).select(solved=True):
+        param.update(derived='best')
+    best = float(build(Posterior(profiler_likelihood, Prior()))(params))
+    assert abs(best - marg) > 1e-3, 'the test needs the two solved modes to differ'
+
+    assert get_params(likelihood)['alpha'].derived == 'marg'
+    sampler_likelihood = copy(likelihood)
+    sampler_alpha = get_params(sampler_likelihood)['alpha']
+    assert sampler_alpha.derived == 'marg' and sampler_alpha.prior.std() == sigma_alpha
+    assert abs(float(build(Posterior(sampler_likelihood, Prior()))(params)) - marg) < 1e-10
+
+    # a derived expression reads the copy's own inputs
+    b1 = Parameter('b1', value=1.5)
+    b2 = Parameter('b2', value=3., derived='b1 * 2', depends=[b1])
+    theory = _LinearTheory(A=b1, alpha=b2, data=DATA, covariance=np.eye(len(K)))
+    twin = get_params(copy(theory))
+    assert twin['b2'].depends['b1'] is twin['b1'] and twin['b1'] is not b1
+
+
 def test_best_fit_solved():
     """derived='best': profile likelihood — parameter at MLE, no volume factor."""
     sigma_d = 0.1
@@ -2525,8 +2561,9 @@ def test_a_build_restarts_the_tree_from_its_declaration_and_keeps_its_parameters
         # the constructor's own requirement, plus exactly one registration from this build
         assert cosmo.requirements == ['age', 'pk']
         assert graph.params['h'] is h and graph.params['h'].prior.limits == (0.6, 0.8)
-    # copy() binds the same way: the copy's fresh `h` is bound back to the original's
-    assert get_params(copy(template))['h'] is h
+    # copy() binds to a clone of the original's `h`: same prior, distinct object
+    h_copy = get_params(copy(template))['h']
+    assert h_copy is not h and h_copy.prior.limits == (0.6, 0.8)
 
 
 def test_update_invalidates_the_graphs_built_over_the_node():
@@ -2619,15 +2656,15 @@ def test_a_later_build_makes_the_earlier_graph_stale_and_copy_keeps_both():
     with pytest.raises(RuntimeError, match='no longer valid'):
         first(amplitude=1.)
 
-    # A copy is an independent tree: both graphs stay alive, and the Parameter is shared.
+    # A copy is an independent tree: both graphs stay alive, each with its own Parameter.
     twin = copy(theory)
     third = build(twin)
     assert float(second(amplitude=1.)) == 2. and float(third(amplitude=1.)) == 2.
     # `amplitude` was created inside __init__, and the copy's __init__ created another; the copy
-    # binds it back to the original's by name, so both graphs read one object.
-    assert third.params.names() == ['amplitude'] and twin.amplitude is theory.amplitude
+    # binds it by name to a clone of the original's, so it keeps its state but not its identity.
+    assert third.params.names() == ['amplitude'] and twin.amplitude is not theory.amplitude
     shared = Parameter('amplitude', value=1.)
-    assert copy(Scaled(amplitude=shared)).amplitude is shared
+    assert copy(Scaled(amplitude=shared)).amplitude is not shared
 
     # The case that matters most: the node becomes a dependency of a DIFFERENT root. Building
     # that root reconfigures it (its __init__ and __post_init__ run again), so the graph built

@@ -66,6 +66,8 @@ BBN_MEASUREMENTS = {
     'Aver2015': ('Y_p', 0.2449, 0.0040),
     # Aver et al. (2021), https://arxiv.org/abs/2010.04180
     'Aver2021': ('Y_p', 0.2453, 0.0034),
+    # Aver et al. (2026), LBT Y_p Project IV, https://arxiv.org/abs/2601.22238 -- as used in arXiv:2609.12065
+    'Aver2026': ('Y_p', 0.2458, 0.0013),
     # Cooke, Pettini & Steidel (2018), https://arxiv.org/abs/1710.11129
     'Cooke2018': ('D_H', 2.527e-5, 0.030e-5),
 }
@@ -90,7 +92,7 @@ class LINXBBNLikelihood(GaussianLikelihood):
     cosmo : PrimordialCosmology, default=None
         Cosmology calculator, used only when ``theory`` is ``None``.
     measurements : list, default=('Aver2021', 'Cooke2018')
-        Keys of :data:`BBN_MEASUREMENTS`, or ``(quantity, mean, std)`` tuples.
+        Keys of :data:`BBN_MEASUREMENTS` ('Aver2015', 'Aver2021', 'Aver2026', 'Cooke2018'), or ``(quantity, mean, std)`` tuples.
     """
     def __init__(self, theory=None, cosmo=None, measurements=('Aver2021', 'Cooke2018')):
         if theory is None:

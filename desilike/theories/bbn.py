@@ -11,6 +11,15 @@ from desilike.base import Calculator
 from desilike.parameter import Parameter, VariableCollection
 
 
+#: Atomic masses [kg] used by CAMB's ``bbn.ypBBN_to_yhe`` (camb 1.6.6).
+_M_HE4, _M_H = 6.646479073e-27, 1.673575e-27
+
+
+def ypBBN_to_yhe(y_p):
+    """Helium nucleon fraction :math:`4 n_{^4\\mathrm{He}} / n_\\mathrm{b}` to mass fraction, as CAMB's ``bbn.ypBBN_to_yhe``."""
+    return -y_p * _M_HE4 / (-y_p * _M_HE4 + 4. * y_p * _M_H - 4. * _M_H)
+
+
 class LINXAbundances(Calculator):
     r"""Primordial light-element abundances from LINX.
 
@@ -30,6 +39,8 @@ class LINXAbundances(Calculator):
     * ``He3_H``   -- :math:`(n_{^3\mathrm{He}} + n_\mathrm{T}) / n_\mathrm{H}`;
     * ``Li7_H``   -- :math:`(n_{^7\mathrm{Li}} + n_{^7\mathrm{Be}}) / n_\mathrm{H}`;
     * ``N_eff_bbn`` -- :math:`N_\mathrm{eff}` at the end of the LINX background integration.
+    * ``YHe``     -- helium *mass* fraction, from ``Y_p`` with CAMB's ``bbn.ypBBN_to_yhe`` conversion:
+      the ``YHe`` input of Boltzmann codes.
 
     :math:`N_\mathrm{eff}` mapping: extra radiation is injected as LINX's initial
     :math:`\Delta N_\mathrm{eff}` (at :math:`T \sim 30` MeV), chosen so that the late-time value
@@ -128,13 +139,93 @@ class LINXAbundances(Calculator):
         self.He3_H = (yields[3] + yields[4]) / yield_hydrogen
         self.Li7_H = (yields[6] + yields[7]) / yield_hydrogen
         self.N_eff_bbn = neff[-1]
+        self.YHe = ypBBN_to_yhe(self.Y_p)
         return self
 
     def tree_flatten(self):
-        return [self.Y_p, self.D_H, self.He3_H, self.Li7_H, self.N_eff_bbn], None
+        return [self.Y_p, self.D_H, self.He3_H, self.Li7_H, self.N_eff_bbn, self.YHe], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.Y_p, obj.D_H, obj.He3_H, obj.Li7_H, obj.N_eff_bbn = children
+        obj.Y_p, obj.D_H, obj.He3_H, obj.Li7_H, obj.N_eff_bbn, obj.YHe = children
         return obj
+
+
+from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+
+
+class BBNConsistentCosmology(CosmoprimoCosmology):
+    r"""A :class:`CosmoprimoCosmology` whose helium fraction and :math:`N_\mathrm{eff}` are those predicted by LINX.
+
+    At every call the Boltzmann code receives ``YHe = bbn.YHe`` (the LINX helium mass fraction) and
+    ``N_eff = bbn.N_eff_bbn`` (the :math:`N_\mathrm{eff}` LINX's background integration ends with) as
+    inputs, instead of its own BBN interpolation table and a sampled :math:`N_\mathrm{eff}` -- the
+    coupling of ``linx_cobaya`` (github.com/Kushallodha/linx_cobaya) and arXiv:2609.12065.
+
+    ``bbn`` reads :math:`\omega_\mathrm{b}` and :math:`N_\mathrm{eff}` from its own cosmology, which
+    must therefore not be this one (the graph would be cyclic); build both with
+    :func:`linx_bbn_cosmology`, which also makes the two :math:`\omega_\mathrm{b}` one parameter.
+    ``params`` must not include ``N_eff`` or ``YHe``.
+
+    Parameters
+    ----------
+    bbn : LINXAbundances
+        The BBN calculation supplying ``YHe`` and ``N_eff``.
+    *args, **kwargs
+        As :class:`CosmoprimoCosmology`.
+    """
+    def __init__(self, *args, bbn=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if bbn is None:
+            raise ValueError('BBNConsistentCosmology needs a LINXAbundances calculator: bbn=...')
+        overridden = [name for name in ('N_eff', 'YHe') if name in self.params]
+        if overridden:
+            raise ValueError(f'{overridden} are set from bbn and must not be parameters of BBNConsistentCosmology')
+        self.bbn = bbn
+
+    def _input_overrides(self):
+        return {'YHe': self.bbn.YHe, 'N_eff': self.bbn.N_eff_bbn}
+
+
+def linx_bbn_cosmology(params, engine='camb', fiducial=None, N_eff=None, nuclear_net='key_PRIMAT_2023', **kwargs):
+    r"""Build a Boltzmann cosmology whose ``YHe`` and :math:`N_\mathrm{eff}` come from LINX, and its LINX node.
+
+    Graph: Parameters (:math:`\omega_\mathrm{b}`, :math:`N_\mathrm{eff}`) -> a JAX-native carrier
+    cosmology -> :class:`LINXAbundances` -> :class:`BBNConsistentCosmology` (``engine``), with
+    :math:`\omega_\mathrm{b}` shared between the carrier and the main cosmology.
+
+    Parameters
+    ----------
+    params : VariableCollection
+        Parameters of the main cosmology. Must include ``omega_b``; must not include ``N_eff`` / ``YHe``.
+    engine : str, default='camb'
+        Cosmoprimo engine of the main cosmology.
+    fiducial : cosmoprimo.Cosmology, default=None
+        Fiducial of the main cosmology; ``cosmoprimo.fiducial.DESI(engine=engine)`` if ``None``.
+    N_eff : Parameter, default=None
+        The sampled :math:`N_\mathrm{eff}` (LINX convention, see :class:`LINXAbundances`). ``None``:
+        fixed at 3.044, i.e. no extra radiation (LINX's own standard-model background).
+    nuclear_net : str, default='key_PRIMAT_2023'
+        LINX network.
+    **kwargs
+        Forwarded to :class:`LINXAbundances` (``params``, ``linx_kwargs``, ``throw``, ...).
+
+    Returns
+    -------
+    cosmo : BBNConsistentCosmology
+    bbn : LINXAbundances
+    """
+    import cosmoprimo
+    from desilike.base import share_params
+    if fiducial is None:
+        fiducial = cosmoprimo.fiducial.DESI(engine=engine)
+    if N_eff is None:
+        N_eff = Parameter('N_eff', value=3.044, fixed=True, latex=r'N_{\mathrm{eff}}')
+    params = VariableCollection(params)
+    carrier = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=cosmoprimo.fiducial.DESI(engine='eisenstein_hu'),
+                                  params=VariableCollection([params['omega_b'].clone(), N_eff]))
+    bbn = LINXAbundances(cosmo=carrier, nuclear_net=nuclear_net, **kwargs)
+    cosmo = BBNConsistentCosmology(engine=engine, fiducial=fiducial, params=params, bbn=bbn)
+    share_params([cosmo], names=['omega_b'])
+    return cosmo, bbn

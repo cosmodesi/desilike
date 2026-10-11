@@ -33,6 +33,18 @@ def test_samples_basic():
     with pytest.raises(ValueError):
         samples.append(statistics.Samples(a=[1, 2]))  # not all keys present
 
+    np.random.seed(42)
+    mean = [0, 1]
+    cov = [[1, 0.5], [0.5, 2.0]]
+    n = 10000
+    x = np.random.multivariate_normal(mean, cov, size=10000)
+    samples = statistics.Samples(a=x[:, 0], b=x[:, 1])
+    assert np.allclose(samples.mean(), mean,
+                       atol=5 * np.sqrt(np.diag(cov) / n))
+    assert np.allclose(samples.quantile(0.5), mean,
+                       atol=10 * np.sqrt(np.diag(cov) / n))
+    assert np.all(samples.quantile(0.5) == samples.median())
+
 
 @pytest.mark.mpi_skip
 @pytest.mark.parametrize('suffix', ['.hdf5', '.npz', '.csv', '.npy'])
@@ -44,7 +56,7 @@ def test_samples_save(suffix, tmp_path):
     samples = statistics.Samples(
         a=np.linspace(0, 1, 10), b=np.arange(20).reshape(10, 2),
         latex=dict(a=r'$\lambda$'))
-    samples.flags['optimize', 'a'] = [True] * 5 + [False] * 5
+    samples['optimized_a'] = [True] * 5 + [False] * 5
 
     if suffix == '.npy':
         with pytest.raises(ValueError):

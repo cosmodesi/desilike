@@ -14,7 +14,6 @@ from scipy.special import logsumexp
 from desilike.utils import BaseClass
 
 SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior']
-FLAGS = ['optimize']
 
 
 def _sort_into_grid(x, y):
@@ -48,69 +47,6 @@ def _sort_into_grid(x, y):
     y = y.reshape(tuple([len(x) for x in x_grid]))
 
     return x_grid, y
-
-
-class FlagAccessor:
-    def __init__(self, samples):
-        self.samples = samples
-
-    def _check_valid_flag(self, flag, param):
-        """Check if the flag and/or parameter is valid."""
-        if flag not in FLAGS:
-            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
-            raise ValueError(msg)
-        if param not in self.samples.parameters:
-            msg = (f"Unknown parameter '{param}'. Known parameters are "
-                   f"{self.samples.parameters}.")
-            raise ValueError(msg)
-
-    def __getitem__(self, key):
-        flag, param = key
-        return self.samples[f'flag_{flag}_{param}']
-
-    def __setitem__(self, key, value):
-        flag, param = key
-        self.samples[f'flag_{flag}_{param}'] = value
-
-    @property
-    def keys(self):
-        return [key for key in self.samples.keys if key.startswith('flag_')]
-
-    def __repr__(self):
-        return str({key[5:]: value for key, value in self.samples.data.items()
-                    if key in self.keys})
-
-
-class ParameterAccessor:
-    def __init__(self, samples):
-        self.samples = samples
-
-    def _check_valid_param(self, flag, param):
-        """Check if the flag and/or parameter is valid."""
-        if flag not in FLAGS:
-            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
-            raise ValueError(msg)
-        if param not in self.samples.parameters:
-            msg = (f"Unknown parameter '{param}'. Known parameters are "
-                   f"{self.samples.parameters}.")
-            raise ValueError(msg)
-
-    def __getitem__(self, key):
-        flag, param = key
-        return self.samples[f'flag_{flag}_{param}']
-
-    def __setitem__(self, key, value):
-        flag, param = key
-        self.samples[f'flag_{flag}_{param}'] = value
-
-    @property
-    def keys(self):
-        return [key for key in self.samples.keys if not (
-            key.startswith('flag_') or key in SPECIAL_KEYS)]
-
-    def __repr__(self):
-        return str({key: value for key, value in self.samples.data.items()
-                    if key in self.keys})
 
 
 class Samples(BaseClass):
@@ -147,11 +83,12 @@ class Samples(BaseClass):
 
     @property
     def flags(self):
-        return FlagAccessor(self)
+        return [key for key in self.keys if key[:5] == 'flag_']
 
     @property
-    def parameters(self):
-        return ParameterAccessor(self)
+    def params(self):
+        return [key for key in self.keys if key not in SPECIAL_KEYS and
+                key not in self.flags]
 
     def __setitem__(self, key, value):
         """Manipulate the samples.
@@ -378,13 +315,13 @@ class Samples(BaseClass):
         else:
             return np.ones(self.n_samples) / self.n_samples
 
-    def mean(self, parameters=None, return_as_dict=False):
+    def mean(self, params=None, return_as_dict=False):
         """Compute the mean of the sample.
 
         Parameters
         ----------
-        parameters : list of str or None, optional
-            Parameters to compute the mean for. If ``None``, all paramters are
+        params : array_like or None, optional
+            Parameters to compute the mean for. If ``None``, all parameters are
             used. Default is ``None``.
         return_as_dict : bool, optional
             If ``True``, return a dictionary. Otherwise, return a numpy
@@ -396,40 +333,108 @@ class Samples(BaseClass):
             Means of the samples.
 
         """
-        if parameters is None:
-            parameters = self.parameters.keys
+        params = params if params is not None else self.params
 
-        means = [np.average(self[key], weights=self.weight, axis=0) for key in
-                 parameters]
+        means = [np.average(self[param], weights=self.weight, axis=0) for param
+                 in params]
 
         if return_as_dict:
-            return dict(zip(parameters, means))
-        else:
-            return means
+            return dict(zip(params, means))
 
-    def covariance(self, parameters=None):
+        return means
+
+    def quantile(self, q, params=None, return_as_dict=False):
+        """Compute the quantile(s) of the sample.
+
+        Parameters
+        ----------
+        q : array_like or float
+            Probability or sequence of probabilities of the quantiles to
+            compute. Values must be between 0 and 1 inclusive.
+        params : array_like or None, optional
+            Keys to compute the covariance for.If ``None``, all parameters are
+            used. Default is ``None``.
+        return_as_dict : bool, optional
+            If ``True``, return a dictionary. Otherwise, return a numpy
+            array. Default is ``False``.
+
+        Returns
+        -------
+        quantiles : list or dict
+            Quantiles of the samples.
+
+        """
+        params = params if params is not None else self.params
+
+        quantiles = [np.quantile(self[param], q, weights=self.weight, axis=0,
+                                 method='inverted_cdf') for param in params]
+
+        if return_as_dict:
+            return dict(zip(params, quantiles))
+
+        return quantiles
+
+    def median(self, params=None, return_as_dict=False):
+        """Compute the median of the sample.
+
+        Parameters
+        ----------
+        params : array_like or None, optional
+            Keys to compute the covariance for.If ``None``, all parameters are
+            used. Default is ``None``.
+        return_as_dict : bool, optional
+            If ``True``, return a dictionary. Otherwise, return a numpy
+            array. Default is ``False``.
+
+        Returns
+        -------
+        median : list or dict
+            Median of the samples.
+
+        """
+        return self.quantile(0.5, params=params, return_as_dict=return_as_dict)
+
+    def covariance(self, params=None):
         """Compute the covariance of the sample.
 
         Parameters
         ----------
-        parameters : list or None, optional
-            Keys to compute the covariance for. If ``None``, all keys are used.
-            Default is ``None``.
+        params : array_like or None, optional
+            Keys to compute the covariance for.If ``None``, all parameters are
+            used. Default is ``None``.
 
         Returns
         -------
         cov : numpy.ndarray
-            Covariance of the samples. The ordering is the same as ``keys``
-            or ``self.keys`` if ``keys`` is ``None``.
+            Covariance of the samples. The ordering is the same as ``params``
+            or ``self.params`` if ``params`` is ``None``.
 
         """
-        if parameters is None:
-            parameters = self.parameters.keys
+        params = params if params is not None else self.params
 
-        m = np.column_stack([
-            self[key].reshape(self.n_samples, -1) for key in parameters])
+        return np.cov(np.column_stack([self[key] for key in params]),
+                      aweights=self.weight, ddof=0, rowvar=False)
 
-        return np.cov(m, aweights=self.weight, rowvar=False)
+    cov = covariance  # alias
+
+    def corrcoeff(self, params):
+        """Compute the correlation matrix of the sample.
+
+        Parameters
+        ----------
+        params : array_like or None, optional
+            Keys to compute the covariance for.If ``None``, all parameters are
+            used. Default is ``None``.
+
+        Returns
+        -------
+        cor : numpy.ndarray
+            Correlation matrix of the samples. The ordering is the same as
+            ``params`` or ``self.params`` if ``params`` is ``None``.
+
+        """
+        cov = self.covariance(params=params)
+        return cov / np.outer(np.sqrt(np.diag(cov)), np.sqrt(np.diag(cov)))
 
     def copy(self):
         """Return a copy of the samples object."""
@@ -443,7 +448,7 @@ class Samples(BaseClass):
 
         Parameters
         ----------
-        samples : list of desilike.Samples
+        samples : array_like of desilike.Samples
             Samples to concatenate.
 
         Returns
@@ -504,12 +509,12 @@ class Samples(BaseClass):
         data = {latex.get(key, key): self.data[key] for key in keys}
         return tabulate.tabulate(data, headers='keys', **kwargs)
 
-    def getdist(self, parameters=None):
+    def getdist(self, params=None):
         """Convert the sample into a ``getdist.MCSamples`` instance.
 
         Parameters
         ----------
-        parameters : array-like or None, optional
+        params : array-like or None, optional
             List of parameters to convert. If ``None``, all parameters are
             included. Default is ``None``.
 
@@ -530,21 +535,21 @@ class Samples(BaseClass):
             msg = "The `getdist` package is required for `Samples.getdist`."
             raise ImportError(msg)
 
-        if parameters is None:
-            parameters = self.parameters.keys
+        if params is None:
+            params = self.params
 
         return MCSamples(
-            samples=np.column_stack([self[key] for key in parameters]),
-            weights=self.weight, names=parameters, labels=[
-                self.latex.get(key, key).replace('$', '') for key in
-                parameters])
+            samples=np.column_stack([self[param] for param in params]),
+            weights=self.weight, names=params, labels=[
+                self.latex.get(param, param).replace('$', '') for param in
+                params])
 
-    def profile_interpolator(self, parameters, posterior=True):
+    def profile_interpolator(self, params, posterior=True):
         """Get a cubic profile interpolator.
 
         Parameters
         ----------
-        parameters : str or list
+        params : array_like or str
             Parameter(s) for which to compute the interpolator.
         posterior : bool, optional
             If ``True``, get a profile for the (log) posterior. If ``False``, a
@@ -563,22 +568,22 @@ class Samples(BaseClass):
 
         """
         use = np.ones(len(self), dtype=bool)
-        parameters = np.atleast_1d(parameters)
-        for param in self.parameters.keys:
+        params = np.atleast_1d(params)
+        for param in self.params:
             # In case only one parameter is requested, use even the case
             # where the parameter itself is optimized. In all other cases, the
             # grid will not be regular, so don't.
-            if param in parameters and len(parameters) > 1:
-                use = use & ~self.flags['optimize', param]
-            elif param not in parameters:
+            if param in params and len(params) > 1:
+                use = use & ~self[f'flag_optimized_{param}']
+            elif param not in params:
                 try:
-                    use = use & self.flags['optimize', param]
+                    use = use & self[f'flag_optimized_{param}']
                 except ValueError:
                     # Flag may not be set because the user added the parameter
                     # later. Ignore.
                     pass
 
-        x = np.column_stack([self[param][use] for param in parameters])
+        x = np.column_stack([self[param][use] for param in params])
         y = self['log_posterior' if posterior else 'log_likelihood'][use]
 
         # Remove duplicates by only choosing the one with the highest

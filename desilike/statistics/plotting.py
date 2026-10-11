@@ -335,8 +335,8 @@ def triangle_posterior(samples, params=None, **kwargs):
 
 
 def one_dimensional_profile(
-        samples, param, ax=None, plot=True, plot_kwargs=None, scatter=False,
-        scatter_kwargs=None):
+        samples, param, posterior=True, interpolate=True, plot_kwargs=None,
+        scatter=True, scatter_kwargs=None, ax=None):
     r"""
     Add 1D profile to axes.
 
@@ -346,19 +346,22 @@ def one_dimensional_profile(
         :class:`desilike.Samples` instance returned from a profiler.
     param : str
         Parameter to plot profile for.
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to add profile. If ``None``, use ``plt.gca()``. Default
-        is ``None``.
-    plot : bool, optional
-        Whether to interpolate and plot the profile. Default is ``True``.
+    posterior : bool, optional
+        If ``True``, profile the posterior. Otherwise, profile the
+        likelihood. Default is ``True``.
+    interpolate : bool, optional
+        Whether to plot the interpolated profile. Default is ``True``.
     plot_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.plot`. Default is
         ``None``.
     scatter : bool, optional
-        Whether the plot individual points. Default is ``False``.
+        Whether the plot individual points. Default is ``True``.
     scatter_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.scatter`. Default is
         ``None``.
+    ax : matplotlib.axes.Axes, default=None
+        Axes where to add profile. If ``None``, use ``plt.gca()``. Default
+        is ``None``.
 
     Raises
     ------
@@ -369,38 +372,23 @@ def one_dimensional_profile(
     if ax is None:
         ax = plt.gca()
 
-    if plot_kwargs is None:
-        plot_kwargs = {}
+    use = np.ones(len(samples), dtype=bool)
+    for param_other in samples.params:
+        if param_other != param:
+            use = use & samples[f'flag_optimized_{param_other}']
 
-    if scatter_kwargs is None:
-        scatter_kwargs = {}
-
-    if 'log_posterior' in samples.keys:
-        if 'log_likelihood' in samples.keys:
-            raise ValueError("Samples have both posterior and likelihood.")
-        key = 'log_posterior'
-    elif 'log_likelihood' in samples.keys:
-        key = 'log_likelihood'
-    else:
-        raise ValueError("Samples have neither posterior nor likelihood.")
-
-    use = np.isin(samples['fixed'], [param, ''])
-    if np.sum(use) < 4:
-        warnings.warn(f"Not enough points to plot profile for {param}.")
-        return
-    x = samples[param][use]
-    y = samples[key][use]
-    y = np.exp(y - np.amax(y))
-    y = y[np.argsort(x)]
-    x = np.sort(x)
+    if interpolate:
+        interp = samples.profile_interpolator(param, posterior=posterior)
+        x = np.linspace(np.amin(samples[param][use]),
+                        np.amax(samples[param][use]), 1000)
+        kwargs = {} if plot_kwargs is None else plot_kwargs
+        ax.plot(x, np.exp(interp(x)), **kwargs)
 
     if scatter:
-        ax.scatter(x, y, **scatter_kwargs)
-
-    if plot and len(x) > 3:
-        x_plot = np.linspace(np.amin(x), np.amax(x), 300)
-        y_plot = np.exp(interp1d(x, np.log(y), kind='cubic')(x_plot))
-        ax.plot(x_plot, y_plot, **scatter_kwargs)
+        kwargs = {} if scatter_kwargs is None else scatter_kwargs
+        ax.scatter(samples[param][use], np.exp(samples[
+            'log_posterior' if posterior else 'log_likelihood'][use]),
+            **kwargs)
 
     ax.set_xlabel(samples.latex.get(param, param))
     ax.set_yticks([])
@@ -408,8 +396,8 @@ def one_dimensional_profile(
 
 
 def two_dimensional_profile(
-        samples, params, ax=None, levels=None, contour_kwargs=None,
-        scatter=False, scatter_kwargs=None):
+        samples, params, posterior=True, levels=None, contour_kwargs=None,
+        scatter=True, scatter_kwargs=None, ax=None):
     r"""
     Add 2D profile to axes.
 
@@ -419,9 +407,9 @@ def two_dimensional_profile(
         :class:`desilike.Samples` instance returned from a profiler.
     params : tuple of str
         Parameters to plot profile for.
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to add profile. If ``None``, use ``plt.gca()``. Default
-        is ``None``.
+    posterior : bool, optional
+        If ``True``, profile the posterior. Otherwise, profile the
+        likelihood. Default is ``True``.
     levels : list or None, optional
         Confidence levels to plot, i.e., the values :math:`z` where
         :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. If ``None``,
@@ -432,10 +420,13 @@ def two_dimensional_profile(
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.
     scatter : bool, optional
-        Whether the plot individual points. Default is ``False``.
+        Whether the plot individual points. Default is ``True``.
     scatter_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.scatter`. Default is
         ``None``.
+    ax : matplotlib.axes.Axes, default=None
+        Axes where to add profile. If ``None``, use ``plt.gca()``. Default
+        is ``None``.
 
     Raises
     ------
@@ -450,72 +441,29 @@ def two_dimensional_profile(
     if ax is None:
         ax = plt.gca()
 
-    if contour_kwargs is None:
-        contour_kwargs = {'colors': 'black'}
-
-    if scatter_kwargs is None:
-        scatter_kwargs = {}
-
-    if 'log_posterior' in samples.keys:
-        if 'log_likelihood' in samples.keys:
-            raise ValueError('Samples have both posterior and likelihood.')
-        key = 'log_posterior'
-    elif 'log_likelihood' in samples.keys:
-        key = 'log_likelihood'
-    else:
-        raise ValueError('Samples have neither posterior nor likelihood.')
-
-    if len(params) != 2:
-        raise ValueError(f"Please specify 2 parameters. Got {len(params)}.")
-
-    use = samples['fixed'] == '/'.join(np.sort(params))
-    x = samples[params[0]][use]
-    y = samples[params[1]][use]
-    z = samples[key][use]
-
-    # Determine which points span a 2D grid.
-    use = np.ones(len(x), dtype=bool)
-    while np.any(use):
-        x_unique, x_counts = np.unique(x[use], return_counts=True)
-        y_unique, y_counts = np.unique(y[use], return_counts=True)
-        xy = np.column_stack((x[use], y[use]))
-        if (len(np.unique(xy, axis=0)) == len(x_unique) * len(y_unique)):
-            break
-        if np.amin(x_counts) < np.amin(y_counts):
-            use = use & (x != x_unique[np.argmin(x_counts)])
+    use = np.ones(len(samples), dtype=bool)
+    for param in samples.params:
+        if param in params:
+            use = use & ~samples[f'flag_optimized_{param}']
         else:
-            use = use & (y != y_unique[np.argmin(y_counts)])
-
-    if not np.any(use):
-        warnings.warn(
-            f"Could not determine a grid for '{params[0]}' vs. '{params[1]}'.")
-        return
-
-    x = x[use]
-    y = y[use]
-    z = z[use]
-
-    # Sort values.
-    argsort = np.argsort(y, stable=True)
-    x, y, z = x[argsort], y[argsort], z[argsort]
-    argsort = np.argsort(x, stable=True)
-    x, y, z = x[argsort], y[argsort], z[argsort]
-
-    if scatter:
-        ax.scatter(x, y, **scatter_kwargs)
+            use = use & samples[f'flag_optimized_{param}']
 
     if len(levels) > 0:
-        x, y = np.unique(x), np.unique(y)
-        interp = RegularGridInterpolator(
-            (x, y), z.reshape(len(x), len(y)), method='cubic')
+        interp = samples.profile_interpolator(params, posterior=posterior)
+        x = np.linspace(np.amin(samples[params[0]][use]),
+                        np.amax(samples[params[0]][use]), 1000)
+        y = np.linspace(np.amin(samples[params[1]][use]),
+                        np.amax(samples[params[1]][use]), 1000)
+        x, y = np.meshgrid(x, y)
+        z = interp(np.column_stack([x.ravel(), y.ravel()])).reshape(x.shape)
+        z = z - np.amax(z)
+        kwargs = (dict(colors='black') if contour_kwargs is None else
+                  contour_kwargs)
+        ax.contour(x, y, z, levels=levels, **kwargs)
 
-        x_plot = np.linspace(np.amin(x), np.amax(x), 300)
-        y_plot = np.linspace(np.amin(y), np.amax(y), 300)
-        x_plot, y_plot = np.meshgrid(x_plot, y_plot)
-        z_plot = interp(np.column_stack([x_plot.ravel(), y_plot.ravel()])
-                        ).reshape(x_plot.shape)
-        z_plot = z_plot - np.amax(z_plot)
-        ax.contour(x_plot, y_plot, -z_plot, levels=levels, **contour_kwargs)
+    if scatter:
+        kwargs = {} if scatter_kwargs is None else scatter_kwargs
+        ax.scatter(samples[params[0]][use], samples[params[1]][use], **kwargs)
 
     ax.set_xlabel(samples.latex.get(params[0], params[0]))
     ax.set_ylabel(samples.latex.get(params[1], params[1]))
@@ -523,9 +471,9 @@ def two_dimensional_profile(
 
 @plotter
 def triangle_profile(
-        samples, params=None, plot=True, plot_kwargs=None, levels=None,
-        contour_kwargs=None, scatter=False, scatter_kwargs=None,
-        threshold=-4.5, fig=None):
+        samples, params=None, posterior=True, interpolate=True,
+        plot_kwargs=None, levels=None, contour_kwargs=None, scatter=True,
+        scatter_kwargs=None, threshold=-5, fig=None):
     r"""Create a triangle profile plot.
 
     Parameters
@@ -535,7 +483,10 @@ def triangle_profile(
     params : list or None, optional
         Parameters to plot profile for. If ``None``, plot all parameters.
         Default is ``None``.
-    plot : bool, optional
+    posterior : bool, optional
+        If ``True``, profile the posterior. Otherwise, profile the
+        likelihood. Default is ``True``.
+    interpolate : bool, optional
         Whether to interpolate and plot the one-dimensional profiles. Default
         is ``True``.
     plot_kwargs : dict or None, optional
@@ -551,13 +502,13 @@ def triangle_profile(
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.
     scatter : bool, optional
-        Whether the plot individual points. Default is ``False``.
+        Whether the plot individual points. Default is ``True``.
     scatter_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.scatter`. Default is
         ``None``.
     threshold : float, optional
         Limit the ranges for each parameter to the corresponding intervals for
-        this threshold. Default is -4.5.
+        this threshold. Default is -5.
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 
@@ -572,24 +523,25 @@ def triangle_profile(
         axs = fig.axes
         gs = axs.get_gridspec()
         if gs.ncols != len(params) or gs.nrows != len(params):
-            raise ValueError(
-                f"The provided figure must have exactly {len(params)} rows "
-                f"and {len(params)} columns.")
+            msg = (f"The provided figure must have exactly {len(params)} rows "
+                   f"and {len(params)} columns.")
+            raise ValueError(msg)
     else:
         fig, axs = plt.subplots(nrows=len(params), ncols=len(params),
                                 sharex='col')
 
     for i, param in enumerate(params):
         one_dimensional_profile(
-            samples, param, ax=axs[i, i], plot=plot, plot_kwargs=plot_kwargs,
-            scatter=scatter, scatter_kwargs=scatter_kwargs)
+            samples, param, posterior=posterior, interpolate=interpolate,
+            plot_kwargs=plot_kwargs, scatter=scatter,
+            scatter_kwargs=scatter_kwargs, ax=axs[i, i])
 
     for i in range(len(params)):
         for k in range(i):
             two_dimensional_profile(
-                samples, (params[k], params[i]), ax=axs[i, k], levels=levels,
-                contour_kwargs=contour_kwargs, scatter=scatter,
-                scatter_kwargs=scatter_kwargs)
+                samples, (params[k], params[i]), posterior=posterior,
+                levels=levels, contour_kwargs=contour_kwargs, scatter=scatter,
+                scatter_kwargs=scatter_kwargs, ax=axs[i, k])
 
     for i in range(len(params)):
         for k in range(i + 1, len(params)):
@@ -597,9 +549,14 @@ def triangle_profile(
 
     # Set x-ranges.
     for i, param in enumerate(params):
-        x_min, _, x_max = samples.interval(param, threshold)
-        x_min -= 0.05 * (x_max - x_min)
-        x_max += 0.05 * (x_max - x_min)
+        bounds = samples.interval(param, threshold, posterior=posterior)
+        x_min = bounds[0][0]
+        x_max = bounds[-1][1]
+        # Sometimes, the grid is too small to encompas the proper bounds.
+        if np.isnan(x_min) or np.isnan(x_max):
+            x = samples.profile_interpolator(param, posterior=posterior).x
+            x_min = np.amin(x) if np.isnan(x_min) else x_min
+            x_max = np.amax(x) if np.isnan(x_max) else x_max
         axs[i, i].set_xlim(x_min, x_max)
         for k in range(i):
             axs[i, k].set_ylim(x_min, x_max)

@@ -17,8 +17,7 @@ from .optimize import optimize_dual_annealing
 class Profiler(BaseClass):
     """Profiler used to compute likelihood and posterior profiles."""
 
-    def __init__(self, likelihood, profile_posterior=True, rng=None,
-                 directory=None):
+    def __init__(self, likelihood, posterior=True, rng=None, directory=None):
         """Initialize the profiler.
 
         Parameters
@@ -35,7 +34,7 @@ class Profiler(BaseClass):
 
         """
         self.likelihood = likelihood
-        if profile_posterior:
+        if posterior:
             self.neg_cost_key = 'log_posterior'
         else:
             self.neg_cost_key = 'log_likelihood'

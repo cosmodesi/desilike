@@ -1,6 +1,5 @@
 """Module implementing plotting routines."""
 
-import warnings
 from functools import wraps
 
 try:
@@ -9,7 +8,6 @@ try:
 except ModuleNotFoundError:
     MATPLOTLIB_INSTALLED = False
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator, interp1d
 
 from . import diagnostics
 
@@ -457,7 +455,7 @@ def two_dimensional_profile(
         x, y = np.meshgrid(x, y)
         z = interp(np.column_stack([x.ravel(), y.ravel()])).reshape(x.shape)
         z = z - np.amax(z)
-        kwargs = (dict(colors='black') if contour_kwargs is None else
+        kwargs = ({'colors': 'black'} if contour_kwargs is None else
                   contour_kwargs)
         ax.contour(x, y, z, levels=levels, **kwargs)
 

@@ -569,6 +569,7 @@ class Samples(BaseClass):
         """
         use = np.ones(len(self), dtype=bool)
         params = np.atleast_1d(params)
+
         for param in self.params:
             # In case only one parameter is requested, use even the case
             # where the parameter itself is optimized. In all other cases, the

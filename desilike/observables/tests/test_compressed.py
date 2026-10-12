@@ -77,6 +77,58 @@ def test_bao_compression_prebuilt_theory_kwargs_forwarded():
     assert obs.theory.z == 0.8
 
 
+def test_bao_compression_correction():
+    """BAOTheory correction={'N_eff': (c_iso, c_ap)}: identity at the fiducial N_eff; away from it, qiso and qap move by
+    exactly 1 + c dN_eff and qpar, qper and the distance ratios stay consistent with them."""
+    from desilike.base import build, get_params
+    from desilike.observables.galaxy_clustering import BAOCompressionObservable
+
+    fiducial = _make_fiducial()
+    parameters = ['DH_over_rd', 'DM_over_rd', 'DV_over_rd', 'DH_over_DM', 'qpar', 'qper', 'qiso', 'qap']
+    coefficients = {'qiso': -2.4e-3, 'qap': 1.5e-3}
+    correction = {'N_eff': (coefficients['qiso'], coefficients['qap'])}
+    neff_fid = float(fiducial.N_eff)
+
+    def get_values(neff, correction):
+        cosmo = _make_cosmo(fiducial)
+        obs = BAOCompressionObservable(data=None, parameters=parameters, cosmo=cosmo, z=0.5, fiducial=fiducial,
+                                        correction=correction)
+        get_params(obs)['N_eff'].update(fixed=False)
+        pipe = build(obs)
+        pipe_params = {param.name: np.asarray(param.value) if param.shape else float(param.value) for param in pipe.params}
+        pipe(pipe_params | {'N_eff': neff})
+        return dict(zip(parameters, np.asarray(obs.flattheory)))
+
+    at_fiducial = get_values(neff_fid, correction)
+    for name in ['qpar', 'qper', 'qiso', 'qap']:
+        np.testing.assert_allclose(at_fiducial[name], 1., rtol=1e-8)
+
+    delta_neff = 1.
+    plain = get_values(neff_fid + delta_neff, None)
+    corrected = get_values(neff_fid + delta_neff, correction)
+    np.testing.assert_allclose(corrected['qiso'] / plain['qiso'], 1. + coefficients['qiso'] * delta_neff, rtol=1e-10)
+    np.testing.assert_allclose(corrected['qap'] / plain['qap'], 1. + coefficients['qap'] * delta_neff, rtol=1e-10)
+    eta = 1. / 3.
+    np.testing.assert_allclose(corrected['qpar']**eta * corrected['qper']**(1. - eta), corrected['qiso'], rtol=1e-10)
+    np.testing.assert_allclose(corrected['qpar'] / corrected['qper'], corrected['qap'], rtol=1e-10)
+    np.testing.assert_allclose(corrected['DV_over_rd'] / plain['DV_over_rd'], corrected['qiso'] / plain['qiso'], rtol=1e-10)
+    np.testing.assert_allclose(corrected['DH_over_DM'] / plain['DH_over_DM'], corrected['qap'] / plain['qap'], rtol=1e-10)
+
+    with pytest.raises(ValueError):
+        get_values(neff_fid, {'N_eff': (1e-3,)})
+
+    # The default is the DESI DR2 post-recon calibration: -2.5e-3 on qiso, nothing on qap.
+    cosmo = _make_cosmo(fiducial)
+    obs = BAOCompressionObservable(data=None, parameters=parameters, cosmo=cosmo, z=0.5, fiducial=fiducial)
+    get_params(obs)['N_eff'].update(fixed=False)
+    pipe = build(obs)
+    pipe_params = {param.name: np.asarray(param.value) if param.shape else float(param.value) for param in pipe.params}
+    pipe(pipe_params | {'N_eff': neff_fid + delta_neff})
+    default = dict(zip(parameters, np.asarray(obs.flattheory)))
+    np.testing.assert_allclose(default['qiso'] / plain['qiso'], 1. - 2.5e-3 * delta_neff, rtol=1e-10)
+    np.testing.assert_allclose(default['qap'] / plain['qap'], 1., rtol=1e-10)
+
+
 # ── BAOPhaseShiftCompressionObservable ───────────────────────────────────────
 
 def test_bao_phaseshift_compression_at_fiducial():

@@ -2640,7 +2640,12 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               interpolation_method='linear',
                               bias_scheme='folps', model='FOLPSD',
                               renormalized=True, use_fk=False, redshift_smearing=None,
-                              basis='sugiyama', mg_kernel_fn=None):
+                              basis='sugiyama', mg_kernel_fn=None, calculator_cls=None):
+    # calculator_cls: optional replacement for folps' BispectrumCalculator(_fk), called as
+    # ``calculator_cls(model=model)`` (e.g. fkptjax's IDE calculator with its kernel coefficients
+    # bound); it must take the same Sugiyama_Bell / Scoccimarro_Bell arguments as the class it
+    # replaces (``use_fk`` selects which).  Everything else here (triplet rotation, multipole
+    # selection, redshift smearing) applies to it unchanged.
     folpsv2 = _import_folps()
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
@@ -2652,7 +2657,11 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
         if use_fk else
         folpsv2.BispectrumCalculator
     )
-    bispectrum = BispectrumClass(model=model)
+    if calculator_cls is not None:
+        bispectrum = calculator_cls(model=model)
+        BispectrumClass = type(bispectrum)
+    else:
+        bispectrum = BispectrumClass(model=model)
     if redshift_smearing is not None:
         # Set on the instance, which is built fresh here on every call, so two tracers or
         # redshift bins in the same pipeline each get their own kernel. Read back by the
@@ -3664,6 +3673,262 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         obj._fkpt_approximation = aux['fkpt_approximation']
         obj._model = aux['model']
         obj._mg_variant = aux['mg_variant']
+        return obj
+
+
+class FKPTJAXIDEPTSpectrum2Poles(FKPTJAXPTSpectrum2Poles):
+    r"""
+    FKPT one-loop power spectrum multipoles with the interacting-dark-energy (IDE) kernels.
+
+    Drop-in ``pt`` for :class:`FOLPSTracerSpectrum2Poles` / :class:`FKPTJAXTracerSpectrum2Poles`,
+    like :class:`FKPTJAXPTSpectrum2Poles` (same outputs, same
+    ``combine_bias_terms_spectrum2_poles``), but the loop kernels are fkptjax's exact,
+    scale-independent IDE kernels (``fkptjax.ide``) instead of the MG ones:
+
+    - the IDE background -- :math:`E = 2 + d\ln H/dN`, :math:`Q_p = 1.5\,\Omega_{cb}(z)` and the
+      dilution rate :math:`g(z)` of the chosen ISiTIDE coupling -- is built from
+      ``background.efunc``/``Omega_cdm``/``Omega_b``/``Omega_de`` (and ``params.beta``), requested
+      from ``template.cosmo`` through the requirements API on a uniform grid in
+      :math:`N = \ln a` from ``ide_z_ini`` to ``template.z``
+      (``fkptjax.ide_isitide.ide_background``);
+    - ``fkptjax.ide.ide_kernel_coeffs`` gives the kernel coefficients at ``template.z``
+      (``self.ide``, an ``IDEKernelCoeffs`` pytree);
+    - ``Kfuncs_to_tables(..., ide=self.ide)`` builds the loop tables from the template's
+      :math:`P_{cb}` (``pk_dd``/``pknow_dd``), with :math:`f_0 = f(k) = f_Q` (``self.f0 = ide.fQ``), the velocity growth rate :math:`f_Q = f + g`;
+    - the FOLPS projection uses the IDE IR damping (:math:`\Gamma_1`, :math:`f_\Psi` from ``self.ide``).
+
+    Parameters
+    ----------
+    k, template, ells, mu :
+        As for :class:`FKPTJAXPTSpectrum2Poles`. ``template`` must carry a cosmology
+        (``template.cosmo``), e.g. :class:`DirectSpectrum2Template` on an ``isitide`` engine.
+    ide_model : str, default='IDEModel1'
+        ISiTIDE ``dark_energy_model`` of ``template.cosmo`` (see
+        ``fkptjax.ide_isitide.SUPPORTED_MODELS``): it fixes how :math:`g` follows from the
+        background. Q proportional to rho_de (Models 1, 3) and to rho_c (Models 2, 4; g = 0) are
+        exact; Models 5/6 use the linear-coupling approximation documented in
+        ``fkptjax.ide_isitide``.
+    ide_ic : str, default='growing'
+        Initial data of the growth system at ``ide_z_ini``: 'growing' (growing mode of the
+        coupled system with E, A_Phi, g frozen there) or 'eds' (EdS growing mode, as in fkpt and
+        fkpt-DMdilution; leaves ~0.25-0.7% errors in the second/third-order coefficients of
+        Model 2 at beta = 0.1-0.3).
+    ide_z_ini : float, default=50.
+        Start of the growth integration.
+    ide_n_grid : int, default=2000
+        Number of uniform N nodes on which the background is requested.
+    fkpt_nquad_steps, fkpt_nq, fkpt_nr, use_jax_tables :
+        As for :class:`FKPTJAXPTSpectrum2Poles`.
+    loops : bool, default=True
+        Build the one-loop tables (needed by the power spectrum). ``False`` skips them, for a
+        bispectrum-only pt; ``combine_bias_terms_spectrum2_poles`` then raises.
+    bispectrum_nk : int, default=1600
+        Number of log-spaced points of the linear P_cb fed to the tree-level bispectrum: the
+        template's P_cb (and no-wiggle P_cb), cubic-spline resampled in ln k over the template's
+        k range. FOLPS interpolates it linearly at the triangle legs, so the grid sets the
+        accuracy: |dB/B| <~ 2e-5 at 1600 points against a converged grid, ~1e-3 on the template's
+        400 points as is, and 0.3-0.4% at k <= 0.12 on the loop tables' <= 120-point grid (which
+        is therefore not used).
+
+    Notes
+    -----
+    External (``_is_external = True``), like :class:`FKPTJAXPTSpectrum2Poles`. Its emulator
+    is the generic :class:`CalculatorEmulator` (the IDE coefficients ride as degree-0
+    children); the exact-scaling :class:`FKPTEmulator` assumes the MG growth and is not
+    used.
+
+    The tree-level bispectrum (``combine_bias_terms_spectrum3_poles``, for
+    :class:`FKPTJAXTracerSpectrum3Poles`) uses the same ``self.ide`` as the power spectrum:
+    fkptjax's IDE second-order kernels (F2, G2 with Gamma1, L, WL, r_G), f_Q in Z1/Z2 and in the
+    shot-noise and FoG terms, and the IDE BAO damping (Gamma1, f_Psi) of each leg. A P+B fit
+    passes one instance of this class to both tracers, so P and B share the coefficients.
+    """
+    _IDE_BACKGROUND = ('efunc', 'Omega_cdm', 'Omega_b', 'Omega_de')
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, ide_model='IDEModel1',
+                 ide_ic='growing', ide_z_ini=50., ide_n_grid=2000,
+                 fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10, use_jax_tables=False, loops=True,
+                 bispectrum_nk=1600, **kwargs):
+        # Nodes only (no MG parameters: the IDE coupling comes from the cosmology).
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, ide_model='IDEModel1',
+                      ide_ic='growing', ide_z_ini=50., ide_n_grid=2000,
+                      fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10, use_jax_tables=False, loops=True,
+                      bispectrum_nk=1600, **kwargs):
+        _import_folps()
+        from fkptjax.ide_isitide import SUPPORTED_MODELS, ide_grid
+        self._loops = bool(loops)
+        self._bispectrum_nk = int(bispectrum_nk)
+        if ide_model not in SUPPORTED_MODELS:
+            raise ValueError(f'ide_model={ide_model!r} is not supported; choose from {SUPPORTED_MODELS}')
+        if ide_ic not in ('growing', 'eds'):
+            raise ValueError(f"ide_ic must be 'growing' or 'eds', got {ide_ic!r}")
+        cosmo = getattr(self.template, 'cosmo', None)
+        if cosmo is None or not hasattr(cosmo, 'add_requirements'):
+            raise ValueError(f'{type(self).__name__} needs a template with a cosmology '
+                             f'(e.g. DirectSpectrum2Template), got {type(self.template).__name__}')
+        self._ide_model = str(ide_model)
+        self._ide_ic = str(ide_ic)
+        self._ide_z_ini = float(ide_z_ini)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self._fkpt_kmin = float(min(1e-3, float(np.min(self.k))))
+        self._fkpt_kmax = float(max(1.0, float(np.max(self.k))))
+        self._fkpt_Nk_kernel = int(min(len(self.k), 120))
+        self._fkpt_nquad_steps = int(fkpt_nquad_steps)
+        self._fkpt_NQ = int(fkpt_nq)
+        self._fkpt_NR = int(fkpt_nr)
+        self._use_jax_tables = bool(use_jax_tables)
+        # attributes the inherited methods read
+        self._model, self._mg_variant = 'IDE', self._ide_model
+        self._beyond_eds, self._fkpt_approximation = True, True
+        self._is_external = True
+        # IDE background on a uniform N grid from z_ini to the template redshift
+        self._ide_N = ide_grid(z_ini=self._ide_z_ini, z_out_min=float(self.template.z), n_grid=int(ide_n_grid))
+        self._ide_z = 1. / np.exp(self._ide_N) - 1.
+        requirements = {f'background.{name}': [{'z': self._ide_z}] for name in self._IDE_BACKGROUND}
+        requirements['params.beta'] = None
+        cosmo.add_requirements(requirements)
+
+    def __call__(self):
+        from fkptjax.ide import ide_kernel_coeffs
+        from fkptjax.ide_isitide import ide_background
+        from fkptjax.kfuncs_to_tables import Kfuncs_to_tables, Kfuncs_to_tables_jax
+        from fkptjax.pipelines import make_table_state
+
+        template, cosmo = self.template, self.template.cosmo
+        jac, kap, muap = template.ap_k_mu(self.k[:, None], self._to_poles.mu)
+        background = cosmo.get_background()
+        values = [np.asarray(getattr(background, name)(self._ide_z)) for name in self._IDE_BACKGROUND]
+        bg = ide_background(self._ide_model, float(cosmo['beta']), self._ide_N, *values)
+        z = float(template.z)
+        ide = ide_kernel_coeffs(z, bg, z_ini=self._ide_z_ini, ic=self._ide_ic)
+
+        self.ide = ide
+        self._kernel_constants = ide
+        # linear P_cb for the tree-level bispectrum: the template's, resampled (cubic in ln k) onto
+        # bispectrum_nk log points, since FOLPS interpolates it linearly (see the class docstring)
+        from scipy.interpolate import CubicSpline
+        lnk = np.log(np.asarray(template.k))
+        lnkf = np.linspace(lnk[0], lnk[-1], self._bispectrum_nk)
+        self._linear = (jnp.asarray(np.exp(lnkf)),
+                        jnp.asarray(CubicSpline(lnk, np.asarray(template.pk_dd))(lnkf)),
+                        jnp.asarray(CubicSpline(lnk, np.asarray(template.pknow_dd))(lnkf)))
+        if self._loops:
+            builder = Kfuncs_to_tables_jax if self._use_jax_tables else Kfuncs_to_tables
+            table_w, table_now, _ = builder(
+                k=template.k, pk=template.pk_dd, pk_now=template.pknow_dd, z=z, Om=cosmo['Omega_m'],
+                kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
+                nquadSteps=self._fkpt_nquad_steps, NQ=self._fkpt_NQ, NR=self._fkpt_NR,
+                ide=ide, return_kernel_constants=True)
+            self._table_w = table_w
+            self._table_now = table_now
+            self._table_state = make_table_state(table_w, table_now, kernel_constants=ide, ide=ide)
+        else:  # bispectrum only: no loop tables
+            self._table_w = self._table_now = self._table_state = None
+
+        self.jac = jac
+        self.kap = kap
+        self.muap = muap
+        self.qpar = template.qpar
+        self.qper = template.qper
+        self.sigma8 = template.sigma8
+        self.fsigma8 = template.fsigma8
+        self.sigma8_fid = template.sigma8_fid
+        self.f0 = self._table_state.f0 if self._loops else ide.fQ  # = ide.fQ
+        self.fk = self._table_state.fk if self._loops else None
+        self.f = template.f
+        self._P, self._xstop = None, None  # MG bispectrum feed: unused for IDE
+
+    def combine_bias_terms_spectrum2_poles(self, *args, **kwargs):
+        if not self._loops:
+            raise ValueError(f'{type(self).__name__} was built with loops=False (bispectrum only); '
+                             'the power spectrum needs loops=True')
+        return super().combine_bias_terms_spectrum2_poles(*args, **kwargs)
+
+    def _bispectrum_linear(self):
+        """(k, P_lin, P_lin no-wiggle) fed to the tree-level bispectrum: the template's P_cb on
+        ``bispectrum_nk`` log points."""
+        return self._linear
+
+    def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **kwargs):
+        """Tree-level bispectrum multipoles with the IDE kernels, for the FOLPS bias vector *pars*.
+
+        Goes through :func:`_get_spectrum3poles_folps` (so the Scoccimarro triplet rotation,
+        multipole selection and redshift smearing are the FOLPS path's) with fkptjax's
+        ``IDEBispectrumCalculator`` bound to ``self.ide`` as the calculator. Reads only
+        ``tree_flatten`` children, so it works on an emulated pt. The k-grid is detached for
+        the reason given in :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum3_poles`.
+        """
+        import functools
+        from fkptjax.ide_bispectrum import get_calculator_cls
+        k, pk, pknow = self._bispectrum_linear()
+        k = jax.lax.stop_gradient(jnp.asarray(k))
+        k_pkl_pklnw_fk = jnp.array([k, pk, pknow, jnp.ones_like(k) * self.ide.fQ])
+        calculator_cls = functools.partial(get_calculator_cls(), self.ide)
+        return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
+                                         multipoles=multipoles, use_fk=True, calculator_cls=calculator_cls,
+                                         **kwargs)
+
+    @classmethod
+    def get_emulator_cls(cls):
+        """The generic :class:`CalculatorEmulator`: the exact-scaling :class:`FKPTEmulator`
+        rescales by the MG growth, which does not apply to IDE."""
+        return CalculatorEmulator
+
+    def tree_flatten(self):
+        if self._loops:
+            tables = list(self._table_w) + list(self._table_now)
+            n_w, n_now = len(self._table_w), len(self._table_now)
+        else:
+            tables, n_w, n_now = [], 0, 0
+        children = ([self.jac, self.kap, self.muap, self.qpar, self.qper, self.sigma8,
+                     self.fsigma8, self.sigma8_fid, self.f, self.f0]
+                    + tables + list(self._linear) + list(self.ide))
+        aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
+               'n_table_w': n_w, 'n_table_now': n_now, 'ide_model': self._ide_model, 'loops': self._loops}
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        from fkptjax.ide import IDEKernelCoeffs
+        from fkptjax.pipelines import make_table_state
+
+        obj = object.__new__(cls)
+        it = iter(children)
+        (obj.jac, obj.kap, obj.muap, obj.qpar, obj.qper, obj.sigma8,
+         obj.fsigma8, obj.sigma8_fid, obj.f) = (next(it) for _ in range(9))
+        f0 = next(it)
+        obj._loops = aux['loops']
+        if obj._loops:
+            obj._table_w = tuple(next(it) for _ in range(aux['n_table_w']))
+            obj._table_now = tuple(next(it) for _ in range(aux['n_table_now']))
+        else:
+            obj._table_w = obj._table_now = None
+        obj._linear = tuple(next(it) for _ in range(3))
+        obj.ide = IDEKernelCoeffs(*(next(it) for _ in IDEKernelCoeffs._fields))
+        obj._kernel_constants = obj.ide
+        obj._table_state = (make_table_state(obj._table_w, obj._table_now, kernel_constants=obj.ide, ide=obj.ide)
+                            if obj._loops else None)
+        obj.f0 = f0
+        obj.fk = obj._table_state.fk if obj._loops else None
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
+        obj._to_poles.mu = aux['mu']
+        obj._to_poles.wmu = aux['wmu']
+        obj._to_poles.ells = aux['ells']
+        obj._ide_model = aux['ide_model']
+        obj._model, obj._mg_variant = 'IDE', aux['ide_model']
+        obj._beyond_eds, obj._fkpt_approximation = True, True
+        obj._P, obj._xstop = None, None
         return obj
 
 

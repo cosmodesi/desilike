@@ -652,9 +652,10 @@ class CosmoprimoCosmology(PrimordialCosmology):
       :math:`\sigma_r(z)` (RMS of ``of`` perturbations in a sphere of radius ``r``,
       in :math:`\mathrm{Mpc}/h`), shaped ``(z, r)``. Matches cosmoprimo's own
       ``Fourier.sigma_rz`` naming.
-    * ``'background.Omega_b'``, ``'background.Omega_cdm'``, ``'background.Omega_ncdm_tot'``
-      — kwargs: ``z``; density parameters (unitless, no ``h`` rescaling needed). Matches
-      cosmoprimo's own ``Background`` method names.
+    * ``'background.Omega_b'``, ``'background.Omega_cdm'``, ``'background.Omega_ncdm_tot'``,
+      ``'background.Omega_de'`` — kwargs: ``z``; density parameters (unitless, no ``h``
+      rescaling needed). Matches cosmoprimo's own ``Background`` method names.
+      (``Omega_de``: used by :class:`FKPTJAXIDEPTSpectrum2Poles` for the IDE kernels.)
     * ``'thermodynamics.rs_drag'``                  —
     * ``'params.N_eff'``                            — effective number of relativistic species :math:`N_\mathrm{eff}`.
     * ``'params.<name>'``                           — .
@@ -975,7 +976,8 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 # cosmoprimo's sigma_rz(r, z) returns shape (r, z); transpose to the (z, r)
                 # convention used elsewhere (e.g. 'fourier.pk' returns (z, k)).
                 result = cosmo.get_fourier().sigma_rz(spec['r'], spec['z'], of=static['of']).T
-            elif method_key in ('background.Omega_b', 'background.Omega_cdm', 'background.Omega_ncdm_tot'):
+            elif method_key in ('background.Omega_b', 'background.Omega_cdm', 'background.Omega_ncdm_tot',
+                                'background.Omega_de'):
                 result = getattr(cosmo.get_background(), method_key.split('.')[1])(spec['z'])
             elif method_key == 'thermodynamics.rs_drag':
                 result = cosmo.get_thermodynamics().rs_drag

@@ -1,6 +1,6 @@
-.. _user-samplers:
+.. _user-sampling:
 
-Samplers
+Sampling
 ========
 
 As a stand-alone cosmological inference framework, `desilike` provides easy access to a variety of Bayesian inference algorithms, commonly referred to as "samplers". To streamline the process, `desilike` offers a unified interface to a wide range of samplers.
@@ -14,13 +14,13 @@ Overview
 * **Population samplers**, including nested samplers, importance samplers, and Sequential Monte Carlo algorithms, utilize large populations of previously evaluated parameter combinations to inform which part of parameter space to explore next.
 * **Markov chain Monte Carlo (MCMC) samplers** produce a Markov chain of parameter combinations where the stable distribution approaches the Bayesian posterior. Unlike population samplers, the next state of the sampler depends only on the current state (i.e., parameter combination).
 
-With the exception of the static importance sampler (:class:`~desilike.samplers.ImportanceSampler`), all samplers can be run when providing just a likelihood using the following unifying syntax.
+With the exception of the static importance sampler (:class:`~desilike.sampling.ImportanceSampler`), all samplers can be run when providing just a likelihood using the following unifying syntax.
 
 .. code-block:: python
 
   import numpy as np
 
-  import desilike.samplers as samplers
+  import desilike.sampling as sampling
   from desilike.likelihoods import BaseGaussianLikelihood
 
   class Likelihood(BaseGaussianLikelihood):
@@ -35,7 +35,7 @@ With the exception of the static importance sampler (:class:`~desilike.samplers.
       a=dict(prior=dict(dist='uniform', limits=[0, 1])),
       b=dict(prior=dict(dist='uniform', limits=[0, 1])))
 
-  sampler = samplers.MetropolisHastingsSampler(likelihood)
+  sampler = sampling.MetropolisHastingsSampler(likelihood)
   posterior = sampler.run()
   print(posterior.mean(params=['a', 'b']))
 
@@ -44,11 +44,11 @@ In the above example, we chose the Metropolis-Hastings MCMC sampler, but the sam
 Static Samplers
 ---------------
 
-Static samplers (:class:`~desilike.samplers.base.StaticSampler`) do not adapt to the likelihood surface. As such, they are primarily used for low-dimensional problems or, in the case of importance sampling, when we already have a distribution that closely resembles the posterior distribution. The following samplers are supported:
+Static samplers (:class:`~desilike.sampling.base.StaticSampler`) do not adapt to the likelihood surface. As such, they are primarily used for low-dimensional problems or, in the case of importance sampling, when we already have a distribution that closely resembles the posterior distribution. The following samplers are supported:
 
-- Grid Sampler (:class:`~desilike.samplers.GridSampler`): This simple sampler evaluates the likelihood on a regular grid. The user provides the number of grid points per dimension. This sampler should not be used for high-dimensional problems, as the total number of grid points grows exponentially with the dimensionality.
-- Quasi-Monte Carlo (QMC) Sampler (:class:`~desilike.samplers.QMCSampler`): This sampler is similar to the grid sampler but evaluates points on a non-regular "grid" derived from a `Quasi-Monte Carlo <https://en.wikipedia.org/wiki/Quasi-Monte_Carlo_method>`_ method. Compared to purely random uniform sampling, QMC-derived points have lower variance. This sampler can be very effective for low-dimensional problems, provided the typical set occupies a significant fraction of the prior volume. `desilike` supports Halton sequences, Latin hypercube sampling, Sobol sequences (all implemented via `SciPy <https://docs.scipy.org/doc/scipy/reference/stats.qmc.html>`_), and Kronecker sequences.
-- Importance Sampler (:class:`~desilike.samplers.ImportanceSampler`): The importance sampler adjusts the weights of an existing posterior sample based on a new likelihood. The outcome is either:
+- Grid Sampler (:class:`~desilike.sampling.GridSampler`): This simple sampler evaluates the likelihood on a regular grid. The user provides the number of grid points per dimension. This sampler should not be used for high-dimensional problems, as the total number of grid points grows exponentially with the dimensionality.
+- Quasi-Monte Carlo (QMC) Sampler (:class:`~desilike.sampling.QMCSampler`): This sampler is similar to the grid sampler but evaluates points on a non-regular "grid" derived from a `Quasi-Monte Carlo <https://en.wikipedia.org/wiki/Quasi-Monte_Carlo_method>`_ method. Compared to purely random uniform sampling, QMC-derived points have lower variance. This sampler can be very effective for low-dimensional problems, provided the typical set occupies a significant fraction of the prior volume. `desilike` supports Halton sequences, Latin hypercube sampling, Sobol sequences (all implemented via `SciPy <https://docs.scipy.org/doc/scipy/reference/stats.qmc.html>`_), and Kronecker sequences.
+- Importance Sampler (:class:`~desilike.sampling.ImportanceSampler`): The importance sampler adjusts the weights of an existing posterior sample based on a new likelihood. The outcome is either:
 
   - ``mode='resample'``: Resamples the existing posterior samples based on the new likelihood, resulting in a new posterior distribution that is independent of the old posterior.
   - ``mode='combine'``: Combines the new likelihood with the old posterior by adjusting the weights of the existing samples. The resulting posterior is the product of the old posterior and the new likelihood (i.e., the product of the prior, the old likelihood, and the new likelihood). This mode is useful when you want to update your posterior based on new observations.
@@ -56,29 +56,29 @@ Static samplers (:class:`~desilike.samplers.base.StaticSampler`) do not adapt to
 Population Samplers
 -------------------
 
-Population samplers (:class:`~desilike.samplers.base.PopulationSampler`) are dynamic samplers that utilize most or all previously evaluated points in parameter space to guide which regions to explore next. Unlike MCMC samplers, the resulting posterior samples are typically weighted. These samplers are also the only ones supported by `desilike` capable of computing Bayesian evidence.
+Population samplers (:class:`~desilike.sampling.base.PopulationSampler`) are dynamic samplers that utilize most or all previously evaluated points in parameter space to guide which regions to explore next. Unlike MCMC samplers, the resulting posterior samples are typically weighted. These samplers are also the only ones supported by `desilike` capable of computing Bayesian evidence.
 
 `desilike` provides interfaces to a wide range of population samplers, each with its own terminology, convergence criteria, and other specifics. Unless unifying the interface improves the user experience, `desilike` allows users to interact directly with the underlying packages. For detailed information on how `desilike` interfaces with each sampler, please refer to their `run_sampler` methods.
 
 The following population samplers are supported:
 
-- `Dynesty` (:class:`~desilike.samplers.DynestySampler`): A pure-Python dynamic nested sampling code. The slice sampling mode in this sampler is similar to that of `PolyChord`.
-- `nautilus` (:class:`~desilike.samplers.NautilusSampler`): A pure-Python importance nested sampling code. This is an evolution of `MultiNest`'s importance nested sampling (INS) mode and incorporates neural networks to improve sampling efficiency.
-- `pocoMC` (:class:`~desilike.samplers.PocoMCSampler`): An implementation of preconditioned Monte Carlo (PMC), which is an extension of Sequential Monte Carlo. This code leverages normalizing flows to enhance sampling efficiency.
+- `Dynesty` (:class:`~desilike.sampling.DynestySampler`): A pure-Python dynamic nested sampling code. The slice sampling mode in this sampler is similar to that of `PolyChord`.
+- `nautilus` (:class:`~desilike.sampling.NautilusSampler`): A pure-Python importance nested sampling code. This is an evolution of `MultiNest`'s importance nested sampling (INS) mode and incorporates neural networks to improve sampling efficiency.
+- `pocoMC` (:class:`~desilike.sampling.PocoMCSampler`): An implementation of preconditioned Monte Carlo (PMC), which is an extension of Sequential Monte Carlo. This code leverages normalizing flows to enhance sampling efficiency.
 
 If you use any of these classes in your published work, please make sure to cite the corresponding papers linked in the API documentation.
 
 MCMC Samplers
 -------------
 
-MCMC samplers (:class:`~desilike.samplers.base.MarkovChainSampler`) approximate the posterior distribution by creating a Markov chain whose stationary distribution approaches the posterior. Unlike population samplers, all MCMC algorithms in `desilike` follow the same unified interface and differ only in how they advance the chain.
+MCMC samplers (:class:`~desilike.sampling.base.MarkovChainSampler`) approximate the posterior distribution by creating a Markov chain whose stationary distribution approaches the posterior. Unlike population samplers, all MCMC algorithms in `desilike` follow the same unified interface and differ only in how they advance the chain.
 
-- Metropolis-Hastings MCMC (:class:`~desilike.samplers.MetropolisHastingsSampler`): The classical MCMC algorithm. The version employed in `desilike` supports the fast-and-slow decomposition described in `cobaya`.
-- Hamiltonian Monte-Carlo (HMC, :class:`~desilike.samplers.HMCSampler`), No-U-Turn Sampler (NUTS, :class:`~desilike.samplers.NoUTurnSampler`), and Microcanonical Langevin Monte Carlo (MCLMC, :class:`~desilike.samplers.MCLMCSampler`): Classes of MCMC algorithms that leverage the derivative of the posterior to improve chain mixing. All three samplers are implemented via the `blackjax` package.
-- `emcee` (:class:`~desilike.samplers.EmceeSampler`): The affine-invariant sampler popular in astronomy. It proposes new points by utilizing the positions of other walkers, i.e., chains.
-- `zeus` (:class:`~desilike.samplers.ZeusSampler`): An ensemble slice sampling MCMC algorithm. Like `emcee`, this sampler is insensitive to linear correlations.
+- Metropolis-Hastings MCMC (:class:`~desilike.sampling.MetropolisHastingsSampler`): The classical MCMC algorithm. The version employed in `desilike` supports the fast-and-slow decomposition described in `cobaya`.
+- Hamiltonian Monte-Carlo (HMC, :class:`~desilike.sampling.HMCSampler`), No-U-Turn Sampler (NUTS, :class:`~desilike.sampling.NoUTurnSampler`), and Microcanonical Langevin Monte Carlo (MCLMC, :class:`~desilike.sampling.MCLMCSampler`): Classes of MCMC algorithms that leverage the derivative of the posterior to improve chain mixing. All three samplers are implemented via the `blackjax` package.
+- `emcee` (:class:`~desilike.sampling.EmceeSampler`): The affine-invariant sampler popular in astronomy. It proposes new points by utilizing the positions of other walkers, i.e., chains.
+- `zeus` (:class:`~desilike.sampling.ZeusSampler`): An ensemble slice sampling MCMC algorithm. Like `emcee`, this sampler is insensitive to linear correlations.
 
-The implementation of all samplers is derived from the :class:`~desilike.samplers.base.MarkovChainSampler` class and differ only in their initialization and how they advance the chain via the :meth:`~desilike.samplers.base.MarkovChainSampler.run_sampler` method. In particular, all samplers use the same run method, :meth:`~desilike.samplers.base.MarkovChainSampler.run`. The run method defines how long the chain is run. The following convergence criterion can be employed.
+The implementation of all samplers is derived from the :class:`~desilike.sampling.base.MarkovChainSampler` class and differ only in their initialization and how they advance the chain via the :meth:`~desilike.sampling.base.MarkovChainSampler.run_sampler` method. In particular, all samplers use the same run method, :meth:`~desilike.sampling.base.MarkovChainSampler.run`. The run method defines how long the chain is run. The following convergence criterion can be employed.
 
 * Gelman-Rubin statistic: Maximum value of the `Gelman-Rubin statistic <https://en.wikipedia.org/wiki/Gelman-Rubin_statistic>`_ :math:`R` across all parameters. See :meth:`~desilike.statistics.diagnostics.gelman_rubin`.
 * Effective sample size (ESS): Minimum value for the ESS per chain. The ESS is defined as :math:`n / \tau` where :math:`n` is the length of the chain and :math:`\tau` the integrated autocorrelation time, see :meth:`~desilike.statistics.diagnostics.integrated_autocorrelation_time`.

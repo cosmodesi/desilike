@@ -1,9 +1,9 @@
-.. _user-profilers:
+.. _user-profiling:
 
-Profilers
+Profiling
 =========
 
-In addition to traditional Bayesian :ref:`sampling algorithms <user-samplers>`, `desilike` supports profiling the likelihood and/or posterior. Generally, profiling refers to the process of fixing some parameters while optimizing others to maximize the likelihood or posterior. Specifically, let's say we fix :math:`\theta_0` while optimizing all other parameters :math:`{\theta_1, \dots, \theta_n}`. We can define the profile likelihood :math:`\mathcal{L}_\mathrm{p}` of the full likelihood :math:`\mathcal{L}` as follows:
+In addition to traditional Bayesian :ref:`sampling algorithms <user-sampling>`, `desilike` supports profiling the likelihood and/or posterior. Generally, profiling refers to the process of fixing some parameters while optimizing others to maximize the likelihood or posterior. Specifically, let's say we fix :math:`\theta_0` while optimizing all other parameters :math:`{\theta_1, \dots, \theta_n}`. We can define the profile likelihood :math:`\mathcal{L}_\mathrm{p}` of the full likelihood :math:`\mathcal{L}` as follows:
 
 .. math::
 
@@ -20,7 +20,7 @@ In practice, `desilike` will optimize the likelihood/posterior for a given fixed
 Quickstart
 ----------
 
-In the following, we will profile a simple two-dimensional Gaussian. We first have to define the fixed parameter combinations we want to optimize. Here, we choose to find the maximum a posterior value before adding one-dimensional grids in :math:`a` and :math:`b` and finally adding a two-dimensional grid for both. :meth:`~desilike.profilers.base.Profiler.run` will do the main computation and optimize all fixed points in parallel, if possible. The return object is a :class:`~desilike.statistics.samples.Samples` object and can be used to determine credible intervals and maximum a posterior and maximum likelihood estimate. Here, we choose :math:`\Delta \log \mathcal{P} = 0.5` which corresponds to the :math:`1 \sigma` interval for a one-dimensional Gaussian. Finally, we create a triangle plot of the profile posterior.
+In the following, we will profile a simple two-dimensional Gaussian. We first have to define the fixed parameter combinations we want to optimize. Here, we choose to find the maximum a posterior value before adding one-dimensional grids in :math:`a` and :math:`b` and finally adding a two-dimensional grid for both. :meth:`~desilike.profiling.Profiler.run` will do the main computation and optimize all fixed points in parallel, if possible. The return object is a :class:`~desilike.statistics.samples.Samples` object and can be used to determine credible intervals and maximum a posterior and maximum likelihood estimate. Here, we choose :math:`\Delta \log \mathcal{P} = 0.5` which corresponds to the :math:`1 \sigma` interval for a one-dimensional Gaussian. Finally, we create a triangle plot of the profile posterior.
 
 .. code-block:: python
 

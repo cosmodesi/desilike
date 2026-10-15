@@ -33,6 +33,19 @@ from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
 
+# cosmoprimo compiles its run-time checks into traced code as `jax.debug.callback`: a host round trip
+# at every evaluation, per point of a vmapped batch, e.g. the "EisensteinHuEngine cannot cope with
+# massive neutrinos" warning of every analytic-core clone in ScalingScalarsEmulator. Keep errors only
+# (e.g. interpolation bounds) by default; COSMOPRIMO_EXCEPTION_CALLBACKS=warning restores the warnings.
+if 'COSMOPRIMO_EXCEPTION_CALLBACKS' not in os.environ:
+    try:
+        from cosmoprimo.jax import set_exception_callbacks
+    except ImportError:  # cosmoprimo predating the switch
+        pass
+    else:
+        set_exception_callbacks(level='error')
+
+
 _COORDS = ['z', 'k', 'r']
 
 

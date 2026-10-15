@@ -1651,6 +1651,9 @@ class ACECosmology(PrimordialCosmology):
             # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
             self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+        # The BAO filter runs on ACE whatever the conversion, as CosmoprimoCosmology's runs on its own engine.
+        self._filter_fiducial = _get_fiducial(fiducial).clone(engine='ace')
+        self._filter_params = frozenset(self._filter_fiducial.get_default_params(include_conflicts=True))
         self._bao_filters = {}
 
     def add_requirements(self, requirements):
@@ -1954,24 +1957,16 @@ class ACECosmology(PrimordialCosmology):
                     k_fixed = np.geomspace(1e-5, 50., 300)
                     pk_fixed = _interp_loglog(k_fixed, k_grid / h, (pk * h**3).T)
                     pk_interp = PowerSpectrumInterpolator1D(k_fixed, pk_fixed, **_kw_pk)
-                    # the cosmology of the emulated pk, so the clipped one: the filter divides that pk by its
-                    # Eisenstein-Hu no-wiggle reference, and at the raw n_s far outside the ranges (e.g.
-                    # 2.5 for a pk emulated at 1.1) the ratio spans ~1e6 and the filter returns NaN
-                    filter_cosmo = clipped_cosmo
-                    filter_cosmo_fid = self._fiducial if self._conversion == 'cosmoprimo' else None
-
-                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z,
-                                           filter_cosmo_fid=filter_cosmo_fid):
-                        # the same fixed grid the emulated spectrum was resampled onto, so the
-                        # filter is prepared on the fiducial and called on every point after
-                        if filter_cosmo_fid is None:
-                            return pk_interp
-                        return pk_interp.clone(
-                            pk=filter_cosmo_fid.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
-
-                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
-                                                  engine=spec['static']['engine'],
-                                                  cosmo=filter_cosmo, cosmo_fid=filter_cosmo_fid)
+                    # The filter runs on ACE: the BAO extrema are located on the fiducial's ACE spectrum, and the
+                    # r_drag rescaling compares two ACE r_drag. The point cosmology is the clipped one, that of the
+                    # emulated pk: at a raw n_s far outside the ranges the Eisenstein-Hu no-wiggle reference the
+                    # filter divides by would make it return NaN.
+                    filter_cosmo = _build_cosmoprimo(self._filter_fiducial, {name: value for name, value in clipped_values.items()
+                                                                             if name in self._filter_params})
+                    # the filter is built once, on the fiducial spectrum, on the same grid
+                    fiducial_pk = lambda: pk_interp.clone(pk=self._filter_fiducial.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
+                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk, engine=spec['static']['engine'],
+                                                  cosmo=filter_cosmo, cosmo_fid=self._filter_fiducial)
                     result = bao_filter.smooth_pk_interpolator()(spec['k']).T
                 else:
                     result = _interp_loglog(spec['k'], k_grid / h, (pk * h**3).T).T

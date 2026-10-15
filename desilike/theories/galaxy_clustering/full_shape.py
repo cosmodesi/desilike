@@ -258,7 +258,7 @@ def get_physical_stochastic_settings(tracer=None):
     physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rsat``: the LRG value).
 
     ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``); the isotropic :math:`k^2` term ``sn1`` of
-    :class:`FOLPSTracerSpectrum2Poles` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`, :math:`k_\mathrm{NL} = 0.4\ h/\mathrm{Mpc}`
+    :class:`FOLPSTracerSpectrum2Poles` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`, :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`
     (prior :math:`\mathcal{N}(0, 2^2)`). ``rsat`` uses the same halo masses and redshifts as ``sigv`` (log M = 13, 13, 12, 12.7
     and z = 0.2, 0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO).
     """
@@ -2394,7 +2394,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``get_physical_stochastic_settings()['sigv']``.
     rsat : float, default=None
         Satellite radius [Mpc/h] (the isotropic stochastic term ``sn1`` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`,
-        :math:`k_\mathrm{NL} = 0.4\ h/\mathrm{Mpc}`, not by ``rsat``).  Defaults to
+        :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`, not by ``rsat``).  Defaults to
         ``get_physical_stochastic_settings()['rsat']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
@@ -2552,8 +2552,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
         self._rsat = float(rsat) if rsat is not None else settings['rsat']
-        # sn1 (isotropic k^2 stochastic term) in units of 1 / (nbar * k_NL^2), k_NL = 0.4 h/Mpc
-        self._knl = 0.4
+        # sn1 (isotropic k^2 stochastic term) in units of 1 / (nbar * k_NL^2), k_NL = 0.3 h/Mpc (local: 0.4 upstream)
+        self._knl = 0.3
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
     def __call__(self):

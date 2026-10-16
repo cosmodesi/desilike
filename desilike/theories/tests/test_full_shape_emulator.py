@@ -137,6 +137,27 @@ def test_the_routing_beats_expanding_the_same_parameters(emulators):
     assert np.median(errors['folpsd']) < 0.05 * np.median(errors['plain'])
 
 
+def emulated_with_sn1(emulator):
+    """The exact and the emulated theory with the isotropic k^2 stochastic term sn1 freed (it is used only when free)."""
+    reference, swapped = theory(), theory()
+    replace(swapped, swapped.pt, emulator.to_calculator())
+    for calculator in (reference, swapped):
+        calculator.sn1.update(fixed=False)
+    return reference, swapped
+
+
+def test_sn1_carries_no_h_dependence(emulators):
+    """sn1 jac kap^2 is built at run time from the AP grid, which the h preconditioning dilates by s = h / h_fid: sn1 must be
+    divided by s^5 as alphashot2 is, or its amplitude picks up a spurious (h / h_fid)^5 (-10% at h = 0.66, +21% at h = 0.70).
+    The term is linear in sn1, so the response P(sn1) - P(0) is compared directly and no interpolation error enters it."""
+    reference, swapped = emulated_with_sn1(emulators['folpsd'][0])
+    for h in LIMITS['h']:
+        point = dict(CENTRE, h=h, b1=1.9)
+        exact, emulated = [evaluate(calculator, {**point, 'sn1': 1.}) - evaluate(calculator, {**point, 'sn1': 0.})
+                           for calculator in (reference, swapped)]
+        assert np.max(np.abs(emulated - exact)) < 1e-5 * np.max(np.abs(exact)), h
+
+
 def test_the_routing_applies_with_nothing_frozen():
     """A space that varies none of the routed parameters is not an error.
 

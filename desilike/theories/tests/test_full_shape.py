@@ -666,6 +666,51 @@ class TestFOLPS:
             with pytest.raises(ValueError):
                 _compile(FOLPSTracerSpectrum2Poles(k=k, use_GTNS=bad))
 
+    def test_sn1(self):
+        """The isotropic stochastic term ``sn1 * k**2 / (nbar * k_NL**2)``, k_NL = 0.3 h/Mpc.
+
+        Off by default (fixed at 0): bit-identical to the term freed at 0. At the fiducial (q = 1) it shifts the monopole by
+        exactly that amount and leaves the quadrupole and hexadecapole alone; away from it, by the mu-integral of the
+        AP-distorted k^2, which reaches the quadrupole too.
+        """
+        from desilike.base import get_params
+        from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        k = np.linspace(0.02, 0.3, 40)
+        nbar, sn1 = 3e-4, 2.
+        settings = get_physical_stochastic_settings('LRG')
+        assert np.isclose(settings['rsat'], 0.55 * 0.163 * 10**(1. / 3.) * 1.8 / (0.315 * 1.8**3 + 0.685)**(1. / 3.))
+        assert np.isclose(get_physical_stochastic_settings()['rsat'], settings['rsat'])  # generic default: the LRG value
+
+        for prior_basis, normalization in [('physical_aap', 1. / (nbar * 0.3**2)), ('standard', 1. / nbar)]:
+            theory_off = FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2, 4), nbar=nbar, prior_basis=prior_basis, **settings)
+            assert get_params(theory_off)['sn1'].fixed
+            poles_off = np.asarray(_compile(theory_off)())
+            theory_free = FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2, 4), nbar=nbar, prior_basis=prior_basis, **settings)
+            for param in get_params(theory_free).select(basename='sn1'):
+                param.update(fixed=False)
+            run_free = _compile(theory_free)
+            np.testing.assert_array_equal(np.asarray(run_free(sn1=0.)), poles_off)
+            poles_on = np.asarray(run_free(sn1=sn1))
+            np.testing.assert_allclose(poles_on[0] - poles_off[0], sn1 * normalization * k**2, rtol=1e-8, atol=1e-12 * np.abs(poles_off[0]).max())
+            np.testing.assert_allclose(poles_on[1:], poles_off[1:], rtol=0., atol=1e-10 * np.abs(poles_off).max())
+
+        # away from the fiducial: kap^2 = k^2 [mu^2 / qpar^2 + (1 - mu^2) / qper^2], times the volume Jacobian, which the
+        # physical_aap normalisation (1 / A_AP) cancels
+        theory_free = FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2, 4), nbar=nbar, prior_basis='physical_aap', **settings)
+        for param in get_params(theory_free).select(basename='sn1'):
+            param.update(fixed=False)
+        run_free = _compile(theory_free)
+        names = [param.basename for param in get_params(theory_free)]
+        shift = {'h': 0.72} if 'h' in names else ({'qpar': 1.03, 'qper': 0.98} if 'qpar' in names else None)
+        if shift is not None:
+            delta = np.asarray(run_free(sn1=sn1, **shift)) - np.asarray(run_free(sn1=0., **shift))
+            qpar, qper = float(theory_free.pt.qpar), float(theory_free.pt.qper)
+            assert abs(qpar - 1.) > 1e-3
+            amplitude = sn1 / (nbar * 0.3**2) * k**2
+            np.testing.assert_allclose(delta[0], amplitude * (1. / qpar**2 + 2. / qper**2) / 3., rtol=1e-8)
+            np.testing.assert_allclose(delta[1], amplitude * 2. / 3. * (1. / qpar**2 - 1. / qper**2), rtol=1e-6, atol=1e-10 * amplitude.max())
+
     def test_tracer_correlation(self):
         """FOLPSTracerCorrelation2Poles: shape in both bases."""
         from desilike.theories.galaxy_clustering import FOLPSTracerCorrelation2Poles
@@ -1123,7 +1168,8 @@ class TestCOMET:
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
                        if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
-        assert folps_names - comet_names == {'ct', 'X_FoG'}, sorted(folps_names - comet_names)
+        # sn1: folps' isotropic k^2 stochastic term (off by default), not carried over to comet
+        assert folps_names - comet_names == {'ct', 'X_FoG', 'sn1'}, sorted(folps_names - comet_names)
         assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).

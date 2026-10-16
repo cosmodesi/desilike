@@ -2111,10 +2111,15 @@ def copy(node, level=None):
     build a second graph over one tree: a build configures Calculators in place, so two graphs
     must not share any.
 
-    Variables are shared, all of them: the ones the copy's constructors create are bound back
-    by name to the original's, exactly as a build binds the ones ``__init__`` creates to the ones
-    it was handed.  So ``get_params(copy)['b1'] is get_params(original)['b1']``, with whatever
-    prior was set on it, and one sampled value feeds both graphs.
+    Variables are copied, not shared: the ones the copy's constructors create are bound back
+    by name to clones of the original's, so every prior, ``derived``, ``fixed`` or ``ref`` set on
+    the original after construction carries over -- re-running ``__init__`` alone would reset them
+    to the class defaults -- while ``get_params(copy)['b1'] is not get_params(original)['b1']``.
+    Updating one afterwards leaves the other alone: ``desi-clustering`` sets the solved
+    parameters of its profiler's copy to ``derived='best'``, and with shared Variables the
+    sampler's copy, made later from the same likelihood, sampled the profile likelihood instead
+    of the marginalised one.  A derived parameter's ``depends`` are rewired to the clones too.
+    To have two calculators read one Parameter object, use :func:`share_params`.
 
     The default is the whole tree because that is what every caller means by ``copy``.
     ``desi-clustering`` copies a likelihood to get a profiler's, a sampler's and an emulated
@@ -2139,7 +2144,17 @@ def copy(node, level=None):
     Calculator
         The newly-created root instance.
     """
-    return _init_graph(node, level=level, fresh=True, bind=get_params(node))
+    return _init_graph(node, level=level, fresh=True, bind=_clone_variables(get_params(node)))
+
+
+def _clone_variables(variables):
+    """Clone *variables*, with each clone's ``depends`` pointing at the other clones."""
+    clones = {variable.name: variable.clone() for variable in variables}
+    for clone in clones.values():
+        depends = getattr(clone, 'depends', None)
+        if depends:
+            clone.update(depends={key: clones.get(dep.name, dep) for key, dep in depends.items()})
+    return VariableCollection(list(clones.values()))
 
 
 def _init_graph(node, level=None, fresh=False, bind=None):

@@ -456,6 +456,12 @@ class TestACECosmology:
         assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
         assert float(np.asarray(cosmo.training_range.value)) > 0.
         assert get_params(cosmo, filter='constraint').names() == ['ace_range']
+        # n_s far outside: the BAO filter of pk_now takes the clipped cosmology, whose Eisenstein-Hu
+        # reference matches the emulated pk; with the raw n_s it returned NaN from n_s ~ 2.4
+        for n_s in [3., -1.]:
+            results = run({**defaults, 'n_s': n_s})
+            assert all(np.all(np.isfinite(np.asarray(result))) for result in results)
+            assert float(np.asarray(cosmo.training_range.value)) > 0.
 
         # jit path, through a downstream consumer (results must be read off a pipeline output,
         # not off cosmo._results, which lives inside the compiled pipe's own trace)

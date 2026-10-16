@@ -375,13 +375,15 @@ class ACTDR6SPTLensingLikelihood(GaussianLikelihood):
             download(url, tar_fn)
             extract(tar_fn, data_dir)
 
-        # Copy SPT-3G bandpowers (muse_likelihood.npz) from the installed package's data dir
-        muse_target = os.path.join(version_dir, 'muse_likelihood.npz')
-        if installer.reinstall or not exists_path(muse_target):
-            import shutil
-            import act_dr6_spt_lenslike as alike
-            muse_source = os.path.join(os.path.dirname(alike.__file__), 'data', cls.version, 'muse_likelihood.npz')
-            if os.path.exists(muse_source):
-                shutil.copy2(muse_source, muse_target)
+        # Copy what the ACT tarball lacks from the installed package's data dir: the SPT-3G bandpowers
+        # (muse_likelihood.npz) and the joint ACT+SPT-3G covariances (covmat_act*spt3g*.txt) the spt3g variants read
+        import shutil
+        import act_dr6_spt_lenslike as alike
+        package_dir = os.path.join(os.path.dirname(alike.__file__), 'data', cls.version)
+        if os.path.isdir(package_dir):
+            for basename in os.listdir(package_dir):
+                source, target = os.path.join(package_dir, basename), os.path.join(version_dir, basename)
+                if os.path.isfile(source) and (installer.reinstall or not exists_path(target)):
+                    shutil.copy2(source, target)
 
         installer.write({cls.installer_section: {'data_dir': data_dir}})

@@ -2962,8 +2962,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         standard/class-PT counterterms directly specify XY power and bypass the field inversion.
         Append the XY stochastic terms and the pair FoG slot (unused in geometric mode).
         """
-        # NOTE: average the higher order counterterm here, may be incorrect
-        ct = (pars_a[7] + pars_b[7]) / 2.
+        if 'ctr' in self._cross_sharing_mode:
+            ct = (pars_a[7] + pars_b[7]) / 2.
+        else:
+            ct = pars_a[7]
         if self._prior_basis in ('physical', 'physical_aap'):
             A = self.pt.sigma8 / self.pt.sigma8_fid
             A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.

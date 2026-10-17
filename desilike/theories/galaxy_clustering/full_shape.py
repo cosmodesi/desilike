@@ -1569,7 +1569,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
     bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
     These shifts use the current b1.
-    DESI stochastic terms are [sn0 + sn2 fsat sigv^2 k^2 mu^2] / nbar.
+    DESI stochastic terms are [sn0 + sn1 (k/knl)^2 + sn2 fsat sigv^2 k^2 mu^2] / nbar, with knl=0.3 h/Mpc.
+    sn1 is fixed at zero by default; when freed, its Gaussian prior has mean zero and standard deviation 2.
     Stochastic terms are normalized by nbar and km in _bias_coefficients.
     The PT basis is always eftoflss, independently of this tracer's prior_basis.
 
@@ -1584,7 +1585,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
         DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
         dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
-        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn1/sn2 as 1 / A_AP.
         Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].
@@ -1642,6 +1643,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             stochastic = [
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn1', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=True,
+                          ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
                 Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
             ]
@@ -1700,7 +1703,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     @staticmethod
     def _stochastic_names(prior_basis):
         if prior_basis == 'DESI':
-            return ('sn0', 'sn2')
+            return ('sn0', 'sn1', 'sn2')
         if prior_basis == 'westcoast':
             return ('ce0', 'cemono', 'cequad')
         if prior_basis == 'eastcoast':
@@ -1768,7 +1771,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             self.km = float(km)
             self.kr = float(kr)
 
-    def _rescale_params(self, b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2):
+    def _rescale_params(self, b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn1, sn2):
         """Rescale DESI parameters before shifting the coevolution centres or changing basis.
 
         S = sigma8(z) / sigma8_fid(z); A_AP = 1 / (qper**2 * qpar).
@@ -1785,8 +1788,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         alpha2 = alpha2 / (A_AP * S**2)
         alpha4 = alpha4 / (A_AP * S**2)
         sn0 = sn0 / A_AP
+        sn1 = sn1 / A_AP
         sn2 = sn2 / A_AP
-        return b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2
+        return b1, b2, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn1, sn2
 
     def _build_params(self, f, idx=None):
         """Return scalar bias, counterterm and stochastic parameters for one tracer. For cross-spectra,
@@ -1819,9 +1823,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             ce0, ce1, ce2 = get('ce0'), get('ce1'), get('ce2')
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
         elif prior_basis == 'DESI':
-            b1, b2_desi, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn2 = self._rescale_params(
+            b1, b2_desi, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn1, sn2 = self._rescale_params(
                 b1, get('b2'), get('dbk2'), get('dbtd'),
-                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'), get('sn2'))
+                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'), get('sn1'), get('sn2'))
             # Shift the rescaled deviations using the rescaled Eulerian b1.
             bk2 = dbk2 - 2. / 7. * (b1 - 1.)
             btd = dbtd + 23. / 42. * (b1 - 1.)
@@ -1839,7 +1843,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             # Cancel the pair's km normalization and the EFT stochastic growth-rate factor.
             km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
             ce0 = sn0
-            ce1 = 0.
+            # Isotropic k^2 stochastic term; cancel km so its physical scale is fixed at knl.
+            knl = 0.3
+            ce1 = sn1 * km2 / knl**2
             ce2 = sn2 * self._fsat * self._sigv**2 * km2 / f
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
         elif prior_basis == 'westcoast':
@@ -2101,7 +2107,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     rescaling : {None, 'sigma8', 'AP', 'sigma8+AP'}, default='sigma8+AP'
         DESI parameter rescaling (ignored for other prior bases): b1 / (A sqrt(A_AP)), b2 and dbk2 / (A**2 sqrt(A_AP)),
         dbtd / (A**4 A_AP). Disabled factors equal one. Coevolution shifts follow rescaling.
-        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn2 as 1 / A_AP.
+        alpha0/alpha2/alpha4 scale as 1 / (A**2 A_AP); sn0/sn1/sn2 as 1 / A_AP.
         Independent of PT's with_ap.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3].

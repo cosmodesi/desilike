@@ -13,6 +13,7 @@ from .proposals import (BaseProposal, PriorProposal, SamplesProposal, GaussianPr
 _KERNEL_MODULES = {
     'Emcee': 'emcee', 'Zeus': 'zeus', 'MH': 'mhmcmc',
     'BlackjaxHMC': 'blackjax', 'BlackjaxNUTS': 'blackjax', 'BlackjaxMCLMC': 'blackjax',
+    'BlackjaxLAPS': 'blackjax',
     'NumpyroNUTS': 'numpyro', 'NumpyroHMC': 'numpyro', 'NumpyroBarkerMH': 'numpyro',
     'NumpyroSA': 'numpyro', 'NumpyroAIES': 'numpyro', 'NumpyroESS': 'numpyro',
     'Dynesty': 'dynesty', 'Nautilus': 'nautilus', 'PocoMC': 'pocomc', 'SMC': 'smc',

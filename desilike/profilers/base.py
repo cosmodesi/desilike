@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from ..base import build, CompiledGraph
 from ..parameter import VariableCollection
 from ..samples import Profiles, Covariance
+from ..context import resolve_constraints, use_constraints
 from ..distributed import default_mpicomm, get_mpicomm
 from ..conditioning import AffineConditioner
 
@@ -267,6 +268,10 @@ class Profiler:
             conditioner = AffineConditioner()
         self.conditioner = conditioner
         self.conditioner.init(self.varied_params)
+        # Constraint settings: those active at construction, else soft -- an optimiser's line
+        # search and finite differences need the objective continuous across a calculator's
+        # valid-region boundary, which a hard (-inf) wall is not.
+        self.constraints = resolve_constraints('soft')
 
         # ── existing profiles ─────────────────────────────────────────────
         if profiles is not None and not isinstance(profiles, Profiles):
@@ -300,7 +305,8 @@ class Profiler:
             else:
                 val = val[0]
             params_dict[name] = val
-        logpost = self.likelihood(params_dict)
+        with use_constraints(self.constraints):
+            logpost = self.likelihood(params_dict)
         return -2.0 * logpost
 
     # ── starting points ───────────────────────────────────────────────────────
@@ -367,7 +373,8 @@ class Profiler:
         prior_bounds = self.conditioner.prior_bounds()  # (ndim, 2)
         bounds = [(float(prior_bounds[k, 0]), float(prior_bounds[k, 1]))
                   for k in range(self._flat_size)]
-        _scale = self.conditioner._scale
+        # local dx/dz at the centre (z = 0): the affine scale, times the transforms' slope
+        _scale = np.abs(np.diag(self.conditioner.jacobian(np.zeros(self._flat_size)))) if self._flat_size else np.ones(0)
         proposals = []
         for param in self.varied_params:
             slc = self._param_slices[param.name]
@@ -384,6 +391,8 @@ class Profiler:
         """Apply forward transform to best/start/error in-place (rescaled → original)."""
         if profiles is None:
             return profiles
+        if not self.conditioner.is_linear:
+            return self._transform_back_nonlinear(profiles)
         names = self.varied_params.names()
         _scale = self.conditioner._scale
         _loc = self.conditioner._loc
@@ -424,6 +433,48 @@ class Profiler:
             profiles.covariance = Covariance(cov_array, list(self.varied_params))
         return profiles
 
+    def _flat_runs(self, data):
+        """``{name: (nruns, ...)}`` → ``(nruns, ndim)`` in the varied-parameter order."""
+        return np.concatenate([np.asarray(data[name]).reshape(len(np.asarray(data[name])), -1)
+                               for name in self.varied_params.names()], axis=-1)
+
+    def _unflat_runs(self, flat, data):
+        for name, param in zip(self.varied_params.names(), self.varied_params):
+            slc = self._param_slices[name]
+            data[name] = flat[:, slc].reshape((flat.shape[0],) + param.shape)
+
+    def _transform_back_nonlinear(self, profiles):
+        """:meth:`_transform_back` through the conditioner's transforms: points with ``forward``,
+        errors and covariance with its Jacobian ``J C Jᵀ`` at each run's best fit."""
+        names = self.varied_params.names()
+        best = getattr(profiles, 'best', None)
+        best_z = self._flat_runs(best) if best is not None and all(name in best for name in names) else None
+        jacobians = [self.conditioner.jacobian(point) for point in best_z] if best_z is not None else None
+        for slot in ('best', 'start'):
+            data = getattr(profiles, slot, None)
+            if data is None or not all(name in data for name in names):
+                continue
+            self._unflat_runs(np.asarray(self.conditioner.forward(self._flat_runs(data))), data)
+        error = getattr(profiles, 'error', None)
+        if error is not None and jacobians is not None and all(name in error for name in names):
+            if self.conditioner.is_mixing:
+                # a group reparameterization mixes coordinates: errors need the full covariance
+                covariance = getattr(profiles, 'covariance', None)
+                if covariance is not None and len(jacobians) == 1:
+                    cov_x = jacobians[0] @ np.asarray(covariance) @ jacobians[0].T
+                    self._unflat_runs(np.sqrt(np.diag(cov_x))[None, :], error)
+                else:
+                    self._unflat_runs(np.full((len(jacobians), self._flat_size), np.nan), error)
+            else:
+                error_z = self._flat_runs(error)
+                self._unflat_runs(np.abs(np.array([np.diag(jac) for jac in jacobians])) * error_z, error)
+        covariance = getattr(profiles, 'covariance', None)
+        if covariance is not None and jacobians is not None:
+            run_idx = int(np.argmax(profiles.logpdf)) if getattr(profiles, 'logpdf', None) is not None else 0
+            jac = jacobians[min(run_idx, len(jacobians) - 1)]
+            profiles.covariance = Covariance(jac @ np.asarray(covariance) @ jac.T, list(self.varied_params))
+        return profiles
+
     def _merge_and_transform(self, raw_list):
         """Concatenate rescaled Profiles list and transform to original space."""
         raw_list = [result for result in raw_list if result is not None]
@@ -459,7 +510,8 @@ class Profiler:
         derived_arrays = {}
         for run_idx in range(nruns):
             params_dict = {name: np.asarray(profiles.best[name][run_idx]) for name in names}
-            _, derived_dict = self.likelihood(params_dict, return_derived=True)
+            with use_constraints(self.constraints):
+                _, derived_dict = self.likelihood(params_dict, return_derived=True)
             for dp in derived_params:
                 val = np.asarray(derived_dict[dp.name])
                 if dp.name not in derived_arrays:
@@ -531,11 +583,23 @@ class Profiler:
             self.profiles.write(self.output_fn)
         return self.profiles
 
-    def covariance(self, **kwargs):
+    def covariance(self, method='jax', step=0.3, niterations=2, **kwargs):
         """Estimate parameter covariance at the best-fit point.
 
-        Uses ``jax.hessian``.  Updates ``error`` in ``self.profiles`` and stores
-        the full matrix in ``self.profiles.attrs['covariance']``.
+        Updates ``error`` in ``self.profiles`` and stores the full matrix in ``self.profiles.attrs['covariance']``.
+
+        Parameters
+        ----------
+        method : str, default='jax'
+            ``'jax'``: ``jax.hessian`` of :math:`\\chi^2`. ``'finite'``: central finite differences with steps of
+            ``step`` times the parameter errors -- for a :math:`\\chi^2` that is rough at small steps, e.g. an emulator
+            whose output carries rounding noise, where an analytic or small-step Hessian picks up the noise
+            (measured on comet: Minuit's HESSE errors 2-4 times too small).
+        step : float, default=0.3
+            For ``method='finite'``: finite-difference step, in units of each parameter's error.
+        niterations : int, default=2
+            For ``method='finite'``: the first pass steps on the errors already in ``self.profiles`` (Minuit's, after
+            :meth:`maximize`), each further pass on the errors of the previous one.
         """
         if self.profiles is None or self.profiles.best is None:
             self.maximize()
@@ -548,8 +612,13 @@ class Profiler:
         ])
         best_rescaled = np.asarray(self.conditioner.inverse(best_orig))
 
-        # Compute Hessian of χ² w.r.t. conditioned params via JAX
-        hessian = np.asarray(jax.hessian(self._jit_chi2)(best_rescaled))
+        if method == 'jax':
+            # Hessian of χ² w.r.t. conditioned params via JAX
+            hessian = np.asarray(jax.hessian(self._jit_chi2)(best_rescaled))
+        elif method == 'finite':
+            hessian = self._finite_difference_hessian(best_orig, best_rescaled, argmax, step=step, niterations=niterations)
+        else:
+            raise ValueError(f"method must be 'jax' or 'finite', got {method!r}")
 
         try:
             cov_rescaled = np.linalg.inv(0.5 * hessian)
@@ -557,9 +626,8 @@ class Profiler:
             self.logger.warning('Hessian inversion failed; covariance set to NaN.')
             cov_rescaled = np.full((self._flat_size, self._flat_size), np.nan)
 
-        # cov_orig[i,j] = cov_r[i,j] * scale[i] * scale[j]  (diagonal conditioner only)
-        _scale = self.conditioner._scale
-        cov_orig = cov_rescaled * np.outer(_scale, _scale)
+        # cov_orig = J cov_r J^T, J = dx/dz at the best fit (affine: the scales, or the Cholesky factor)
+        cov_orig = self.conditioner.covariance_to_original(cov_rescaled, best_rescaled)
         nruns      = self.profiles.nruns
 
         error_dict = _build_error_from_cov(cov_orig, self.varied_params)
@@ -582,6 +650,51 @@ class Profiler:
         if self.output_fn is not None and self.mpicomm.rank == 0:
             self.profiles.write(self.output_fn)
         return self.profiles
+
+    def _finite_difference_hessian(self, best_orig, best_rescaled, argmax, step=0.3, niterations=2):
+        """Central finite-difference Hessian of χ² w.r.t. conditioned params at *best_rescaled*, with steps of *step*
+        times the errors, refined *niterations* times (see :meth:`covariance`)."""
+        nparams = best_rescaled.size
+        # first-pass errors in conditioned space: those in self.profiles (Minuit's), mapped through the conditioner
+        error_orig = None
+        if self.profiles.error is not None:
+            error_orig = np.concatenate([np.asarray(self.profiles.error[name][argmax]).ravel() for name in self.varied_params.names()])
+        error_rescaled = np.ones(nparams)
+        if error_orig is not None:
+            for param_idx in range(nparams):
+                if np.isfinite(error_orig[param_idx]) and error_orig[param_idx] > 0.:
+                    shifted = best_orig.copy()
+                    shifted[param_idx] += error_orig[param_idx]
+                    error_rescaled[param_idx] = np.linalg.norm(np.asarray(self.conditioner.inverse(shifted)) - best_rescaled)
+
+        def chi2(values):
+            return float(self._jit_chi2(values))
+
+        chi2_center = chi2(best_rescaled)
+        for iteration in range(niterations):
+            steps = step * error_rescaled
+            hessian = np.zeros((nparams, nparams))
+            for param_idx in range(nparams):
+                shift = np.zeros(nparams)
+                shift[param_idx] = steps[param_idx]
+                hessian[param_idx, param_idx] = (chi2(best_rescaled + shift) - 2. * chi2_center + chi2(best_rescaled - shift)) / steps[param_idx]**2
+                for other_idx in range(param_idx + 1, nparams):
+                    other_shift = np.zeros(nparams)
+                    other_shift[other_idx] = steps[other_idx]
+                    corners = [chi2(best_rescaled + shift + other_shift), chi2(best_rescaled + shift - other_shift),
+                               chi2(best_rescaled - shift + other_shift), chi2(best_rescaled - shift - other_shift)]
+                    hessian[param_idx, other_idx] = hessian[other_idx, param_idx] = \
+                        (corners[0] - corners[1] - corners[2] + corners[3]) / (4. * steps[param_idx] * steps[other_idx])
+            if not np.all(np.isfinite(hessian)):
+                self.logger.warning('Non-finite chi2 in the finite-difference Hessian (a step crossed a bound?).')
+                break
+            try:
+                error_new = np.sqrt(np.diag(np.linalg.inv(0.5 * hessian)))
+            except np.linalg.LinAlgError:
+                break
+            valid = np.isfinite(error_new) & (error_new > 0.)
+            error_rescaled = np.where(valid, error_new, error_rescaled)
+        return hessian
 
     def interval(self, params=None, cl=1, niterations=1, xtol=1e-3, **kwargs):
         """Compute 1-D confidence intervals via profile-likelihood bisection.
@@ -660,7 +773,8 @@ class Profiler:
 
             # Standard deviation in conditioned space
             cov_orig_ii = float(cov_orig[flat_pidx, flat_pidx])
-            sigma_r     = float(np.sqrt(max(cov_orig_ii, 0.))) / float(self.conditioner._scale[flat_pidx])
+            slope       = abs(float(self.conditioner.jacobian(center_r)[flat_pidx, flat_pidx]))
+            sigma_r     = float(np.sqrt(max(cov_orig_ii, 0.))) / slope
 
             scan_ctx = self._build_scan_setup([flat_pidx])
             lo_off, hi_off = self._interval_one(
@@ -775,7 +889,8 @@ class Profiler:
             flat_idx2 = self._param_slices[name2].start
 
             # 2×2 covariance in conditioned space
-            scale_2   = self.conditioner._scale[[flat_idx1, flat_idx2]]
+            jac_center = self.conditioner.jacobian(center_r)
+            scale_2   = np.abs(np.array([jac_center[flat_idx1, flat_idx1], jac_center[flat_idx2, flat_idx2]]))
             cov_r_2x2 = (cov_orig[np.ix_([flat_idx1, flat_idx2], [flat_idx1, flat_idx2])]
                          / np.outer(scale_2, scale_2))
 
@@ -849,7 +964,7 @@ class Profiler:
             flat_pidx = self._param_slices[pname].start  # flat index of this scalar param
             scan = _build_1d_grid(pname, flat_pidx, grid_vals, npoints, cl_val, argmax, self.profiles, self.varied_params)
 
-            scan_r = (scan - self.conditioner._loc[flat_pidx]) / self.conditioner._scale[flat_pidx]
+            scan_r = np.asarray(self.conditioner.inverse_coordinate(scan, flat_pidx))
             fixed_points_r  = scan_r.reshape(-1, 1)
             logposteriors   = self._scan([flat_pidx], fixed_points_r, niterations, **kwargs)
             profile_results[pname] = (scan, logposteriors)
@@ -905,9 +1020,8 @@ class Profiler:
         flat_pts   = np.column_stack([m.ravel() for m in mesh])  # (N, n_grid)
 
         # Condition fixed points (vectorised over all grid points)
-        loc_grid        = self.conditioner._loc[flat_grid_idx]
-        scale_grid      = self.conditioner._scale[flat_grid_idx]
-        fixed_points_r  = (flat_pts - loc_grid) / scale_grid  # (N, n_grid)
+        fixed_points_r  = np.column_stack([self.conditioner.inverse_coordinate(flat_pts[:, grid_idx], flat_idx)
+                                           for grid_idx, flat_idx in enumerate(flat_grid_idx)])  # (N, n_grid)
 
         lp_grid = self._scan(flat_grid_idx, fixed_points_r, niterations, **kwargs).reshape(grid_shape)
 
@@ -1110,9 +1224,7 @@ class Profiler:
 
         factor       = cl ** 2
         center_val_r = float(center_r[flat_pidx])
-        scale_p      = float(self.conditioner._scale[flat_pidx])
-        loc_p        = float(self.conditioner._loc[flat_pidx])
-        center_orig  = center_val_r * scale_p + loc_p
+        center_orig  = float(self.conditioner.forward_coordinate(center_val_r, flat_pidx))
 
         prior_bounds = self.conditioner.prior_bounds()
         lim_lo_r, lim_hi_r = float(prior_bounds[flat_pidx, 0]), float(prior_bounds[flat_pidx, 1])
@@ -1127,7 +1239,7 @@ class Profiler:
             return x
 
         def _to_orig(x_r):
-            return x_r * scale_p + loc_p
+            return float(self.conditioner.forward_coordinate(x_r, flat_pidx))
 
         interval_bounds = []
         warm = {'last_free': None}   # mutable warm-start state shared across scan calls
@@ -1207,10 +1319,6 @@ class Profiler:
         eigenvalues, U = np.linalg.eigh(cov_r_2x2)
         s = np.sqrt(np.maximum(eigenvalues * factor_2d, 0.))   # semi-axes in rescaled space
 
-        scale_1 = float(self.conditioner._scale[flat_idx1])
-        scale_2 = float(self.conditioner._scale[flat_idx2])
-        loc_1   = float(self.conditioner._loc[flat_idx1])
-        loc_2   = float(self.conditioner._loc[flat_idx2])
         center_12 = center_r[[flat_idx1, flat_idx2]].copy()
 
         prior_bounds = self.conditioner.prior_bounds()
@@ -1229,8 +1337,8 @@ class Profiler:
 
         def _to_orig_2(point_2r):
             return np.array([
-                float(point_2r[0]) * scale_1 + loc_1,
-                float(point_2r[1]) * scale_2 + loc_2,
+                float(self.conditioner.forward_coordinate(point_2r[0], flat_idx1)),
+                float(self.conditioner.forward_coordinate(point_2r[1], flat_idx2)),
             ])
 
         phis            = np.linspace(-np.pi, np.pi, size, endpoint=False)

@@ -19,6 +19,7 @@ from desilike.theories.primordial_cosmology import CosmoprimoCosmology
 from desilike.likelihoods.supernovae import (
     PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood,
     Union3SNLikelihood, Union3p1SNLikelihood, DESY5v1SNLikelihood, DESY5DovekieSNLikelihood,
+    UniteSNLikelihood,
 )
 
 
@@ -94,6 +95,20 @@ def _make_des_dovekie(data_dir, z):
     np.savez(data_dir / 'STAT+SYS.npz', nsn=np.array([n]), cov=precision[np.triu_indices(n)], allow_pickle=False)
 
 
+def _make_unite(data_dir, z, covariance=None):
+    """Synthetic fixture for UniteSNLikelihood: 'VARNAMES:'/'SN:'-prefixed light-curve file, and a .npz
+    precision matrix stored as an upper-triangle-packed array, with the size as a 0-d array (keys arr_0, arr_1)."""
+    with open(data_dir / UniteSNLikelihood.data_file, 'w') as file:
+        file.write('# comment\n')
+        file.write('VARNAMES: CID IDSURVEY zHD zCMB zHEL MU MUERR MUERR_VPEC\n')
+        file.writelines(f'SN: SN{i} 10 {zi} {zi} {zi} {35. + 5 * np.log10(zi)} 0.1 0.01\n' for i, zi in enumerate(z))
+    nsn = len(z)
+    if covariance is None:
+        covariance = np.eye(nsn) * 1e-4
+    precision = np.linalg.inv(covariance)
+    np.savez(data_dir / UniteSNLikelihood.covariance_file, np.array(nsn), precision[np.triu_indices(nsn)], allow_pickle=False)
+
+
 _CASES = [
     (PantheonSNLikelihood, _make_pantheon),
     (PantheonPlusSNLikelihood, _make_pantheonplus),
@@ -102,6 +117,7 @@ _CASES = [
     (Union3p1SNLikelihood, _make_union3p1),
     (DESY5v1SNLikelihood, _make_des),
     (DESY5DovekieSNLikelihood, _make_des_dovekie),
+    (UniteSNLikelihood, _make_unite),
 ]
 
 
@@ -152,6 +168,31 @@ def test_des_dovekie_precision(tmp_path):
     assert len(like.light_curve_params['zHD']) == len(z)
     # The .npz array already *is* the precision matrix (no inversion needed/added).
     np.testing.assert_allclose(like.precision, np.eye(len(z)) * 1e4)
+
+
+def test_unite_zrange(tmp_path):
+    """UniteSNLikelihood inverts its .npz precision matrix back to the covariance, so that a ``zrange`` cut
+    masks the covariance (not its inverse), and the precision is the inverse of the masked covariance."""
+    z = np.linspace(0.005, 0.8, 6)
+    nsn = len(z)
+    # Non-diagonal covariance: masking the precision instead would give a different answer.
+    covariance = 1e-4 * (np.eye(nsn) + 0.5 * np.exp(-np.abs(np.subtract.outer(z, z)) / 0.2))
+    _make_unite(tmp_path, z, covariance=covariance)
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
+    like = UniteSNLikelihood(data_dir=str(tmp_path), cosmo=cosmo, zrange=(0.01, None))
+
+    mask = z >= 0.01
+    assert len(like.light_curve_params['zHD']) == mask.sum() == nsn - 1
+    np.testing.assert_allclose(like.covariance, covariance[np.ix_(mask, mask)], rtol=1e-10)
+    np.testing.assert_allclose(like.precision, np.linalg.inv(covariance[np.ix_(mask, mask)]), rtol=1e-8)
+
+
+def test_unite_no_data_dir(monkeypatch, tmp_path):
+    """Without data_dir (and no installer entry), UniteSNLikelihood raises a clear error rather than a missing-file one."""
+    monkeypatch.setenv('DESILIKE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('DESILIKE_INSTALL_DIR', str(tmp_path))
+    with pytest.raises(ValueError, match='requires data_dir'):
+        UniteSNLikelihood()
 
 
 def test_pantheonplusshoes_calibrator(tmp_path):
@@ -206,6 +247,8 @@ if __name__ == '__main__':
         test_pantheonplus_zcut(Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_des_dovekie_precision(Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_unite_zrange(Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_pantheonplusshoes_calibrator(Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:

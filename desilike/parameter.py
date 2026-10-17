@@ -505,6 +505,73 @@ class Variable(Node):
         return self._name
 
 
+class Constraint(Variable):
+    """Violation of a calculator's valid region, traced in the graph like any derived output.
+
+    A calculator declares it in ``__init__`` (``self.training_range = Constraint('training_range')``)
+    and sets its value in ``__call__``: ``0`` inside the region where the calculator is valid,
+    a positive distance outside (in the calculator's own units, e.g. distance outside an emulator's
+    training box in units of the box width).  The calculator itself stays finite outside; the
+    :class:`~desilike.base.Posterior` turns the violation into a hard wall (``-inf``) or a soft
+    penalty ``-1/2 (value / scale)^2``, according to the active
+    :func:`~desilike.context.override` settings.  ``get_params(graph, filter='constraint')`` lists the constraints of a graph.
+
+    Parameters
+    ----------
+    name : str
+        Name, with an optional namespace (``'LRG1.training_range'``).
+    scale : float
+        Width of the soft penalty, in the units of the value.
+    description : str, optional
+        What the constraint is, for listings.
+    """
+
+    def __init__(self, name=None, scale=1., description=None, value=0., latex=None, namespace=None, basename=None, shape=None, derived=True):
+        # always derived: a constraint is an output of the calculator, never an input
+        super().__init__(name=name, value=value, derived=True, latex=latex, namespace=namespace, basename=basename, shape=shape)
+        self._scale = float(scale)
+        self._description = description
+
+    @property
+    def scale(self):
+        return self._scale
+
+    @property
+    def description(self):
+        return self._description
+
+    def __getstate__(self, to_file=False):
+        state = super().__getstate__(to_file=to_file)
+        if not to_file:
+            state.update(scale=self._scale, description=self._description)
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        if 'attrs' not in state:
+            self._scale = float(state.get('scale', 1.))
+            self._description = state.get('description', None)
+
+    def clone(self, **kwargs):
+        """Return a copy with selected attributes overridden."""
+        state = self.__getstate__()
+        state.update(kwargs)
+        return Constraint(**state)
+
+    def tree_flatten(self):
+        return [self._value], (self._name, self._derived, self._latex, self.shape, self._scale, self._description)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj._name, obj._derived, obj._latex, obj.shape, obj._scale, obj._description = aux
+        obj._value = children[0]
+        return obj
+
+    def __repr__(self):
+        return f'Constraint({self._name!r}, scale={self._scale!r})'
+
+
 class ParameterPrior:
     """1D prior distribution.
 
@@ -1206,6 +1273,35 @@ def _cumsize_params(params):
     return np.cumsum([0] + [param.size for param in params])
 
 
+def _flat_to_dict(sample, varied_params):
+    """Convert a flat ``(ndim,)`` array to a ``{name: shaped_array}`` dict.
+
+    Parameters
+    ----------
+    sample : numpy.ndarray, shape (ndim,)
+    varied_params : VariableCollection
+
+    Returns
+    -------
+    dict
+        Maps each parameter name to an array of shape ``param.shape``, or a
+        scalar when ``param.shape`` is empty.  The values keep the dtype of
+        *sample* (so this stays JAX-traceable when *sample* is a tracer).
+    """
+    cumsize = _cumsize_params(varied_params)
+    result = {}
+    for i, param in enumerate(varied_params):
+        chunk = sample[cumsize[i]:cumsize[i + 1]]
+        result[param.name] = chunk.reshape(param.shape) if param.shape else chunk[0]
+    return result
+
+
+def _dict_to_flat(sample, varied_params):
+    """Inverse of :func:`_flat_to_dict`: ``{name: value}`` -> flat ``(ndim,)`` JAX array, in the
+    order of *varied_params*."""
+    return jnp.concatenate([jnp.atleast_1d(jnp.ravel(jnp.asarray(sample[param.name]))) for param in varied_params])
+
+
 @register_type
 class VariableCollection:
     """Ordered collection of Variable (or Parameter) instances.
@@ -1469,6 +1565,7 @@ class VariableCollection:
 jax.tree_util.register_pytree_node(VariableCollection, lambda vc: vc.tree_flatten(), VariableCollection.tree_unflatten)
 
 
+
 def expand_dict(di, names):
     """Expand a (possibly wildcard) dict to cover all *names*.
 
@@ -1509,8 +1606,8 @@ def truncate_priors(params, ranges):
 
     Shared backend of the emulator-backed calculators' ``truncate_priors`` classmethods
     (:meth:`~desilike.theories.primordial_cosmology.ACECosmology.truncate_priors`, the comet and
-    jaxeffort theories): outside their training ranges those calculators NaN-mask their results
-    (which :class:`~desilike.base.Posterior` maps to ``-inf``) — an effective prior truncation
+    jaxeffort theories): outside their training ranges those calculators violate their training-range
+    :class:`Constraint` (``-inf`` in the :class:`~desilike.base.Posterior` for samplers) — an effective prior truncation
     regardless; this makes it explicit, so prior draws (e.g. the initial particles of
     nested / SMC samplers) always land at a finite log-likelihood.
 

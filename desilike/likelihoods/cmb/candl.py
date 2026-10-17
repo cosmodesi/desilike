@@ -481,10 +481,10 @@ _PLA_BASELINE_URL = ('https://pla.esac.esa.int/pla/aio/product-action'
 _CLIK_TAR_PATHS = {
     'plik_rd12_HM_v22_TT.clik':                          'baseline/plc_3.0/hi_l/plik/',
     'plik_rd12_HM_v22b_TTTEEE.clik':                     'baseline/plc_3.0/hi_l/plik/',
-    'plik_lite_v22_TT.clik':                             'baseline/plc_3.0/hi_l/plik_lite_v22/',
-    'plik_lite_v22_TTTEEE.clik':                         'baseline/plc_3.0/hi_l/plik_lite_v22/',
-    'commander_dx12_v3_2_29.clik':                        'baseline/plc_3.0/lo_l/commander/',
-    'simall_100x143_offdiag_EE_Aplanck_B.clik':          'baseline/plc_3.0/lo_l/simall/',
+    'plik_lite_v22_TT.clik':                             'baseline/plc_3.0/hi_l/plik_lite/',
+    'plik_lite_v22_TTTEEE.clik':                         'baseline/plc_3.0/hi_l/plik_lite/',
+    'commander_dx12_v3_2_29.clik':                        'baseline/plc_3.0/low_l/commander/',
+    'simall_100x143_offlike5_EE_Aplanck_B.clik':         'baseline/plc_3.0/low_l/simall/',
 }
 
 
@@ -684,6 +684,8 @@ def _install_clik(installer, installer_section, clik_basename):
         with tarfile.open(tar_path, 'r:gz') as tar:
             members = [m for m in tar.getmembers()
                        if m.name == prefix.rstrip('/') or m.name.startswith(prefix)]
+            if not members:
+                raise ValueError(f'{prefix} not found in {tar_path}; check _CLIK_TAR_PATHS and the class _clik_basename')
             for member in members:
                 member.name = os.path.relpath(member.name, _CLIK_TAR_PATHS[clik_basename])
                 tar.extract(member, data_dir)
@@ -850,12 +852,12 @@ class PlanckPR3LowlTTLikelihood(_BaseClikCandlLikelihood):
 class PlanckPR3LowlEELikelihood(_BaseClikCandlLikelihood):
     r"""Planck PR3 SimAll low-:math:`\ell` EE likelihood (:math:`2 \le \ell \le 29`).
 
-    Wraps ``simall_100x143_offdiag_EE_Aplanck_B.clik`` via ``clipy.clik_candl``.
+    Wraps ``simall_100x143_offlike5_EE_Aplanck_B.clik`` via ``clipy.clik_candl``.
 
     Parameters
     ----------
     clik_file : str, Path, default=None
-        Path to ``simall_100x143_offdiag_EE_Aplanck_B.clik``.  When ``None``
+        Path to ``simall_100x143_offlike5_EE_Aplanck_B.clik``.  When ``None``
         the path saved by :class:`~desilike.install.Installer` is used.
     cosmo : PrimordialCosmology, default=None
         Cosmology calculator.
@@ -870,7 +872,7 @@ class PlanckPR3LowlEELikelihood(_BaseClikCandlLikelihood):
     """
 
     installer_section = 'PlanckPR3LowlEELikelihood'
-    _clik_basename = 'simall_100x143_offdiag_EE_Aplanck_B.clik'
+    _clik_basename = 'simall_100x143_offlike5_EE_Aplanck_B.clik'
 
     def __init__(self, clik_file=None, cosmo=None, params=None, **kwargs):
         if clik_file is None:

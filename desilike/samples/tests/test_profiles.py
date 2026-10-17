@@ -206,6 +206,19 @@ def test_concatenate_best_values():
     np.testing.assert_array_equal(pc.best['p0'], expected)
 
 
+def test_concatenate_keeps_runs_aligned_when_one_has_no_error():
+    """A start whose minimiser returned no covariance has no error: its row is NaN, and the
+    errors of the other starts stay on their own rows (they used to shift up by one)."""
+    p1, p2, p3 = (_make_profiles(n_runs=1) for _ in range(3))
+    p2.error = None
+    pc = Profiles.concatenate(p1, p2, p3)
+    assert pc.error['p0'].shape == (3,)
+    assert pc.error['p0'][0] == p1.error['p0'][0] and np.isnan(pc.error['p0'][1]) and pc.error['p0'][2] == p3.error['p0'][0]
+    for index in range(3):
+        assert pc.choice(index=index, squeeze=True).error is not None
+    pc.to_stats()
+
+
 def test_concatenate_interval():
     p1 = _make_profiles(n_runs=2)
     p2 = _make_profiles(n_runs=3)

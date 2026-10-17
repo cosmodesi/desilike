@@ -2931,7 +2931,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             sn0 = get('sn0') / A_AP / self._nbar
             sn2 = get('sn2') / A_AP / self._nbar * self._fsat * self._sigv**2
             sn1 = get('sn1') / A_AP / (self._nbar * self._knl**2)
-            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, get('ct'),
+            ct = get('ct') / (A**2 * A_AP)
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, ct,
                                sn0, sn2, 1., get('X_FoG')]
 
         else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis

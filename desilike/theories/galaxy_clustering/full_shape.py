@@ -2411,7 +2411,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
       for ``sn0`` and ``sn2``. Its expected size is small, :math:`|s_{n,1}| / (s_{n,2} / 3) \sim 2 \times 10^{-3}`: ``rsat`` and
       ``sigv`` are tied by the virial theorem, :math:`\sigma_v \simeq \sqrt{\Delta / 2} R_\mathrm{vir}`, so
       :math:`r_\mathrm{sat} \ll \sigma_v`.
-    - Not available with the fkptjax pt nor the scaled-powers emulator (both raise if ``sn1`` is used).
+    - Not available with the fkptjax pt (raises if ``sn1`` is used). The h-preconditioned emulator divides it by
+      :math:`(h / h_\\mathrm{fid})^5`, as folps' k^2 shot term, since it is built from the same dilated k and jacobian.
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
 
@@ -6090,11 +6091,9 @@ class FOLPSDEmulator(_ScaledEmulator):
         powers = [self._nuisance_scale_powers.get(name, 0)
                   for name in self._nuisance_names]
         order = self._nuisance_names
+        sn1_power = self._nuisance_scale_powers['alphashot2']
 
         def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, **kwargs):
-            if kwargs.get('sn1', None) is not None:
-                # its h-scaling powers are set for folps' own nuisance vector, which sn1 is not part of
-                raise NotImplementedError('sn1 is not supported by the scaled-powers emulator')
             folpsv2 = _import_folps()
             pars = list(folpsv2.RSDMultipolesPowerSpectrumCalculator(
                 model='FOLPSD').set_bias_scheme(pars=pars, bias_scheme=bias_scheme))
@@ -6105,6 +6104,11 @@ class FOLPSDEmulator(_ScaledEmulator):
                     f'different one would rescale the wrong terms silently.')
             scale = self.emulator_params[h_name].value / h_fid
             pars = [par / scale**power if power else par for par, power in zip(pars, powers)]
+            if kwargs.get('sn1', None) is not None:
+                # sn1 * jac * kap^2 is built at run time from the dilated kap and jac, as folps' k^2 shot term
+                # (alphashot2) is: same powers, s^2 from kap^2 and s^3 from jac / nbar. Left undivided it carries a
+                # spurious (h / h_fid)^5 -- 21% at h = 0.70 -- an h-dependence of the amplitude that is not in the model.
+                kwargs['sn1'] = kwargs['sn1'] / scale**sn1_power
             return FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles(
                 self, pars, 'folps', damping, **kwargs)
 

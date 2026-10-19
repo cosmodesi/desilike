@@ -583,11 +583,23 @@ class Profiler:
             self.profiles.write(self.output_fn)
         return self.profiles
 
-    def covariance(self, **kwargs):
+    def covariance(self, method='jax', step=0.3, niterations=2, **kwargs):
         """Estimate parameter covariance at the best-fit point.
 
-        Uses ``jax.hessian``.  Updates ``error`` in ``self.profiles`` and stores
-        the full matrix in ``self.profiles.attrs['covariance']``.
+        Updates ``error`` in ``self.profiles`` and stores the full matrix in ``self.profiles.attrs['covariance']``.
+
+        Parameters
+        ----------
+        method : str, default='jax'
+            ``'jax'``: ``jax.hessian`` of :math:`\\chi^2`. ``'finite'``: central finite differences with steps of
+            ``step`` times the parameter errors -- for a :math:`\\chi^2` that is rough at small steps, e.g. an emulator
+            whose output carries rounding noise, where an analytic or small-step Hessian picks up the noise
+            (measured on comet: Minuit's HESSE errors 2-4 times too small).
+        step : float, default=0.3
+            For ``method='finite'``: finite-difference step, in units of each parameter's error.
+        niterations : int, default=2
+            For ``method='finite'``: the first pass steps on the errors already in ``self.profiles`` (Minuit's, after
+            :meth:`maximize`), each further pass on the errors of the previous one.
         """
         if self.profiles is None or self.profiles.best is None:
             self.maximize()
@@ -600,8 +612,13 @@ class Profiler:
         ])
         best_rescaled = np.asarray(self.conditioner.inverse(best_orig))
 
-        # Compute Hessian of χ² w.r.t. conditioned params via JAX
-        hessian = np.asarray(jax.hessian(self._jit_chi2)(best_rescaled))
+        if method == 'jax':
+            # Hessian of χ² w.r.t. conditioned params via JAX
+            hessian = np.asarray(jax.hessian(self._jit_chi2)(best_rescaled))
+        elif method == 'finite':
+            hessian = self._finite_difference_hessian(best_orig, best_rescaled, argmax, step=step, niterations=niterations)
+        else:
+            raise ValueError(f"method must be 'jax' or 'finite', got {method!r}")
 
         try:
             cov_rescaled = np.linalg.inv(0.5 * hessian)
@@ -633,6 +650,51 @@ class Profiler:
         if self.output_fn is not None and self.mpicomm.rank == 0:
             self.profiles.write(self.output_fn)
         return self.profiles
+
+    def _finite_difference_hessian(self, best_orig, best_rescaled, argmax, step=0.3, niterations=2):
+        """Central finite-difference Hessian of χ² w.r.t. conditioned params at *best_rescaled*, with steps of *step*
+        times the errors, refined *niterations* times (see :meth:`covariance`)."""
+        nparams = best_rescaled.size
+        # first-pass errors in conditioned space: those in self.profiles (Minuit's), mapped through the conditioner
+        error_orig = None
+        if self.profiles.error is not None:
+            error_orig = np.concatenate([np.asarray(self.profiles.error[name][argmax]).ravel() for name in self.varied_params.names()])
+        error_rescaled = np.ones(nparams)
+        if error_orig is not None:
+            for param_idx in range(nparams):
+                if np.isfinite(error_orig[param_idx]) and error_orig[param_idx] > 0.:
+                    shifted = best_orig.copy()
+                    shifted[param_idx] += error_orig[param_idx]
+                    error_rescaled[param_idx] = np.linalg.norm(np.asarray(self.conditioner.inverse(shifted)) - best_rescaled)
+
+        def chi2(values):
+            return float(self._jit_chi2(values))
+
+        chi2_center = chi2(best_rescaled)
+        for iteration in range(niterations):
+            steps = step * error_rescaled
+            hessian = np.zeros((nparams, nparams))
+            for param_idx in range(nparams):
+                shift = np.zeros(nparams)
+                shift[param_idx] = steps[param_idx]
+                hessian[param_idx, param_idx] = (chi2(best_rescaled + shift) - 2. * chi2_center + chi2(best_rescaled - shift)) / steps[param_idx]**2
+                for other_idx in range(param_idx + 1, nparams):
+                    other_shift = np.zeros(nparams)
+                    other_shift[other_idx] = steps[other_idx]
+                    corners = [chi2(best_rescaled + shift + other_shift), chi2(best_rescaled + shift - other_shift),
+                               chi2(best_rescaled - shift + other_shift), chi2(best_rescaled - shift - other_shift)]
+                    hessian[param_idx, other_idx] = hessian[other_idx, param_idx] = \
+                        (corners[0] - corners[1] - corners[2] + corners[3]) / (4. * steps[param_idx] * steps[other_idx])
+            if not np.all(np.isfinite(hessian)):
+                self.logger.warning('Non-finite chi2 in the finite-difference Hessian (a step crossed a bound?).')
+                break
+            try:
+                error_new = np.sqrt(np.diag(np.linalg.inv(0.5 * hessian)))
+            except np.linalg.LinAlgError:
+                break
+            valid = np.isfinite(error_new) & (error_new > 0.)
+            error_rescaled = np.where(valid, error_new, error_rescaled)
+        return hessian
 
     def interval(self, params=None, cl=1, niterations=1, xtol=1e-3, **kwargs):
         """Compute 1-D confidence intervals via profile-likelihood bisection.

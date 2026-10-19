@@ -33,6 +33,19 @@ from ..parameter import Parameter, VariableCollection
 from ..install import Installer
 
 
+# cosmoprimo compiles its run-time checks into traced code as `jax.debug.callback`: a host round trip
+# at every evaluation, per point of a vmapped batch, e.g. the "EisensteinHuEngine cannot cope with
+# massive neutrinos" warning of every analytic-core clone in ScalingScalarsEmulator. Keep errors only
+# (e.g. interpolation bounds) by default; COSMOPRIMO_EXCEPTION_CALLBACKS=warning restores the warnings.
+if 'COSMOPRIMO_EXCEPTION_CALLBACKS' not in os.environ:
+    try:
+        from cosmoprimo.jax import set_exception_callbacks
+    except ImportError:  # cosmoprimo predating the switch
+        pass
+    else:
+        set_exception_callbacks(level='error')
+
+
 _COORDS = ['z', 'k', 'r']
 
 
@@ -1173,6 +1186,32 @@ def _warn_priors_beyond_ranges(params, ranges):
                           f'training range ({low}, {high}): samples outside violate its ace_range constraint (an effective prior truncation for samplers)')
 
 
+def _clip_to_ranges(values, ranges):
+    """Clip *values* to the emulators' training *ranges*.
+
+    Parameters
+    ----------
+    values : dict
+        Parameter values, by name; those without a range pass through.
+    ranges : dict
+        ``{name: (low, high)}``, as :attr:`ACECosmology._param_clip_ranges`.
+
+    Returns
+    -------
+    clipped : dict
+        *values*, each one with a range clipped into it.
+    violations : dict
+        For each name with a range, the distance outside it, in units of its width (0 inside).
+    """
+    clipped, violations = dict(values), {}
+    for name, value in values.items():
+        if name in ranges:
+            low, high = ranges[name]
+            violations[name] = (jnp.maximum(low - value, 0.) + jnp.maximum(value - high, 0.)) / (high - low)
+            clipped[name] = jnp.clip(value, low, high)
+    return clipped, violations
+
+
 def _add_h_from_H0(ranges, replace):
     """Report an ``H0`` range as ``h`` as well, scaled by 1/100.
 
@@ -1643,6 +1682,9 @@ class ACECosmology(PrimordialCosmology):
             # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
             self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+        # The BAO filter runs on ACE whatever the conversion, as CosmoprimoCosmology's runs on its own engine.
+        self._filter_fiducial = _get_fiducial(fiducial).clone(engine='ace')
+        self._filter_params = frozenset(self._filter_fiducial.get_default_params(include_conflicts=True))
         self._bao_filters = {}
 
     def add_requirements(self, requirements):
@@ -1776,48 +1818,54 @@ class ACECosmology(PrimordialCosmology):
     def __call__(self):
         import jaxace
         self._param_values = params = {param.basename: param.value for param in self.params}
+        # Out-of-range guard for packaged emulators: the inputs are clipped to the training ranges
+        # once, here, and everything emulated -- networks, splines, the BAO filter's no-wiggle
+        # reference -- reads the clipped values, so that it all describes one cosmology; the
+        # distance outside the ranges is the `ace_range` Constraint, set at the end of __call__.
+        # The unemulated background (efunc, distances, growth) is exact at the raw values.
+        clip_ranges = self._param_clip_ranges
+        clipped_values, range_violations = _clip_to_ranges(self._param_values, clip_ranges)
         if self._conversion == 'cosmoprimo':
             # Only forward the standard cosmological parameters to cosmoprimo: extra,
             # emulator-specific nuisance inputs (e.g. 'mu1', 'Sigma1', ...) are unknown to
             # it and must be read directly from self._param_values (see get_param below).
             cosmo_params = {name: value for name, value in self._param_values.items() if name in self._cosmoprimo_params}
             cosmoprimo_cosmo = _build_cosmoprimo(self._fiducial, cosmo_params)
+            clipped_cosmo = cosmoprimo_cosmo
+            if range_violations:
+                clipped_cosmo = _build_cosmoprimo(self._fiducial, {name: clipped_values[name] for name in cosmo_params})
 
             def get_param(name):
                 if name in self._param_values and name not in self._cosmoprimo_params:
-                    return self._param_values[name]
+                    return clipped_values[name]
                 if name == 'm_ncdm':
                     name = 'm_ncdm_tot'
-                return cosmoprimo_cosmo[name]
+                return clipped_cosmo[name]
 
         else:
+            clipped_cosmo = None
 
             # Basic conversion
             def get_param(name):
-                if name in self._param_values:
-                    return self._param_values[name]
+                if name in clipped_values:
+                    return clipped_values[name]
                 if name == 'H0':
-                    return 100. * self._param_values['h']
+                    return 100. * clipped_values['h']
                 if name == 'Omega_m':
-                    omega_m = self._param_values.get('omega_cdm', 0.) + self._param_values.get('omega_b', 0.) + self._param_values.get('m_ncdm', 0.) / 93.14
-                    return omega_m / self._param_values['h'] ** 2
+                    omega_m = clipped_values.get('omega_cdm', 0.) + clipped_values.get('omega_b', 0.) + clipped_values.get('m_ncdm', 0.) / 93.14
+                    return omega_m / clipped_values['h'] ** 2
                 raise KeyError(f'cannot resolve parameter {name!r}')
 
-        # Out-of-range guard for packaged emulators: clip parameter values to the training
-        # ranges so every internal evaluation (networks, splines, BAO filter) stays finite,
-        # record per-parameter validity, and mask all results to NaN below when invalid.
-        clip_ranges = self._param_clip_ranges
-        range_violations = {}
-        unclipped_get_param = get_param
         if clip_ranges:
+            unclipped_get_param = get_param
 
             def get_param(name):
-                value = unclipped_get_param(name)
-                if name in clip_ranges:
-                    low, high = clip_ranges[name]
-                    range_violations[name] = (jnp.maximum(low - value, 0.) + jnp.maximum(value - high, 0.)) / (high - low)
-                    value = jnp.clip(value, low, high)
-                return value
+                # A name the inputs do not carry (e.g. h when theta_MC_100 is sampled) is derived,
+                # so clipped here, by the name it is asked under; its violation is counted once.
+                clipped, violations = _clip_to_ranges({name: unclipped_get_param(name)}, clip_ranges)
+                for violated in violations:
+                    range_violations.setdefault(violated, violations[violated])
+                return clipped[name]
 
         jaxace_cosmo = {}
         for jaxace_name, name in _CONVERSION_JAXACE.items():
@@ -1940,21 +1988,16 @@ class ACECosmology(PrimordialCosmology):
                     k_fixed = np.geomspace(1e-5, 50., 300)
                     pk_fixed = _interp_loglog(k_fixed, k_grid / h, (pk * h**3).T)
                     pk_interp = PowerSpectrumInterpolator1D(k_fixed, pk_fixed, **_kw_pk)
-                    filter_cosmo = cosmoprimo_cosmo if self._conversion == 'cosmoprimo' else None
-                    filter_cosmo_fid = self._fiducial if self._conversion == 'cosmoprimo' else None
-
-                    def fiducial_pk_interp(pk_interp=pk_interp, k_fixed=k_fixed, z=z,
-                                           filter_cosmo_fid=filter_cosmo_fid):
-                        # the same fixed grid the emulated spectrum was resampled onto, so the
-                        # filter is prepared on the fiducial and called on every point after
-                        if filter_cosmo_fid is None:
-                            return pk_interp
-                        return pk_interp.clone(
-                            pk=filter_cosmo_fid.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
-
-                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk_interp,
-                                                  engine=spec['static']['engine'],
-                                                  cosmo=filter_cosmo, cosmo_fid=filter_cosmo_fid)
+                    # The filter runs on ACE: the BAO extrema are located on the fiducial's ACE spectrum, and the
+                    # r_drag rescaling compares two ACE r_drag. The point cosmology is the clipped one, that of the
+                    # emulated pk: at a raw n_s far outside the ranges the Eisenstein-Hu no-wiggle reference the
+                    # filter divides by would make it return NaN.
+                    filter_cosmo = _build_cosmoprimo(self._filter_fiducial, {name: value for name, value in clipped_values.items()
+                                                                             if name in self._filter_params})
+                    # the filter is built once, on the fiducial spectrum, on the same grid
+                    fiducial_pk = lambda: pk_interp.clone(pk=self._filter_fiducial.get_fourier().pk_interpolator(**_kw_pk)(k_fixed, z))
+                    bao_filter = self._bao_filter(spec_key, pk_interp, fiducial_pk, engine=spec['static']['engine'],
+                                                  cosmo=filter_cosmo, cosmo_fid=self._filter_fiducial)
                     result = bao_filter.smooth_pk_interpolator()(spec['k']).T
                 else:
                     result = _interp_loglog(spec['k'], k_grid / h, (pk * h**3).T).T

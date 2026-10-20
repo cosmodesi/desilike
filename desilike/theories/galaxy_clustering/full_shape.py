@@ -254,33 +254,34 @@ def get_nthreads(nthreads=None):
 
 
 def get_physical_stochastic_settings(tracer=None):
-    r"""Per-tracer satellite fraction ``fsat``, velocity dispersion ``sigv`` and satellite radius ``rsat`` (both Mpc/h) for the
-    physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rsat``: the LRG value).
+    r"""Per-tracer satellite fraction ``fsat``, velocity dispersion ``sigv`` and halo virial radius ``rvir`` (both Mpc/h) for the
+    physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rvir``: the LRG value).
 
-    ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``); the isotropic :math:`k^2` term ``sn1`` of
-    :class:`FOLPSTracerSpectrum2Poles` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`, :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`
-    (prior :math:`\mathcal{N}(0, 2^2)`). ``rsat`` uses the same halo masses and redshifts as ``sigv`` (log M = 13, 13, 12, 12.7
-    and z = 0.2, 0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO).
+    ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``), ``rvir`` the isotropic :math:`k^2` term ``sn1`` of
+    :class:`FOLPSTracerSpectrum2Poles`; both use the same halo masses and redshifts (log M = 13, 13, 12, 12.7 and z = 0.2,
+    0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO). The isotropic :math:`k^2` dependence of the stochastic power comes from the halo scale
+    (exclusion, higher-derivative and nonlinear bias, for centrals as well as satellites), not only from the satellite profile:
+    hence the virial radius of the host, without ``fsat``.
     """
-    def get_satellite_radius(logM, z, Omega_m=0.315):
-        r"""Satellite radius :math:`r_\mathrm{sat}` [Mpc/h] of a halo of mass :math:`10^{\log M} M_\odot/h` at redshift *z*:
-        a fraction of the virial radius, :math:`0.55 \times 0.163 \times 10^{(\log M - 12) / 3} (1 + z) / E(z)^{2/3}`, with
-        :math:`E(z)` of a flat :math:`\Lambda\mathrm{CDM}` background (*Omega_m*) -- fixed per tracer, like ``sigv``."""
+    def get_virial_radius(logM, z, Omega_m=0.315):
+        r"""Comoving virial radius :math:`R_\mathrm{vir}` [Mpc/h] of a halo of mass :math:`10^{\log M} M_\odot/h` at redshift *z*:
+        :math:`0.163 \times 10^{(\log M - 12) / 3} (1 + z) / E(z)^{2/3}`, with :math:`E(z)` of a flat :math:`\Lambda\mathrm{CDM}`
+        background (*Omega_m*) -- fixed per tracer, like ``sigv``."""
         efunc = (Omega_m * (1. + z)**3 + 1. - Omega_m)**0.5
-        return 0.55 * 0.163 * 10**((logM - 12.) / 3.) * (1. + z) / efunc**(2. / 3.)
+        return 0.163 * 10**((logM - 12.) / 3.) * (1. + z) / efunc**(2. / 3.)
 
     if tracer is not None:
         tracer = str(tracer).upper()
-        settings = {'BGS': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.2)**0.5, 'rsat': get_satellite_radius(13., 0.2)},
-                    'LRG': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.8)**0.5, 'rsat': get_satellite_radius(13., 0.8)},
-                    'ELG': {'fsat': 0.06, 'sigv': 150 / 70. * 2.1**0.5, 'rsat': get_satellite_radius(12., 1.1)},
-                    'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5, 'rsat': get_satellite_radius(12.7, 1.4)}}
+        settings = {'BGS': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.2)**0.5, 'rvir': get_virial_radius(13., 0.2)},
+                    'LRG': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.8)**0.5, 'rvir': get_virial_radius(13., 0.8)},
+                    'ELG': {'fsat': 0.06, 'sigv': 150 / 70. * 2.1**0.5, 'rvir': get_virial_radius(12., 1.1)},
+                    'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5, 'rvir': get_virial_radius(12.7, 1.4)}}
         try:
             settings = settings[tracer]
         except KeyError as exc:
             raise ValueError(f'unknown tracer: {tracer}, please use any of {list(settings.keys())}') from exc
     else:
-        settings = {'fsat': 0.1, 'sigv': 5., 'rsat': get_satellite_radius(13., 0.8)}
+        settings = {'fsat': 0.1, 'sigv': 5., 'rvir': get_virial_radius(13., 0.8)}
     return settings
 
 
@@ -1075,7 +1076,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, params=None, **kwargs):
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1092,7 +1093,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = float(nbar)
@@ -1287,7 +1288,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, params=None, **kwargs):
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1304,7 +1305,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = float(nbar)
@@ -2392,25 +2393,24 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     sigv : float, default=None
         Velocity dispersion for the physical stochastic terms.  Defaults to
         ``get_physical_stochastic_settings()['sigv']``.
-    rsat : float, default=None
-        Satellite radius [Mpc/h] (the isotropic stochastic term ``sn1`` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`,
-        :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`, not by ``rsat``).  Defaults to
-        ``get_physical_stochastic_settings()['rsat']``.
+    rvir : float, default=None
+        Halo virial radius [Mpc/h] normalising the isotropic stochastic term ``sn1``.  Defaults to
+        ``get_physical_stochastic_settings()['rvir']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
 
-    Stochastic terms, physical bases: :math:`P_\mathrm{stoch}(k, \mu) = [s_{n,0} + s_{n,1} f_\mathrm{sat} r_\mathrm{sat}^2 k^2
+    Stochastic terms, physical bases: :math:`P_\mathrm{stoch}(k, \mu) = [s_{n,0} + s_{n,1} R_\mathrm{vir}^2 k^2
     + s_{n,2} f_\mathrm{sat} \sigma_v^2 k^2 \mu^2] / \bar{n}`, each with the AP rescaling of its basis.
 
     - ``sn1``, the isotropic :math:`k^2` term, is **off by default** (fixed at 0), so the baseline is unchanged. It is used only
       when free (a fixed ``sn1`` is ignored, whatever its value); free it to fit
       it (``params={'sn1': {'fixed': False}}``; full_shape's ``theory`` option ``sn1=True`` also marginalises it analytically,
       being linear in the model). Prior :math:`\mathcal{N}(0, 5)`, the width of ``sn2``. At :math:`q_\parallel = q_\perp = 1`
-      it enters the monopole only, :math:`\Delta P_0 = s_{n,1} f_\mathrm{sat} r_\mathrm{sat}^2 k^2 / \bar{n}`.
-    - The halo model predicts :math:`s_{n,1} < 0` (the profile suppresses the 1-halo term), but the prior is centred on 0, as
-      for ``sn0`` and ``sn2``. Its expected size is small, :math:`|s_{n,1}| / (s_{n,2} / 3) \sim 2 \times 10^{-3}`: ``rsat`` and
-      ``sigv`` are tied by the virial theorem, :math:`\sigma_v \simeq \sqrt{\Delta / 2} R_\mathrm{vir}`, so
-      :math:`r_\mathrm{sat} \ll \sigma_v`.
+      it enters the monopole only, :math:`\Delta P_0 = s_{n,1} R_\mathrm{vir}^2 k^2 / \bar{n}`.
+    - The halo model predicts :math:`s_{n,1} < 0` (the profile and exclusion suppress the small-scale power), but the prior is
+      centred on 0, as for ``sn0`` and ``sn2``. Measured in the AbacusHF LRG z = 0.5 boxes (real space,
+      :math:`\bar{n} P_\mathrm{err} = \bar{n} [P_{gg} - P_{gm}^2 / P_{mm}]`): a :math:`k^2` slope of -0.5 (all) to -0.8 (centrals)
+      (Mpc/h)^2, i.e. :math:`s_{n,1} \sim -2.3` to -3.7 in these units (:math:`R_\mathrm{vir}^2 = 0.22` (Mpc/h)^2 for LRG), within the prior.
     - Not available with the fkptjax pt (raises if ``sn1`` is used). The h-preconditioned emulator divides it by
       :math:`(h / h_\\mathrm{fid})^5`, as folps' k^2 shot term, since it is built from the same dilated k and jacobian.
     mu : int, default=6
@@ -2491,7 +2491,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
                 # isotropic k^2 stochastic term, off (fixed at 0) by default; same width as sn2, so that the two scale alike
-                Parameter('sn1', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
+                Parameter('sn1', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
             ]
         else:
             auto_params = [
@@ -2511,7 +2511,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                  use_GTNS=None, redshift_smearing=None, tracers=None, params=None,
                  **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
@@ -2532,7 +2532,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                      fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
+                      fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                       use_GTNS=None, redshift_smearing=None, tracers=None,
                       **kwargs):
         # Non-node setup only.
@@ -2552,9 +2552,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
-        self._rsat = float(rsat) if rsat is not None else settings['rsat']
-        # sn1 (isotropic k^2 stochastic term) in units of 1 / (nbar * k_NL^2), k_NL = 0.3 h/Mpc (local: 0.4 upstream)
-        self._knl = 0.3
+        self._rvir = float(rvir) if rvir is not None else settings['rvir']
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
     def __call__(self):
@@ -2591,7 +2589,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha4 = f**2 * a2t + b1E * f * a4t
             sn0 = self.sn0.value / A_AP / self._nbar
             sn2 = self.sn2.value / A_AP / self._nbar * self._fsat * self._sigv**2
-            sn1 = self.sn1.value / A_AP / (self._nbar * self._knl**2)
+            sn1 = self.sn1.value / A_AP / self._nbar * self._rvir**2
             pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct.value,
                                sn0, sn2, 1., self.X_FoG.value]
 
@@ -2607,7 +2605,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             ct4 = -2. * f**2 * c4
             sn0 = self.sn0.value / self._nbar
             sn2 = self.sn2.value / self._nbar * self._fsat * self._sigv**2
-            sn1 = self.sn1.value / (self._nbar * self._knl**2)
+            sn1 = self.sn1.value / self._nbar * self._rvir**2
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
                                sn0, sn2, 1., self.X_FoG.value]
 
@@ -2969,7 +2967,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
-                      prior_basis='physical_aap', fsat=None, sigv=None, rsat=None,
+                      prior_basis='physical_aap', fsat=None, sigv=None, rvir=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(4, 16, 4),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
                       tracers=None, basis=None, **kwargs):
@@ -4002,7 +4000,7 @@ class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
     """
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
                  use_GTNS=None, tracers=None, params=None, **kwargs):
         if pt is None:
             pt = FKPTJAXPTSpectrum2Poles(**kwargs)
@@ -4348,7 +4346,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         assign_params(self, vc, tracers)
 
     def __post_init__(self, k=None, ells=None, z=None, pt=None, cosmo=None, mu=8, prior_basis='standard',
-                      fsat=None, sigv=None, rsat=None, nbar=1e-4,
+                      fsat=None, sigv=None, rvir=None, nbar=1e-4,
                       model='velocileptors_rept_mnuw0wacdm', fiducial='DESI', **kwargs):
         self.k = self.pt.k
         self.ells = self.pt.ells
@@ -5028,7 +5026,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, rsat=None, backend='jax',
+    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, rvir=None, backend='jax',
                  redshift_smearing=None, conventions=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model,
                                        conventions=conventions)
@@ -5067,7 +5065,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model)
 
-    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, rsat=None, params=None,
+    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, rvir=None, params=None,
                       redshift_smearing=None, conventions=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
@@ -5484,7 +5482,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rsat=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
                  redshift_smearing=None, conventions=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model,
                                        conventions=conventions)
@@ -5528,7 +5526,7 @@ class COMETTracerSpectrum3Poles(Calculator):
             pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rsat=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
                       redshift_smearing=None, conventions=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)

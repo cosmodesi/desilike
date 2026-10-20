@@ -667,7 +667,7 @@ class TestFOLPS:
                 _compile(FOLPSTracerSpectrum2Poles(k=k, use_GTNS=bad))
 
     def test_sn1(self):
-        """The isotropic stochastic term ``sn1 * k**2 / (nbar * k_NL**2)``, k_NL = 0.3 h/Mpc.
+        """The isotropic stochastic term ``sn1 * rvir**2 * k**2 / nbar`` (physical bases, rvir the host virial radius; ``sn1 * k**2 / nbar`` in the standard one).
 
         Off by default (fixed at 0): bit-identical to the term freed at 0. At the fiducial (q = 1) it shifts the monopole by
         exactly that amount and leaves the quadrupole and hexadecapole alone; away from it, by the mu-integral of the
@@ -679,10 +679,10 @@ class TestFOLPS:
         k = np.linspace(0.02, 0.3, 40)
         nbar, sn1 = 3e-4, 2.
         settings = get_physical_stochastic_settings('LRG')
-        assert np.isclose(settings['rsat'], 0.55 * 0.163 * 10**(1. / 3.) * 1.8 / (0.315 * 1.8**3 + 0.685)**(1. / 3.))
-        assert np.isclose(get_physical_stochastic_settings()['rsat'], settings['rsat'])  # generic default: the LRG value
+        assert np.isclose(settings['rvir'], 0.163 * 10**(1. / 3.) * 1.8 / (0.315 * 1.8**3 + 0.685)**(1. / 3.))
+        assert np.isclose(get_physical_stochastic_settings()['rvir'], settings['rvir'])  # generic default: the LRG value
 
-        for prior_basis, normalization in [('physical_aap', 1. / (nbar * 0.3**2)), ('standard', 1. / nbar)]:
+        for prior_basis, normalization in [('physical_aap', settings['rvir']**2 / nbar), ('standard', 1. / nbar)]:
             theory_off = FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2, 4), nbar=nbar, prior_basis=prior_basis, **settings)
             assert get_params(theory_off)['sn1'].fixed
             poles_off = np.asarray(_compile(theory_off)())
@@ -707,7 +707,7 @@ class TestFOLPS:
             delta = np.asarray(run_free(sn1=sn1, **shift)) - np.asarray(run_free(sn1=0., **shift))
             qpar, qper = float(theory_free.pt.qpar), float(theory_free.pt.qper)
             assert abs(qpar - 1.) > 1e-3
-            amplitude = sn1 / (nbar * 0.3**2) * k**2
+            amplitude = sn1 * settings['rvir']**2 / nbar * k**2
             np.testing.assert_allclose(delta[0], amplitude * (1. / qpar**2 + 2. / qper**2) / 3., rtol=1e-8)
             np.testing.assert_allclose(delta[1], amplitude * 2. / 3. * (1. / qpar**2 - 1. / qper**2), rtol=1e-6, atol=1e-10 * amplitude.max())
 

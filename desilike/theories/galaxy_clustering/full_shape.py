@@ -3142,7 +3142,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  use_numba=False, include_neutrino_corrections=False,
                  n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
                  gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
-                 eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
+                 eftde_h1_interp=None, eftde_d0_interp=None, eftde_n3_interp=None, eftde_n5_interp=None,
                  z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                  mg_params_override=None, growth_source='ode', ingredients_provider=None,
@@ -3227,7 +3227,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       use_numba=False, include_neutrino_corrections=False,
                       n_HS=1., beta2=1. / 6., screening=1, omegaBD=0.,
                       gamma_0=0.545454, gamma_a=0., t_k=100., d_s=0.0001,
-                      eftcamb_h1_interp=None, eftcamb_h3_interp=None, eftcamb_h5_interp=None,
+                      eftde_h1_interp=None, eftde_d0_interp=None, eftde_n3_interp=None, eftde_n5_interp=None,
                       z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
                       k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                       mg_params_override=None, growth_source='ode',
@@ -3249,7 +3249,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         self._eds_constant_growth = kernel_mode == 'eds'
         if self._beyond_eds and not self._fkpt_approximation:
             if self._model.upper() == 'HDKI' and (self._mg_variant or '').upper() in ('EFT_DE', 'EFTDE'):
-                raise NotImplementedError('Full EFT_DE kernels require translation of the EFTCAMB interpolators')
+                raise NotImplementedError('Full EFT_DE kernels (fkpt_approximation=False) are not validated for HDKI/EFT_DE: '
+                                          'fkptjax samples the quasi-static source onto its jax grids since 2026-10-22, but the '
+                                          'pole of the quasi-static expression then enters the loop momenta unregularised '
+                                          '(section 4.7 of EFTofDE_parameter_space.md); use fkpt_approximation=True')
             if self._model.upper() == 'HS' and screening:
                 raise NotImplementedError('Full HS kernels currently require screening=0 (NoScreen)')
         self._use_numba = bool(use_numba)
@@ -3261,9 +3264,10 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             omegaBD=float(omegaBD),
         )
         self._eft_kwargs = dict(
-            eftcamb_h1_interp=eftcamb_h1_interp,
-            eftcamb_h3_interp=eftcamb_h3_interp,
-            eftcamb_h5_interp=eftcamb_h5_interp,
+            eftde_h1_interp=eftde_h1_interp,
+            eftde_d0_interp=eftde_d0_interp,
+            eftde_n3_interp=eftde_n3_interp,
+            eftde_n5_interp=eftde_n5_interp,
         )
         self._binning_kwargs = dict(z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
                                      scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_c=float(k_c),
@@ -3369,18 +3373,18 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             )
         out.update(self._mg_params_override)
         if model_u == 'HDKI' and variant_u in ('EFT_DE', 'EFTDE'):
-            required = (
-                'eftcamb_h1_interp',
-                'eftcamb_h3_interp',
-                'eftcamb_h5_interp',
-            )
+            # The source is the finite coefficients (h1, D0, N3, N5), from which fkptjax forms
+            # mu(k, eta) = h1 (D0 + N5 k^2) / (D0 + N3 k^2), smooth where the former h3 = N3 / D0 and
+            # h5 = N5 / D0 have their pole (m_QS^2 = 0) -- the only form since 2026-10-22 (callables of
+            # the h-function form go through fkptjax.ode.eftde_source_from_h).
+            required = ('eftde_h1_interp', 'eftde_d0_interp', 'eftde_n3_interp', 'eftde_n5_interp')
             missing = [name for name in required if out.get(name) is None]
             if missing:
-                # No interpolators were handed in: take them from the template's cosmology.
+                # Not every coefficient was handed in: take the missing ones from the template's cosmology.
                 #
                 # Why here, at call time, and not once in __init__: this node sits below the
-                # cosmology node, and the EFT engines ('mochiclass', 'heftcamb') tabulate h1, h3,
-                # h5 -- the functions that make mu(k, eta) = h1 (1 + k^2 h5) / (1 + k^2 h3) -- for
+                # cosmology node, and the EFT engines ('mochiclass', 'heftcamb') tabulate the
+                # coefficients that make mu(k, eta) for
                 # the cosmology they were just run with. In a fit that cosmology changes at every
                 # step (h, omega_cdm, w0, wa, and the Horndeski coefficients themselves if they are
                 # sampled), so splines built once at the fiducial would freeze mu(k, eta) while
@@ -3393,12 +3397,12 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                 # is a requirements proxy (efunc, distances, ...) and does not expose the EFT
                 # functions; the engine's Background does, through ``eft_interpolators()``, which
                 # returns fkptjax-keyed CubicSplines and raises CosmologyComputationError on a
-                # non-finite h function. Cost: one background evaluation on a 512-point eta grid,
+                # non-finite coefficient. Cost: one background evaluation on a 512-point eta grid,
                 # negligible against the kernel ODE solve that follows.
                 #
-                # Explicit ``eftcamb_h*_interp`` (constructor or mg_params_override) still win:
-                # they are the fixed-cosmology cross-check path, and a partial override keeps
-                # only what it names.
+                # Explicit coefficients (constructor or mg_params_override) still win: that is the
+                # fixed-cosmology cross-check path; whatever they leave out is completed with the
+                # cosmology's.
                 background = None
                 for candidate in (getattr(self.template.cosmo, '_cosmo', None),
                                   getattr(self.template.cosmo, 'cosmo', None),
@@ -3706,8 +3710,8 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
             if model_u == 'HDKI' and variant_u in ('EFT_DE', 'EFTDE'):
                 raise NotImplementedError(
                     "fkpt_approximation=False's bispectrum A/B feed does not yet support "
-                    "HDKI/EFT_DE: its eftcamb_h1_interp/h3/h5 convention needs translating "
-                    "to pack_constants_jnp's eftde_*_grid inputs separately."
+                    "HDKI/EFT_DE: its eftde_*_interp callables need sampling onto "
+                    "pack_constants_jnp's eftde_*_grid inputs (ode.ModelDerivatives.eftde_grids) here."
                 )
 
             # `self._P`/`self._xstop` are built ONCE in `__call__` and carried as genuine

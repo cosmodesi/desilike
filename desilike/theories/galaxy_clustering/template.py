@@ -1789,12 +1789,20 @@ class ScalingScalars(Calculator):
         Cosmology dependency (fit time only); a fresh one is created by default.
     engine : str, default='class'
         Engine for the internally-created cosmology (ignored when *cosmo* is given).
+    # IDE Modification: adding the growth mode 
+    growth_mode : str, default='ptt_pk'
+        How ``f`` is obtained, as in :class:`DirectSpectrum2Template`: ``'ptt_pk'`` from the
+        velocity power (``sigma8(theta_cb) / sigma8(delta_cb)``), ``'background'`` from the
+        engine's background growth rate (the IDE engines). It must be the template's own, since
+        the exact-scaling emulators divide the template's ``f`` out at training and multiply this
+        provider's back in at run time; ``'auto'`` resolves it from the engine as the template does.
     """
 
-    def __init__(self, z=1., fiducial='DESI', engine='class', cosmo=None):
+    def __init__(self, z=1., fiducial='DESI', engine='class', cosmo=None, growth_mode='ptt_pk'):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
+        self._growth_mode = _resolve_growth_mode(growth_mode, _cosmo_engine_name(cosmo, default=engine))
         # The analytic core reads these parameter values directly, so share the cosmology's
         # Parameter objects with this node: the compiled graph then threads the current
         # (traced) values here too.  Reading another node's params through .value is stale
@@ -1812,21 +1820,27 @@ class ScalingScalars(Calculator):
     # global Lagrange in ln R.  Covers h / h_fid in ~[0.8, 1.25].
     _sigma_r_nodes = tuple(8. * np.linspace(0.8, 1.25, 5))
 
-    def __post_init__(self, z=1., fiducial='DESI', engine='class', cosmo=None):
+    def __post_init__(self, z=1., fiducial='DESI', engine='class', cosmo=None, growth_mode='ptt_pk'):
         from cosmoprimo import constants
         self.z = float(z)
-        self.cosmo.add_requirements({
+        requirements = {
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}, {'of': 'theta_cb', 'z': self.z}],
             'fourier.sigma_rz': [{'of': 'delta_cb', 'z': self.z, 'r': np.array(self._sigma_r_nodes)}],
             'background.efunc': [{'z': self.z}],
             'background.comoving_transverse_distance': [{'z': self.z}],
-        })
+        }
+        if self._growth_mode == 'background':
+            requirements['background.growth_rate'] = [{'z': self.z}]
+        self.cosmo.add_requirements(requirements)
         self._fiducial = _get_fiducial(fiducial)
         self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
         self._DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
         fourier = self._fiducial.get_fourier()
         self._sigma8_fid = float(fourier.sigma8_z(self.z, of='delta_cb'))
-        self._f_fid = float(fourier.sigma8_z(self.z, of='theta_cb')) / self._sigma8_fid
+        if self._growth_mode == 'background':   # the anchor in the same definition as f below
+            self._f_fid = float(self._fiducial.get_background().growth_rate(self.z))
+        else:
+            self._f_fid = float(fourier.sigma8_z(self.z, of='theta_cb')) / self._sigma8_fid
         self._h_fid = float(self._fiducial.h)
         self._logA_fid = float(np.log(1e10 * self._fiducial.A_s))
         self._ref_fid = {name: float(value) for name, value
@@ -1836,8 +1850,12 @@ class ScalingScalars(Calculator):
         from cosmoprimo import constants
         fourier = self.cosmo.get_fourier()
         self.sigma8 = fourier.sigma8_z(of='delta_cb', z=self.z)
-        self.fsigma8 = fourier.sigma8_z(of='theta_cb', z=self.z)
-        self.f = self.f0 = self.fsigma8 / self.sigma8
+        if self._growth_mode == 'background':   # IDE engines: f as the template computes it
+            self.f = self.f0 = self.cosmo.get_background().growth_rate(z=self.z)
+            self.fsigma8 = self.f * self.sigma8
+        else:
+            self.fsigma8 = fourier.sigma8_z(of='theta_cb', z=self.z)
+            self.f = self.f0 = self.fsigma8 / self.sigma8
         DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
         DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         self.qpar = DH / self._DH_fid
@@ -1887,7 +1905,7 @@ class ScalingScalars(Calculator):
         children = [self.c_qpar, self.c_qper, self.c_D, self.c_f, self.c_DM, self.sigma_mpc,
                     self.qpar, self.qper, self.f, self.f0, self.sigma8, self.fsigma8,
                     self.sigma8_fid, self.h]
-        return children, {'z': self.z}
+        return children, {'z': self.z, 'growth_mode': self._growth_mode}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
@@ -1896,6 +1914,7 @@ class ScalingScalars(Calculator):
          obj.qpar, obj.qper, obj.f, obj.f0, obj.sigma8, obj.fsigma8, obj.sigma8_fid,
          obj.h) = children
         obj.z = aux['z']
+        obj._growth_mode = aux.get('growth_mode', 'ptt_pk')
         return obj
 
     @classmethod
@@ -1934,7 +1953,8 @@ class ScalingScalarsEmulator(CalculatorEmulator):
         # provider names its graph never exposed.  A clone rather than the object itself --
         # one cosmology node shared by two separately compiled graphs is its own bug.
         return ScalingScalars(z=template.z, fiducial=template._fiducial,
-                              cosmo=template.cosmo.clone())
+                              cosmo=template.cosmo.clone(),
+                              growth_mode=getattr(template, '_growth_mode', 'ptt_pk'))
 
     #: child order of ``ScalingScalars.tree_flatten``
     _CORRECTIONS = ('c_qpar', 'c_qper', 'c_D', 'c_f', 'c_DM')
@@ -1971,7 +1991,8 @@ class ScalingScalarsEmulator(CalculatorEmulator):
             from cosmoprimo import Cosmology
 
             calculator = self._calculator_cls(z=self._anchors['z'],
-                                              fiducial=Cosmology.from_state(self._anchors['fiducial']))
+                                              fiducial=Cosmology.from_state(self._anchors['fiducial']),
+                                              growth_mode=self._anchors.get('growth_mode', 'ptt_pk'))
         deployed = super().to_calculator(calculator=calculator, center=center)
         # The analytic core reads the fiducial constants `__post_init__` latches -- `_fiducial`,
         # `_h_fid`, `_sigma8_fid`, `_DM_fid`, the sigma_R nodes -- and the base runs no
@@ -2002,6 +2023,7 @@ class ScalingScalarsEmulator(CalculatorEmulator):
                          'fiducial': root._fiducial.__getstate__(),
                          'sigma8_fid': float(root._sigma8_fid),
                          'f_fid': float(root._f_fid), 'logA_fid': float(root._logA_fid),
+                         'growth_mode': root._growth_mode,
                          'defaults': {name: float(np.sum(np.atleast_1d(
                              root.cosmo.params[name].value)))
                              for name in root.cosmo.params.names()}}

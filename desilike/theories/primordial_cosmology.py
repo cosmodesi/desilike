@@ -887,7 +887,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 self._cosmo = _build_cosmoprimo(self._fiducial, params, lensing=lensing,
                                                 calc_params=calc_params, extra_params=extra_params)
                 self._run_requirements(params)
-            except (CosmologyInputError, CosmologyComputationError):
+            except (CosmologyInputError, CosmologyComputationError) as exc:
                 # Unphysical or numerically-pathological input (e.g. omega_cdm < 0, or a
                 # solver failure raised lazily from cosmo.get_fourier()/get_background()
                 # below): external engines run through pure_callback with concrete
@@ -900,6 +900,11 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 # since that is the only place able to observe the outer trace status).
                 if not getattr(self, '_is_tracing', False):
                     raise
+                # failure log: the NaN below becomes -inf in a likelihood (or a dropped emulator
+                # node), which is otherwise silent
+                self.logger.warning('%s at %s: %s; returning NaN (-inf likelihood)', type(exc).__name__,
+                                    {name: float(np.asarray(value)) for name, value in params.items()
+                                     if np.ndim(value) == 0}, exc)
                 # valid; used only for correctly-shaped placeholders below, so must still
                 # support 'lensing'/accuracy overrides or _run_requirements' lensed_cl/
                 # lens_potential_cl call raises instead of the NaN fallback taking effect.

@@ -13,6 +13,6 @@ from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, Kai
                          PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
                          FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
                          FOLPSPTSpectrum3Poles, FOLPSTracerSpectrum3Poles, RedshiftSmearing,
-                         FKPTJAXPTSpectrum2Poles, FKPTJAXIDEPTSpectrum2Poles, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
+                         FKPTJAXPTSpectrum2Poles, FKPTJAXIDEPTSpectrum2Poles, FKPTJAXIDEHybridPTSpectrum2Poles, IDEKernelCoefficients, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
                          JAXEffortPTSpectrum2Poles, JAXEffortTracerSpectrum2Poles, COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
 from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles

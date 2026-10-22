@@ -215,7 +215,10 @@ class CalculatorEmulator(_Emulator):
         # Constraints are derived Variables too, but not outputs to emulate: they are kinked
         # (zero inside, a distance outside), they gate the training nodes instead (see `compute`),
         # and a deployed emulator reports constraints of its own (its trained box).
-        self.derived_names = [param.name for param in self.graph.params if param.derived and not isinstance(param, Constraint)]
+        # Parameters derived by an expression of other parameters (e.g. DS: xi_ds = A_ds / (1 + w0_fld)) are
+        # not emulated either: the graph recomputes them from their inputs, and their value cannot be set.
+        self.derived_names = [param.name for param in self.graph.params if param.derived and not isinstance(param, Constraint)
+                              and getattr(param, '_call_fn', None) is None]
         super().__init__(self.compute, space, **options)
         # Every Parameter the pipeline exposes, kept once.  The emulated calculator has to HOLD
         # the ones it is emulated over, so that `_trace_graph` rediscovers them after the template

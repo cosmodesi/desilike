@@ -1137,7 +1137,8 @@ class TestCOMET:
         P(k): ``NP20`` is the document's SN_2, multiplying k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)],
         so it feeds both of comet's k^2 columns and means the same thing as FOLPSD's ``sn2``.
         B: the pair noise carries a single f mu^2 ``NP0``, as comet's own, without the document's factor 2
-        (which fails the Poisson limit), so it means the same thing as FOLPSD's ``sn0b``, the bispectrum's own shot noise.
+        (which fails the Poisson limit), and it is the power spectrum's ``sn0``, as FOLPSD's P_shot; the constant
+        N^B_0 is FOLPSD's ``sn0b``, the free A_shot / nbar^2.
         The native bases keep comet's own convention.
         """
         from desilike.theories.galaxy_clustering import (COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles,
@@ -1178,13 +1179,13 @@ class TestCOMET:
         assert np.max(np.abs(native[1])) < 1e-9 * np.max(np.abs(native[0])), 'native NP20 leaked into the quadrupole'
 
         # Bispectrum: the pair noise carries a single f mu^2 NP0 (no factor 2: it would fail the Poisson
-        # limit), as FOLPSD's sn0 does -- check the two match (FOLPSD's response is quadratic in sn0,
-        # through its tied constant: take the odd part to isolate the linear piece).
+        # limit), the power spectrum's sn0, as FOLPSD's P_shot -- check the two match. B is linear in it
+        # (the constant is the free sn0b, no longer tied to SN_0^2).
         k3 = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)
         run_b = _compile(COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap'))
         run_bf = _compile(FOLPSTracerSpectrum3Poles(k=k3, nbar=nbar, prior_basis='physical_aap', damping='lor'))
-        comet_np0 = np.asarray(run_b(b1=b1, sn0b=1.)) - np.asarray(run_b(b1=b1))
-        folps_sn0 = 0.5 * (np.asarray(run_bf(b1=b1, sn0b=1.)) - np.asarray(run_bf(b1=b1, sn0b=-1.)))
+        comet_np0 = np.asarray(run_b(b1=b1, sn0=1.)) - np.asarray(run_b(b1=b1))
+        folps_sn0 = np.asarray(run_bf(b1=b1, sn0=1.)) - np.asarray(run_bf(b1=b1))
         # The two codes use different PT for the Z1 P legs, so compare at the lowest k, where
         # they agree best; a factor 2 on either side would put this ratio at ~2 or ~0.5.
         # Checked on (2, 0, 2), not (0, 0, 0): FOLPSD's P-hat term multiplies the full
@@ -1194,28 +1195,26 @@ class TestCOMET:
         ratio = folps_sn0[1, 0] / comet_np0[1, 0]
         assert abs(ratio - 1.) < 0.02, f'COMET and FOLPSD bispectrum pair noise differ: FOLPSD/COMET = {ratio}'
 
-        # The constant is SN_0^2, tied to NP0 as in FOLPSD, so B is quadratic in it with a
-        # k-independent 1/nbar^2 coefficient living only in the (0, 0, 0) multipole.  NB0 is an
-        # extra constant on top, fixed at 0 by default (the document has no free N^B_0).
-        theory_b = COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='physical_aap')
-        assert theory_b.NB0.fixed, 'physical_aap NB0 should be fixed (its SN_0^2 piece comes from NP0)'
+        # B is linear in sn0 (pair noise) and sn0b (constant); the constant A_shot / nbar^2 is k-independent and lives only
+        # in the (0, 0, 0) multipole.
         grid = np.array([-1., -0.5, 0., 0.5, 1.])
-        vander = np.vander(grid, 3)  # [x^2, x, 1]
-        for label, run_shot, name in [('COMET sn0b', run_b, 'sn0b'), ('FOLPSD sn0b', run_bf, 'sn0b')]:
-            poles = np.array([np.asarray(run_shot(b1=b1, **{name: value})) for value in grid])
-            coeff, *_ = np.linalg.lstsq(vander, poles.reshape(len(grid), -1), rcond=None)
-            residual = np.max(np.abs(poles.reshape(len(grid), -1) - vander @ coeff)) / np.max(np.abs(poles))
-            assert residual < 1e-11, f'{label}: B is not quadratic in {name} ({residual})'
-            quadratic = coeff.reshape(3, -1, len(k3))[0]
-            np.testing.assert_allclose(quadratic[0], 1. / nbar**2, rtol=1e-8,
-                                       err_msg=f'{label}: the constant is not SN_0^2 = 1/nbar^2')
-            assert np.max(np.abs(quadratic[1])) < 1e-8 / nbar**2, f'{label}: SN_0^2 leaked into B_202'
+        vander = np.vander(grid, 2)  # [x, 1]
+        for label, run_shot in [('COMET', run_b), ('FOLPSD', run_bf)]:
+            for name in ['sn0', 'sn0b']:
+                poles = np.array([np.asarray(run_shot(b1=b1, **{name: value})) for value in grid])
+                coeff, *_ = np.linalg.lstsq(vander, poles.reshape(len(grid), -1), rcond=None)
+                residual = np.max(np.abs(poles.reshape(len(grid), -1) - vander @ coeff)) / np.max(np.abs(poles))
+                assert residual < 1e-11, f'{label}: B is not linear in {name} ({residual})'
+            constant = np.asarray(run_shot(b1=b1, sn0b=1.)) - np.asarray(run_shot(b1=b1))
+            np.testing.assert_allclose(constant[0], 1. / nbar**2, rtol=1e-8,
+                                       err_msg=f'{label}: the sn0b constant is not A_shot / nbar^2')
+            assert np.max(np.abs(constant[1])) < 1e-8 / nbar**2, f'{label}: the sn0b constant leaked into B_202'
 
-        # The bispectrum's shot noise is its own sn0b, not the power spectrum's sn0: a joint P + B fit does not tie them.
+        # The pair noise is the power spectrum's sn0 (one parameter in a joint P + B fit), the constant sn0b.
         for theory in [COMETTracerSpectrum3Poles(k=k3, pt=False, prior_basis='physical_aap'), FOLPSTracerSpectrum3Poles(k=k3, prior_basis='physical_aap')]:
             basenames = {param.basename for param in get_params(theory)}
-            assert 'sn0b' in basenames and 'sn0' not in basenames, type(theory).__name__
-        assert 'NP0' in {param.basename for param in get_params(COMETTracerSpectrum3Poles(k=k3, pt=False, prior_basis='EggScoSmi+Comet'))}
+            assert {'sn0', 'sn0b', 'snb0'} <= basenames and 'NB0' not in basenames, type(theory).__name__
+        assert {'NP0', 'NB0'} <= {param.basename for param in get_params(COMETTracerSpectrum3Poles(k=k3, pt=False, prior_basis='EggScoSmi+Comet'))}
 
     def test_tracer_bispectrum(self):
         """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""

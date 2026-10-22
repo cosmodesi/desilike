@@ -254,33 +254,37 @@ def get_nthreads(nthreads=None):
 
 
 def get_physical_stochastic_settings(tracer=None):
-    r"""Per-tracer satellite fraction ``fsat``, velocity dispersion ``sigv`` and satellite radius ``rsat`` (both Mpc/h) for the
-    physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rsat``: the LRG value).
+    r"""Per-tracer satellite fraction ``fsat``, velocity dispersion ``sigv`` and halo virial radius ``rvir`` (both Mpc/h) for the
+    physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rvir``: the LRG value).
 
-    ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``); the isotropic :math:`k^2` term ``sn1`` of
-    :class:`FOLPSTracerSpectrum2Poles` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`, :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`
-    (prior :math:`\mathcal{N}(0, 2^2)`). ``rsat`` uses the same halo masses and redshifts as ``sigv`` (log M = 13, 13, 12, 12.7
-    and z = 0.2, 0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO).
+    ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``), ``rvir`` the isotropic :math:`k^2` term ``sn1`` of
+    :class:`FOLPSTracerSpectrum2Poles`; both use the same halo masses and redshifts (log M = 13, 13, 12, 12.7 and z = 0.2,
+    0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO). The isotropic :math:`k^2` dependence of the stochastic power comes from the halo scale
+    (exclusion, higher-derivative and nonlinear bias, for centrals as well as satellites), not only from the satellite profile:
+    hence the virial radius of the host, without ``fsat``.
     """
-    def get_satellite_radius(logM, z, Omega_m=0.315):
-        r"""Satellite radius :math:`r_\mathrm{sat}` [Mpc/h] of a halo of mass :math:`10^{\log M} M_\odot/h` at redshift *z*:
-        a fraction of the virial radius, :math:`0.55 \times 0.163 \times 10^{(\log M - 12) / 3} (1 + z) / E(z)^{2/3}`, with
-        :math:`E(z)` of a flat :math:`\Lambda\mathrm{CDM}` background (*Omega_m*) -- fixed per tracer, like ``sigv``."""
+    def get_virial_radius(logM, z, Omega_m=0.315):
+        r"""Comoving virial radius :math:`R_\mathrm{vir}` [Mpc/h] of a halo of mass :math:`10^{\log M} M_\odot/h` at redshift *z*:
+        :math:`0.163 \times 10^{(\log M - 12) / 3} (1 + z) / E(z)^{2/3}`, with :math:`E(z)` of a flat :math:`\Lambda\mathrm{CDM}`
+        background (*Omega_m*) -- fixed per tracer, like ``sigv``. This is :math:`R_\mathrm{200c}`, the radius enclosing 200 times
+        the critical density: :math:`[3 M / (4 \pi \times 200 \rho_\mathrm{crit,0} E(z)^2)]^{1/3} = 0.163\,\mathrm{Mpc}/h` (physical)
+        for :math:`M = 10^{12} M_\odot/h` at :math:`z = 0` (:math:`\rho_\mathrm{crit,0} = 2.775 \times 10^{11} h^2 M_\odot \mathrm{Mpc}^{-3}`),
+        times :math:`1 + z` to comoving. The Bryan-Norman virial overdensity would give radii ~25% larger at :math:`z = 0`, converging at high z."""
         efunc = (Omega_m * (1. + z)**3 + 1. - Omega_m)**0.5
-        return 0.55 * 0.163 * 10**((logM - 12.) / 3.) * (1. + z) / efunc**(2. / 3.)
+        return 0.163 * 10**((logM - 12.) / 3.) * (1. + z) / efunc**(2. / 3.)
 
     if tracer is not None:
         tracer = str(tracer).upper()
-        settings = {'BGS': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.2)**0.5, 'rsat': get_satellite_radius(13., 0.2)},
-                    'LRG': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.8)**0.5, 'rsat': get_satellite_radius(13., 0.8)},
-                    'ELG': {'fsat': 0.06, 'sigv': 150 / 70. * 2.1**0.5, 'rsat': get_satellite_radius(12., 1.1)},
-                    'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5, 'rsat': get_satellite_radius(12.7, 1.4)}}
+        settings = {'BGS': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.2)**0.5, 'rvir': get_virial_radius(13., 0.2)},
+                    'LRG': {'fsat': 0.13, 'sigv': 150 / 70. * 10**(1 / 3) * (1 + 0.8)**0.5, 'rvir': get_virial_radius(13., 0.8)},
+                    'ELG': {'fsat': 0.06, 'sigv': 150 / 70. * 2.1**0.5, 'rvir': get_virial_radius(12., 1.1)},
+                    'QSO': {'fsat': 0.2, 'sigv': 150 / 70. * 10**(0.7 / 3) * 2.4**0.5, 'rvir': get_virial_radius(12.7, 1.4)}}
         try:
             settings = settings[tracer]
         except KeyError as exc:
             raise ValueError(f'unknown tracer: {tracer}, please use any of {list(settings.keys())}') from exc
     else:
-        settings = {'fsat': 0.1, 'sigv': 5., 'rsat': get_satellite_radius(13., 0.8)}
+        settings = {'fsat': 0.1, 'sigv': 5., 'rvir': get_virial_radius(13., 0.8)}
     return settings
 
 
@@ -1075,7 +1079,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, params=None, **kwargs):
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1092,7 +1096,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = float(nbar)
@@ -1287,7 +1291,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, params=None, **kwargs):
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -1304,7 +1308,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rsat=None, nbar=1e-4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, rvir=None, nbar=1e-4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = float(nbar)
@@ -2392,25 +2396,24 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     sigv : float, default=None
         Velocity dispersion for the physical stochastic terms.  Defaults to
         ``get_physical_stochastic_settings()['sigv']``.
-    rsat : float, default=None
-        Satellite radius [Mpc/h] (the isotropic stochastic term ``sn1`` is normalised by :math:`1 / (\bar{n} k_\mathrm{NL}^2)`,
-        :math:`k_\mathrm{NL} = 0.3\ h/\mathrm{Mpc}`, not by ``rsat``).  Defaults to
-        ``get_physical_stochastic_settings()['rsat']``.
+    rvir : float, default=None
+        Halo virial radius [Mpc/h] normalising the isotropic stochastic term ``sn1``.  Defaults to
+        ``get_physical_stochastic_settings()['rvir']``.
     nbar : float, default=1e-4
         Number density [(Mpc/h)^-3]. Stochastic parameters are in units of ``1/nbar``.
 
-    Stochastic terms, physical bases: :math:`P_\mathrm{stoch}(k, \mu) = [s_{n,0} + s_{n,1} f_\mathrm{sat} r_\mathrm{sat}^2 k^2
+    Stochastic terms, physical bases: :math:`P_\mathrm{stoch}(k, \mu) = [s_{n,0} + s_{n,1} R_\mathrm{vir}^2 k^2
     + s_{n,2} f_\mathrm{sat} \sigma_v^2 k^2 \mu^2] / \bar{n}`, each with the AP rescaling of its basis.
 
     - ``sn1``, the isotropic :math:`k^2` term, is **off by default** (fixed at 0), so the baseline is unchanged. It is used only
       when free (a fixed ``sn1`` is ignored, whatever its value); free it to fit
       it (``params={'sn1': {'fixed': False}}``; full_shape's ``theory`` option ``sn1=True`` also marginalises it analytically,
       being linear in the model). Prior :math:`\mathcal{N}(0, 5)`, the width of ``sn2``. At :math:`q_\parallel = q_\perp = 1`
-      it enters the monopole only, :math:`\Delta P_0 = s_{n,1} f_\mathrm{sat} r_\mathrm{sat}^2 k^2 / \bar{n}`.
-    - The halo model predicts :math:`s_{n,1} < 0` (the profile suppresses the 1-halo term), but the prior is centred on 0, as
-      for ``sn0`` and ``sn2``. Its expected size is small, :math:`|s_{n,1}| / (s_{n,2} / 3) \sim 2 \times 10^{-3}`: ``rsat`` and
-      ``sigv`` are tied by the virial theorem, :math:`\sigma_v \simeq \sqrt{\Delta / 2} R_\mathrm{vir}`, so
-      :math:`r_\mathrm{sat} \ll \sigma_v`.
+      it enters the monopole only, :math:`\Delta P_0 = s_{n,1} R_\mathrm{vir}^2 k^2 / \bar{n}`.
+    - The halo model predicts :math:`s_{n,1} < 0` (the profile and exclusion suppress the small-scale power), but the prior is
+      centred on 0, as for ``sn0`` and ``sn2``. Measured in the AbacusHF LRG z = 0.5 boxes (real space,
+      :math:`\bar{n} P_\mathrm{err} = \bar{n} [P_{gg} - P_{gm}^2 / P_{mm}]`): a :math:`k^2` slope of -0.5 (all) to -0.8 (centrals)
+      (Mpc/h)^2, i.e. :math:`s_{n,1} \sim -2.3` to -3.7 in these units (:math:`R_\mathrm{vir}^2 = 0.22` (Mpc/h)^2 for LRG), within the prior.
     - Not available with the fkptjax pt (raises if ``sn1`` is used). The h-preconditioned emulator divides it by
       :math:`(h / h_\\mathrm{fid})^5`, as folps' k^2 shot term, since it is built from the same dilated k and jacobian.
     mu : int, default=6
@@ -2491,7 +2494,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
                 # isotropic k^2 stochastic term, off (fixed at 0) by default; same width as sn2, so that the two scale alike
-                Parameter('sn1', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
+                Parameter('sn1', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
             ]
         else:
             auto_params = [
@@ -2511,7 +2514,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                  use_GTNS=None, redshift_smearing=None, tracers=None, params=None,
                  **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
@@ -2532,7 +2535,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                      fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
+                      fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method='tree+loop+ctr',
                       use_GTNS=None, redshift_smearing=None, tracers=None,
                       **kwargs):
         # Non-node setup only.
@@ -2552,9 +2555,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
-        self._rsat = float(rsat) if rsat is not None else settings['rsat']
-        # sn1 (isotropic k^2 stochastic term) in units of 1 / (nbar * k_NL^2), k_NL = 0.3 h/Mpc (local: 0.4 upstream)
-        self._knl = 0.3
+        self._rvir = float(rvir) if rvir is not None else settings['rvir']
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
     def __call__(self):
@@ -2591,7 +2592,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha4 = f**2 * a2t + b1E * f * a4t
             sn0 = self.sn0.value / A_AP / self._nbar
             sn2 = self.sn2.value / A_AP / self._nbar * self._fsat * self._sigv**2
-            sn1 = self.sn1.value / A_AP / (self._nbar * self._knl**2)
+            sn1 = self.sn1.value / A_AP / self._nbar * self._rvir**2
             pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct.value,
                                sn0, sn2, 1., self.X_FoG.value]
 
@@ -2607,7 +2608,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             ct4 = -2. * f**2 * c4
             sn0 = self.sn0.value / self._nbar
             sn2 = self.sn2.value / self._nbar * self._fsat * self._sigv**2
-            sn1 = self.sn1.value / (self._nbar * self._knl**2)
+            sn1 = self.sn1.value / self._nbar * self._rvir**2
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
                                sn0, sn2, 1., self.X_FoG.value]
 
@@ -2791,6 +2792,16 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     Computes the redshift-space bispectrum multipoles ``B_{l1 l2 L}(k1, k2)`` from the
     linear power spectrum via ``folps.BispectrumCalculator.Sugiyama_Bell``.
 
+    The (residual) stochastic term is
+
+    .. math::
+
+        B_\mathrm{stoch} = \frac{1}{\bar{n}} \sum_i \left[b_1 B_\mathrm{shot} + f \mu_i^2 P_\mathrm{shot}\right] Z_1(k_i) P_\mathrm{IR}(k_i)
+        + \frac{A_\mathrm{shot}}{\bar{n}^2},
+
+    with :math:`B_\mathrm{shot}` = ``snb0``, :math:`P_\mathrm{shot}` = ``sn0``, the power spectrum's (one parameter in a joint
+    P + B fit) and :math:`A_\mathrm{shot}` = ``sn0b``, a free constant. Poisson is ``snb0 = sn0 = sn0b = 1``.
+
     Parameters
     ----------
     k : array, shape (N, 2) or (N, 3), default=None
@@ -2824,7 +2835,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     prior_basis : str, default='physical_aap'
         Bias / counterterm / stochastic parameterization:
 
-        - ``'standard'``: Eulerian FOLPS bias; parameters ``b1, b2, bs, c1, c2, sn0, snb0, X_FoG``.
+        - ``'standard'``: Eulerian FOLPS bias; parameters ``b1, b2, bs, c1, c2, sn0, snb0, sn0b, X_FoG``.
         - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, no AP rescaling.
         - ``'physical_aap'`` (default): physical basis with AP rescaling (2pt3pt prior document).
         - ``'tcm_chudaykin_aap'``: physical basis with AP rescaling and class-PT counterterm basis.
@@ -2911,8 +2922,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                           ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
                 Parameter('c1', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
                 Parameter('c2', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
+                # P_shot: the power spectrum's sn0, declared as there so that a joint P + B fit unifies them by name
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
                 Parameter('snb0', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
+                # A_shot: the free constant (residual) stochastic term, in units of 1 / nbar^2
+                Parameter('sn0b', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'A_{\mathrm{shot}}'),
                 # the same declaration as the power spectrum's: one tracer's Finger-of-God
                 # parameter is one parameter, and a joint P+B fit unifies them by name --
                 # which a build refuses when the two declarations disagree (they differed
@@ -2926,8 +2940,9 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('bs', value=0., prior=None, ref=dict(limits=[-1., 1.]), latex='b_s'),
                 Parameter('c1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
                 Parameter('c2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
-                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('snb0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{nb,0}'),
+                Parameter('sn0b', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'A_{\mathrm{shot}}'),
                 # the same declaration as the power spectrum's: one tracer's Finger-of-God
                 # parameter is one parameter, and a joint P+B fit unifies them by name --
                 # which a build refuses when the two declarations disagree (they differed
@@ -2960,7 +2975,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
-                      prior_basis='physical_aap', fsat=None, sigv=None, rsat=None,
+                      prior_basis='physical_aap', fsat=None, sigv=None, rvir=None,
                       nbar=1e-4, model='FOLPSD', damping='lor', precision=(4, 16, 4),
                       renormalized=True, interpolation_method='linear', redshift_smearing=None,
                       tracers=None, basis=None, **kwargs):
@@ -2997,11 +3012,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         bias_scheme = 'folps'
         kNL = 0.3
 
-        # FOLPS bispectrum bias order is (b1, b2, bs, c1, c2, Bshot, Pshot, X_FoG):
-        # snb0 (bispectrum shot noise) fills the Bshot slot, sn0 (power spectrum shot noise) the Pshot slot
+        # FOLPS bispectrum bias order is (b1, b2, bs, c1, c2, Bshot, Pshot, Ashot, X_FoG):
+        # snb0 fills the Bshot slot, sn0 (the power spectrum's) the Pshot slot, sn0b the free constant Ashot (units 1 / nbar^2)
         if self._prior_basis == 'standard':
             pars = [self.b1.value, self.b2.value, self.bs.value, self.c1.value, self.c2.value,
-                    self.snb0.value, self.sn0.value, self.X_FoG.value]
+                    self.snb0.value, self.sn0.value, self.sn0b.value, self.X_FoG.value]
 
         elif self._prior_basis in ['physical', 'physical_aap']:  # physical basis with AP rescaling
             if 'aap' not in self._prior_basis: A_AP = 1.
@@ -3013,7 +3028,8 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             c1 = self.c1.value / kNL**2 / (A**2 * A_AP)
             c2 = self.c2.value / kNL**2 / (A**2 * A_AP)
             pars = [b1E, b2E, bsE, c1, c2,
-                    self.snb0.value / A_AP / self._nbar, self.sn0.value / A_AP / self._nbar, self.X_FoG.value]
+                    self.snb0.value / A_AP / self._nbar, self.sn0.value / A_AP / self._nbar,
+                    self.sn0b.value / A_AP**2 / self._nbar**2, self.X_FoG.value]
 
         else:  # 'tcm_chudaykin_aap'
             bias_scheme = 'classpt'
@@ -3023,7 +3039,8 @@ class FOLPSTracerSpectrum3Poles(Calculator):
             c1 = self.c1.value / kNL**2 / (A**2 * A_AP)
             c2 = self.c2.value / kNL**2 / (A**2 * A_AP)
             pars = [1. + b1L, b2L, bsL, c1, c2,
-                    self.snb0.value / self._nbar, self.sn0.value / self._nbar, self.X_FoG.value]
+                    self.snb0.value / self._nbar, self.sn0.value / self._nbar,
+                    self.sn0b.value / self._nbar**2, self.X_FoG.value]
 
         if self._basis == 'scoccimarro':
             multipoles = tuple(f'B{ell:d}' for ell in self.ells)
@@ -3894,7 +3911,7 @@ class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
     """
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
-                 fsat=None, sigv=None, rsat=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
+                 fsat=None, sigv=None, rvir=None, nbar=1e-4, mu=6, damping='lor', damping_method=None,
                  use_GTNS=None, tracers=None, params=None, **kwargs):
         if pt is None:
             pt = FKPTJAXPTSpectrum2Poles(**kwargs)
@@ -4240,7 +4257,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         assign_params(self, vc, tracers)
 
     def __post_init__(self, k=None, ells=None, z=None, pt=None, cosmo=None, mu=8, prior_basis='standard',
-                      fsat=None, sigv=None, rsat=None, nbar=1e-4,
+                      fsat=None, sigv=None, rvir=None, nbar=1e-4,
                       model='velocileptors_rept_mnuw0wacdm', fiducial='DESI', **kwargs):
         self.k = self.pt.k
         self.ells = self.pt.ells
@@ -4718,11 +4735,11 @@ def _comet_conventions(conventions):
     claude_comparison_folpsD_comet).  The COMET team's convention:
 
     - stochastic terms in comet's own parametrisation: NP20 and NP22 independent columns;
-    - the bispectrum constant N^B_0 free (the VDG-paper choice), not tied to SN_0^2;
-    - comet's pair-noise term (b1 MB0 + NP0 f mu^2), without the document's factor 2 on SN_0;
-    - their nuisance widths where they differ from desilike's: N^B_0 ~ N(0, 2), alpha4 fixed at 0.
+    - their nuisance widths where they differ from desilike's: alpha4 fixed at 0.
 
-    Both centre the b_K^2 / b_td co-evolution priors on the sampled b1.
+    Both use comet's pair-noise term (b1 MB0 + NP0 f mu^2), without the document's factor 2 on SN_0 (which
+    fails the Poisson limit), a free bispectrum constant N^B_0 ~ N(0, 2) not tied to SN_0^2 (the VDG-paper choice; ``sn0b``
+    in the physical bases), and centre the b_K^2 / b_td co-evolution priors on the sampled b1.
     """
     if conventions not in (None, 'desi', 'comet'):
         raise ValueError(f"conventions must be 'desi' or 'comet', not {conventions!r}")
@@ -4779,14 +4796,18 @@ _COMET_PHYSICAL_NAMES = {'b2d': 'b2', 'bk2': 'bs', 'btd': 'b3',
                          'NP0': 'sn0', 'NP20': 'sn2', 'NP22': 'sn22', 'MB0': 'snb0'}
 
 
-def _comet_physical_name(name, prior_basis):
-    """comet's parameter *name* under *prior_basis*: FOLPSD's name in the physical bases."""
+def _comet_physical_name(name, prior_basis, overrides=None):
+    """comet's parameter *name* under *prior_basis*: FOLPSD's name in the physical bases, or that of *overrides*."""
     if 'physical' in prior_basis:
-        return _COMET_PHYSICAL_NAMES.get(name, name)
+        overrides = overrides or {}
+        return overrides.get(name, _COMET_PHYSICAL_NAMES.get(name, name))
     return name
 
 
 class COMETTracerSpectrum2Poles(Calculator):
+
+    # Physical-basis names that differ from _COMET_PHYSICAL_NAMES for this class (see COMETTracerSpectrum3Poles).
+    _PHYSICAL_NAME_OVERRIDES = {}
 
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty',
@@ -4920,7 +4941,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, rsat=None, backend='jax',
+    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, rvir=None, backend='jax',
                  redshift_smearing=None, conventions=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model,
                                        conventions=conventions)
@@ -4959,7 +4980,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model)
 
-    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, rsat=None, params=None,
+    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, rvir=None, params=None,
                       redshift_smearing=None, conventions=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
@@ -5064,7 +5085,7 @@ class COMETTracerSpectrum2Poles(Calculator):
 
         def g(name):
             # `name` is comet's canonical name; the physical bases expose FOLPSD's.
-            param = getattr(self, _comet_physical_name(name, self._prior_basis), None)
+            param = getattr(self, _comet_physical_name(name, self._prior_basis, self._PHYSICAL_NAME_OVERRIDES), None)
             if param is None:
                 if _only is not None and name not in _only:
                     return 0.0
@@ -5332,6 +5353,9 @@ class COMETTracerSpectrum3Poles(Calculator):
     # g() silently returns 0 for all other 2Poles-specific params (counterterms, g21, etc.)
     # that are intentionally absent from the 3Poles instance.
     _CANONICAL_PARAMS_2P_ONLY = frozenset({'b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0'})
+    # Physical bases: the pair noise N^P_0 is the power spectrum's sn0 (one parameter in a joint P + B fit), and the constant
+    # N^B_0 is sn0b, the free A_shot (as FOLPSTracerSpectrum3Poles).
+    _PHYSICAL_NAME_OVERRIDES = {'NB0': 'sn0b'}
 
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty',
@@ -5345,15 +5369,10 @@ class COMETTracerSpectrum3Poles(Calculator):
         extra = []
         if 'physical' in prior_basis:
             extra += [
-                # The prior document has no free N^B_0: its constant is SN_0^2, tied to NP0
-                # (as in FOLPSD, whose bispectrum has no free constant either).  That piece is
-                # added in _get_canonical_params, so NB0 is an *extra* constant on top and is
-                # fixed at 0 by default.
-                # The COMET team's convention is the VDG-paper choice: the bispectrum constant is a
-                # free N^B_0 ~ N(0, 2) and the SN_0^2 tie to the power spectrum is dropped, so the
-                # two shot noises are no longer bound together.
-                Parameter('NB0', value=0.0, fixed=not comet_conventions, prior=dict(dist='norm', loc=0.0, scale=2. if comet_conventions else 1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'N^B_{0}'),
+                # The bispectrum constant N^B_0 is a free A_shot ~ N(0, 2), sn0b, not tied to SN_0^2 (as FOLPSD and the
+                # VDG-paper choice of the COMET team); the pair noise N^P_0 is the power spectrum's sn0.
                 Parameter('snb0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'M^B_{0}'),
+                Parameter('sn0b', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'A_{\mathrm{shot}}'),
             ]
         else:
             extra += [
@@ -5376,7 +5395,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rsat=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
                  redshift_smearing=None, conventions=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model,
                                        conventions=conventions)
@@ -5420,7 +5439,7 @@ class COMETTracerSpectrum3Poles(Calculator):
             pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rsat=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
                       redshift_smearing=None, conventions=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
@@ -5524,7 +5543,7 @@ class COMETTracerSpectrum3Poles(Calculator):
 
         def g(name):
             # `name` is comet's canonical name; the physical bases expose FOLPSD's.
-            param = getattr(self, _comet_physical_name(name, self._prior_basis), None)
+            param = getattr(self, _comet_physical_name(name, self._prior_basis, self._PHYSICAL_NAME_OVERRIDES), None)
             if param is None:
                 if _only is not None and name not in _only:
                     return 0.0
@@ -5537,7 +5556,6 @@ class COMETTracerSpectrum3Poles(Calculator):
         NB0 = g('NB0')
         MB0 = g('MB0')
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
-        SN0 = 0.
         if 'physical' in self._prior_basis:
             # Both conventions carry a single f mu^2 N^P_0 in the bispectrum pair noise, so
             # there is nothing left to switch on here. The prior document (TG_2pt3pt_priors),
@@ -5548,11 +5566,9 @@ class COMETTracerSpectrum3Poles(Calculator):
             # exp[-i(k2 + k3).s] with (k2 + k3).zhat = -k1 mu1, so it carries one power of the
             # velocity, not two, and the term has to reduce to Z_1^2 P / nbar at B_shot = 1,
             # SN_0 nbar = 1. comet never had the 2; FolpsD dropped it in b9e1ebf.
-            SN0 = NP0 / A_AP / self._nbar  # the document's SN_0, identical to the power spectrum's
             # N^B_0 is a 1/nbar^2 quantity, so it carries the AP volume factor squared, unlike
             # the 1/nbar quantities NP0 and MB0. comet's own `_rescale_params` does the same
-            # (`NB0 /= Aap**2`), and without it the free N^B_0 would scale as A_AP while the tied
-            # SN0**2 piece it is summed with scales as A_AP**2.
+            # (`NB0 /= Aap**2`).
             NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP**2, MB0 / A_AP
         # nbar normalization is needed for the BX_ell_Sugi()-decomposed path (its diagrams
         # are nbar-bare), but skipped for the direct/pt=False path (rescale_counterterms=False):
@@ -5560,15 +5576,6 @@ class COMETTracerSpectrum3Poles(Calculator):
         # internally given the *raw* nbar, so applying it here too would double-count it.
         if rescale_counterterms:
             NP0, NB0, MB0 = NP0 / self._nbar, NB0 / self._nbar**2, MB0 / self._nbar
-            if 'physical' in self._prior_basis and not self._comet_conventions:
-                # The constant is SN_0^2, as in the document and in FOLPSD (whose bispectrum has
-                # no free constant at all -- its Pshot**2 term is tied to sn0).  The free NB0
-                # rides on top of it and is fixed at 0 by default, so the default model is
-                # FOLPSD's.
-                # The COMET team's convention drops the tie entirely, as in the VDG paper: the
-                # bispectrum constant is then N^B_0 alone, free and independent of the power
-                # spectrum's shot noise.
-                NB0 = NB0 + SN0**2
         return params | dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
 
     def tree_flatten(self):

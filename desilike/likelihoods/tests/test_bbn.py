@@ -52,7 +52,7 @@ def test_linx():
     from linx.abundances import AbundanceModel
     from linx.nuclear import NuclearRates
     from desilike.theories.primordial_cosmology import CosmoprimoCosmology
-    from desilike.theories.bbn import LINXAbundances
+    from desilike.theories.bbn import LINXAbundances, delta_neff_init_from_final
     from desilike.likelihoods.bbn import LINXBBNLikelihood, BBN_MEASUREMENTS
 
     import cosmoprimo
@@ -68,8 +68,14 @@ def test_linx():
     defaults = {param.name: param._value for param in get_params(like)}
     logpdf = pipe(defaults)
 
-    # the same LINX run by hand: extra radiation from N_eff - N_eff_sm, eta_fac = omega_b / Omegabh2
-    background = BackgroundModel()(jnp.asarray((defaults['N_eff'] - 3.044) / LINXAbundances._neff_slope))
+    # the spline inversion round-trips between its nodes to LINX's solver noise (~1e-5)
+    neff_nodes = like.theory._neff_nodes
+    for neff in (2.5, 3.5):
+        neff_solved = BackgroundModel()(delta_neff_init_from_final(jnp.asarray(neff), neff_nodes))[-1][-1]
+        assert np.isclose(float(neff_solved), neff, atol=3e-5)
+
+    # the same LINX run by hand: initial Delta N_eff from the spline, eta_fac = omega_b / Omegabh2
+    background = BackgroundModel()(delta_neff_init_from_final(jnp.asarray(defaults['N_eff']), neff_nodes))
     time, scale_factor, rho_photon, rho_neutrino, rho_extra, pressure_extra = background[:6]
     yields = AbundanceModel(NuclearRates(nuclear_net='key_PRIMAT_2023'))(
         rho_photon, rho_neutrino, rho_extra, pressure_extra, t_vec=time, a_vec=scale_factor,
@@ -80,6 +86,8 @@ def test_linx():
     assert np.isclose(float(theory.Y_p), 4. * float(yields[5]), rtol=1e-4)
     assert np.isclose(float(theory.D_H), float(yields[2] / yields[1]), rtol=1e-4)
     assert np.isclose(float(theory.N_eff_bbn), float(background[-1][-1]), rtol=1e-6)
+    # dNeff_convention='final': LINX delivers the sampled N_eff
+    assert np.isclose(float(theory.N_eff_bbn), defaults['N_eff'], atol=3e-5)
 
     measurements = [BBN_MEASUREMENTS[name] for name in ('Aver2021', 'Cooke2018')]
     flattheory = np.array([float(theory.Y_p), float(theory.D_H)])
@@ -97,7 +105,30 @@ def test_linx():
         assert np.isclose(float(grad[name]), float(finite_difference), rtol=1e-2)
 
 
+def test_linx_init():
+    """dNeff_convention='init': Delta_N_eff_init goes to LINX unchanged."""
+    import pytest
+    pytest.importorskip('linx')
+    import jax.numpy as jnp
+    from linx.background import BackgroundModel
+    from desilike.parameter import Parameter
+    from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+    from desilike.theories.bbn import LINXAbundances
+    from desilike.likelihoods.bbn import LINXBBNLikelihood
+
+    import cosmoprimo
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=cosmoprimo.fiducial.DESI(engine='eisenstein_hu'))
+    theory = LINXAbundances(cosmo=cosmo, dNeff_convention='init',
+                            params=[Parameter('Delta_N_eff_init', value=0.5, fixed=True)])
+    like = LINXBBNLikelihood(theory=theory, measurements=('Aver2026', 'Cooke2018'))
+    pipe = build(like)
+    defaults = {param.name: param._value for param in get_params(like)}
+    pipe(defaults)
+    assert np.isclose(float(like.theory.N_eff_bbn), float(BackgroundModel()(jnp.asarray(0.5))[-1][-1]), rtol=1e-6)
+
+
 if __name__ == '__main__':
 
     test_schoneberg2024()
     test_linx()
+    test_linx_init()

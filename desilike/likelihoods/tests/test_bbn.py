@@ -127,8 +127,58 @@ def test_linx_init():
     assert np.isclose(float(like.theory.N_eff_bbn), float(BackgroundModel()(jnp.asarray(0.5))[-1][-1]), rtol=1e-6)
 
 
+#: LINXBBNLikelihood(measurements=('Aver2026', 'Cooke2018')) outputs, eager, PRIMAT 2023 network, at the DESI fiducial
+#: (omega_b = 0.02237, N_eff = 3.046, tau_n = 879.4, q = 0) shifted as named. Generated with LINX 34f4cbf (2026-10-24).
+_LINX_REGRESSION_SHIFTS = {
+    'defaults': {},
+    'omega_b': {'omega_b': 0.02287},
+    'N_eff': {'N_eff': 3.3},
+    'nuisances': {'tau_n': 880.6, 'q_npdg': 1., 'q_ddHe3n': -1.},
+}
+_LINX_REGRESSION_REFERENCES = {
+    'defaults': dict(Y_p=2.47236588e-01, D_H=2.44522171e-05, YHe=2.45904749e-01, N_eff_bbn=3.04600968, logpdf=-4.325971),
+    'omega_b': dict(Y_p=2.47449189e-01, D_H=2.35792660e-05, YHe=2.46116580e-01, N_eff_bbn=3.04600968, logpdf=-16.685689),
+    'N_eff': dict(Y_p=2.50569852e-01, D_H=2.52885976e-05, YHe=2.49226002e-01, N_eff_bbn=3.30000339, logpdf=-6.733132),
+    'nuisances': dict(Y_p=2.47471035e-01, D_H=2.45899612e-05, YHe=2.46138346e-01, N_eff_bbn=3.04600968, logpdf=-3.395323),
+}
+
+
+def test_linx_regression():
+    """LINXBBNLikelihood outputs at fixed points have not moved since the references were generated.
+
+    test_linx compares desilike with LINX itself, so it passes whatever LINX predicts; this test catches a change in
+    the predictions (a LINX update, a different omega_b <-> eta or N_eff mapping, ...). Tolerances sit above the ~1e-5
+    noise of LINX's adaptive solvers between compilations. If a change is intended, regenerate the references and say why
+    in the commit message."""
+    import pytest
+    pytest.importorskip('linx')
+    from desilike.theories.primordial_cosmology import CosmoprimoCosmology
+    from desilike.theories.bbn import LINXAbundances
+    from desilike.likelihoods.bbn import LINXBBNLikelihood
+
+    import cosmoprimo
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=cosmoprimo.fiducial.DESI(engine='eisenstein_hu'))
+    like = LINXBBNLikelihood(theory=LINXAbundances(cosmo=cosmo), measurements=('Aver2026', 'Cooke2018'))
+    pipe = build(like)
+    defaults = {param.name: param._value for param in get_params(like)}
+    mismatches = []
+    for label, shift in _LINX_REGRESSION_SHIFTS.items():
+        logpdf = float(pipe({**defaults, **shift}))
+        computed = {name: float(getattr(like.theory, name)) for name in ('Y_p', 'D_H', 'YHe', 'N_eff_bbn')}
+        computed['logpdf'] = logpdf
+        for name, reference in _LINX_REGRESSION_REFERENCES[label].items():
+            # abundances: relative; N_eff: absolute (the spline inversion's accuracy); logpdf: absolute, mostly a D/H pull
+            # of up to ~6 sigma times the 1e-4 relative tolerance
+            close = {'N_eff_bbn': np.isclose(computed[name], reference, rtol=0., atol=3e-5),
+                     'logpdf': np.isclose(computed[name], reference, rtol=0., atol=0.1)}.get(name, np.isclose(computed[name], reference, rtol=1e-4, atol=0.))
+            if not close:
+                mismatches.append(f'{label} {name}: {computed[name]:.8e} vs reference {reference:.8e} (relative {computed[name] / reference - 1.:+.1e})')
+    assert not mismatches, 'LINX BBN predictions moved:\n' + '\n'.join(mismatches)
+
+
 if __name__ == '__main__':
 
     test_schoneberg2024()
     test_linx()
     test_linx_init()
+    test_linx_regression()

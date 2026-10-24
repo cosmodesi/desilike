@@ -96,6 +96,7 @@ class LINXAbundances(Calculator):
         import linx.const as const
         params = VariableCollection()
         if dNeff_convention == 'init':
+            # limits: the Delta_Neff_init prior of arXiv:2609.12065 (Table 1)
             params.set(Parameter('Delta_N_eff_init', value=0., fixed=True, prior=dict(limits=[-7., 7.]),
                                  latex=r'\Delta N_\mathrm{eff}^\mathrm{init}'))
         params.set(Parameter('tau_n', value=const.tau_n, fixed=False,

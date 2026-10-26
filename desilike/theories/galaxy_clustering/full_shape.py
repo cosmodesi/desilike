@@ -2339,7 +2339,9 @@ class FOLPSPTSpectrum2Poles(Calculator):
         is left with ``(sigma8 / sigma_mpc)^2d`` -- 1.1575 per amplitude degree at h = 0.75, a
         k-independent 17% that looks like a dilation failure and is not.
         """
-        h_fid = self.template._fiducial.h
+        fiducial = self.template._fiducial
+        # FixedSpectrum2Template holds the fiducial as a CosmoprimoCosmology calculator, the cosmoprimo object in ._cosmo
+        h_fid = getattr(fiducial, '_cosmo', fiducial).h
         # `h` is shared only when the template carries a cosmology to share it from; without it
         # nothing varies h, so the anchors are the unscaled ones and an emulator preconditioning
         # in h would have had no h to expand anyway.
@@ -2408,7 +2410,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
                                            redshift_smearing=None, sn1=None, *, pars_b=None, cross_nuisance=None,
-                                           cross_damping_mode='single'):
+                                           cross_damping_mode='single', bA=None):
         """Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
@@ -2420,9 +2422,14 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
         ``redshift_smearing`` is a callable returning the single-field characteristic function
         D(k mu) of the line-of-sight displacement; P(k, mu) is damped by its **square**, since
-        the two galaxies of a pair are displaced independently. It is passed as an argument
-        rather than read from an attribute so the emulated path works: a callable would not
-        survive ``tree_flatten`` / ``tree_unflatten``.
+        the two galaxies of a pair are displaced independently. For a cross spectrum it may be a
+        pair of callables (D_A, D_B), one per field, and P(k, mu) is damped by D_A D_B. It is
+        passed as an argument rather than read from an attribute so the emulated path works: a
+        callable would not survive ``tree_flatten`` / ``tree_unflatten``.
+
+        ``bA`` is the anisotropic linear bias of each tracer, ``(bA_a, bA_b)`` (already in the folps basis, see
+        :class:`FOLPSTracerSpectrum2Poles`), ``None`` for none: the tree-level kernel becomes
+        :math:`b_1 + f\mu^2 + b_A (\mu^2 - 1/3)`, folps' ``get_rsd_pkmu`` option.
 
         ``sn1`` is the amplitude of the isotropic stochastic term :math:`s_{n,1} k^2` (already
         normalised, see :class:`FOLPSTracerSpectrum2Poles`), ``None`` for none. It is added to
@@ -2441,19 +2448,23 @@ class FOLPSPTSpectrum2Poles(Calculator):
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
         cross_options = {}
         if pars_b is not None:
-            if redshift_smearing is not None:
-                raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
             pars_b = folps_rsdmps.set_bias_scheme(pars=pars_b, bias_scheme=bias_scheme)
             # cross_nuisance is already in Folps' spectrum-level convention; only convert the two bias vectors.
             cross_options = dict(pars_b=pars_b, cross_nuisance=cross_nuisance,
                                  cross_damping_mode=cross_damping_mode)
+        if bA is not None:
+            cross_options['bA'] = bA
         pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS, **cross_options)
         if sn1 is not None:
             pkmu = pkmu + self.jac * sn1 * self.kap**2
         if redshift_smearing is not None:
             # observed (pre-AP) k, mu: the displacement is dv / (aH)_fid, in the fiducial frame
             # the catalogue was built in, not in the AP-distorted frame kap, muap.
-            pkmu = pkmu * redshift_smearing(self.k[:, None] * self._to_poles.mu)**2
+            kmu = self.k[:, None] * self._to_poles.mu
+            if isinstance(redshift_smearing, (tuple, list)):  # cross spectrum: one D per field
+                pkmu = pkmu * redshift_smearing[0](kmu) * redshift_smearing[1](kmu)
+            else:
+                pkmu = pkmu * redshift_smearing(kmu)**2
         return self._to_poles(pkmu)
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **options):
@@ -2673,7 +2684,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     Parameters
     ----------
     tracers : str, (str, str), or None, default=None
-        Passing a pair uses the cross spectrum model. Cross redshift smearing is not supported yet.
+        Passing a pair uses the cross spectrum model.
     k : array, default=None
     pt : FOLPSPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
@@ -2715,6 +2726,12 @@ class FOLPSTracerSpectrum2Poles(Calculator):
       (Mpc/h)^2, i.e. :math:`s_{n,1} \sim -2.3` to -3.7 in these units (:math:`R_\mathrm{vir}^2 = 0.22` (Mpc/h)^2 for LRG), within the prior.
     - Not available with the fkptjax pt (raises if ``sn1`` is used). The h-preconditioned emulator divides it by
       :math:`(h / h_\\mathrm{fid})^5`, as folps' k^2 shot term, since it is built from the same dilated k and jacobian.
+    Anisotropic linear bias ``bA`` (each tracer), **off by default** (fixed at 0, a fixed ``bA`` is ignored, whatever its value):
+    the tree-level kernel becomes :math:`b_1 + f\mu^2 + b_A (\mu^2 - 1/3)`, the linear form of a selection-dependent anisotropic
+    bias (e.g. a selection on intrinsic alignments). It enters the IR-resummed tree-level term only, not the loops. It is normalised as
+    ``b1`` in each basis (physical bases: divided by :math:`A A_\mathrm{AP}^{1/2}`, A the amplitude rescaling); a cross spectrum
+    uses each tracer's own ``bA``. Prior :math:`\mathcal{N}(0, 2)` (physical bases).
+
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
 
@@ -2729,11 +2746,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         ``'bias+ctr'`` also shares counterterms with autos; cross X_FoG is not shared.
         ``'bias+ctr+damping'`` additionally shares each tracer's auto X_FoG,
         with geometric cross damping sqrt(W_A * W_B). Cross stochastic parameters are never shared with autos.
-    redshift_smearing : callable or None, default=None
+    redshift_smearing : callable, (callable, callable) or None, default=None
         Damping from residual redshift errors: the jax-traceable single-field characteristic
         function :math:`D(k\mu)`, wrapped in a :class:`RedshiftSmearing` (see there for the
         ``params`` protocol that makes the kernel fittable).  :math:`P(k, \mu)` is damped by
         :math:`D^2`, since the two galaxies of a pair are displaced independently.
+        For a cross spectrum (``tracers`` a pair), one kernel per field, :math:`(D_A, D_B)` (a single
+        callable stands for both), and :math:`P(k, \mu)` is damped by :math:`D_A D_B`. Each field's
+        kernel is namespaced by its own tracer, so the parameters of a fittable kernel are those of
+        that tracer's auto spectrum.
 
         The factor multiplies the full :math:`P(k, \mu)`, stochastic terms included: only the
         Poisson self-pair term is undamped, and the estimator subtracts that.  It uses the
@@ -2806,6 +2827,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
                 # isotropic k^2 stochastic term, off (fixed at 0) by default; same width as sn2, so that the two scale alike
                 Parameter('sn1', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
+                # anisotropic linear bias (selection effects), off (fixed at 0) by default
+                Parameter('bA', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=0.1), latex='b_A'),
             ]
         else:
             auto_params = [
@@ -2821,6 +2844,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
                 Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
                 Parameter('sn1', value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,1}'),
+                Parameter('bA', value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='b_A'),
             ]
         not_shared = ('sn0', 'sn2', 'sn1')
         if 'damping' not in cross_sharing_mode:
@@ -2842,9 +2866,16 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
-        if isinstance(self.b1, tuple) and redshift_smearing is not None:
-            raise NotImplementedError('redshift_smearing is not supported for FOLPS cross spectra yet')
-        self.redshift_smearing = None if redshift_smearing is None else RedshiftSmearing(redshift_smearing, tracers=tracers)
+        if redshift_smearing is None:
+            self.redshift_smearing = None
+        elif isinstance(self.b1, tuple):
+            # cross spectrum: one kernel per field, namespaced by that field's tracer (shared with its auto spectrum)
+            funs = tuple(redshift_smearing) if isinstance(redshift_smearing, (tuple, list)) else (redshift_smearing,) * 2
+            if len(funs) != 2:
+                raise ValueError(f'a cross spectrum takes one redshift smearing kernel per field, got {len(funs)}')
+            self.redshift_smearing = tuple(RedshiftSmearing(fun, tracers=tracer) for fun, tracer in zip(funs, tracers))
+        else:
+            self.redshift_smearing = RedshiftSmearing(redshift_smearing, tracers=tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -3016,12 +3047,33 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                                  cross_damping_mode=self._cross_damping_mode)
         else:
             pars, sn1, bias_scheme = self._build_params()
-        redshift_smearing = None if self.redshift_smearing is None else self.redshift_smearing.apply
+        if self.redshift_smearing is None:
+            redshift_smearing = None
+        elif isinstance(self.redshift_smearing, tuple):  # cross spectrum: D_A D_B
+            redshift_smearing = tuple(smearing.apply for smearing in self.redshift_smearing)
+        else:
+            redshift_smearing = self.redshift_smearing.apply
         # sn1 off (fixed, at 0 by default): not passed at all, so that the baseline is bit-identical. Decided on the static
         # `fixed` flag, since even a fixed parameter's value is traced: sn1 has to be freed to be used.
         kw_sn1 = {} if self.sn1.fixed else {'sn1': sn1}
+        # bA off (all fixed): not passed, bit-identical baseline; as sn1, decided on the static `fixed` flag
+        params_bA = self.bA if isinstance(self.bA, tuple) else (self.bA,)
+        # a parameter tied to another by an expression (derived str, e.g. b_A(h0) = -b_A(h1)) is active although not varied
+        inactive = lambda param: param.fixed and not isinstance(param.derived, str)
+        kw_bA = {}
+        if not all(inactive(param) for param in params_bA):
+            # (bA_a, bA_b), normalised as b1 in the prior basis
+            A = self.pt.sigma8 / self.pt.sigma8_fid
+            if self._prior_basis in ('physical', 'physical_aap'):
+                A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.
+                norm = A * A_AP**0.5
+            elif self._prior_basis == 'standard':
+                norm = 1.
+            else:  # 'tcm_chudaykin_aap'
+                norm = A
+            kw_bA['bA'] = tuple(param.value / norm for param in (params_bA * 2 if len(params_bA) == 1 else params_bA))
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
-                                                                redshift_smearing=redshift_smearing, **kw_sn1, **cross_options)
+                                                                redshift_smearing=redshift_smearing, **kw_sn1, **kw_bA, **cross_options)
         return self.poles
 
 

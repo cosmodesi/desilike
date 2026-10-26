@@ -47,7 +47,7 @@ def test_linx():
     import pytest
     pytest.importorskip('linx')
     import jax.numpy as jnp
-    import linx.const as const
+    from linx import const
     from linx.background import BackgroundModel
     from linx.abundances import AbundanceModel
     from linx.nuclear import NuclearRates
@@ -103,6 +103,29 @@ def test_linx():
     for name, eps in [('omega_b', 2e-4), ('N_eff', 1e-1)]:
         finite_difference = (pipe({**defaults, name: defaults[name] + eps}) - pipe({**defaults, name: defaults[name] - eps})) / (2. * eps)
         assert np.isclose(float(grad[name]), float(finite_difference), rtol=1e-2)
+
+
+def test_linx_install():
+    """LINXAbundances.install: PyPI linx-bbn >= 0.1.3, recognised as installed by 'linx'; by default without its pinned
+    diffrax / optimistix, which are then installed unpinned where missing."""
+    from desilike.theories.bbn import LINXAbundances
+
+    class RecordingInstaller:
+
+        def __init__(self):
+            self.calls = []
+
+        def pip(self, pkgindex, **kwargs):
+            self.calls.append((pkgindex, kwargs))
+
+    linx_call = ('linx-bbn>=0.1.3', {'pkgname': 'linx', 'no_deps': True})
+    unpinned = [('diffrax', {'no_deps': False}), ('optimistix', {'no_deps': False})]
+    for kwargs, expected_calls in [({}, [linx_call, *unpinned]),
+                                   ({'no_deps': True}, [linx_call, *unpinned]),
+                                   ({'no_deps': False}, [('linx-bbn>=0.1.3', {'pkgname': 'linx', 'no_deps': False})])]:
+        installer = RecordingInstaller()
+        LINXAbundances.install(installer, **kwargs)
+        assert installer.calls == expected_calls
 
 
 def test_linx_init():
@@ -180,5 +203,6 @@ if __name__ == '__main__':
 
     test_schoneberg2024()
     test_linx()
+    test_linx_install()
     test_linx_init()
     test_linx_regression()

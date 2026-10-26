@@ -81,8 +81,19 @@ class LINXAbundances(Calculator):
         Whether LINX raises on ODE solver failure.
     """
     @classmethod
-    def install(cls, installer):
-        installer.pip('git+https://github.com/cgiovanetti/LINX')
+    def install(cls, installer, no_deps=True):
+        """Install LINX from PyPI (``linx-bbn``). 0.1.3 is the first release with LINX's extra-radiation fix (f4c96c6).
+
+        ``linx-bbn`` pins ``diffrax==0.7.1`` and ``optimistix==0.0.11``, which would downgrade the newer versions other JAX
+        packages in the environment use (cosmodesiconda: diffrax 0.7.2, optimistix 0.1.0, with which LINX's results are
+        unchanged). So by default (``no_deps=True``) LINX is installed without its dependencies, and diffrax and optimistix
+        are installed unpinned, only where missing. ``no_deps=False`` is a plain install, pins included.
+        """
+        # pkgname: LINX is imported as 'linx', which is how an existing install is recognised and skipped
+        installer.pip('linx-bbn>=0.1.3', pkgname='linx', no_deps=bool(no_deps))
+        if no_deps:
+            for name in ('diffrax', 'optimistix'):
+                installer.pip(name, no_deps=False)
 
     @staticmethod
     def _reaction_names(nuclear_net):
@@ -93,7 +104,7 @@ class LINXAbundances(Calculator):
     def propose_params(cls, nuclear_net='key_PRIMAT_2023', dNeff_convention='final'):
         """Return the default :class:`~desilike.parameter.VariableCollection`: ``tau_n``, ``q_<reaction>``
         and, for ``dNeff_convention='init'``, ``Delta_N_eff_init``."""
-        import linx.const as const
+        from linx import const
         params = VariableCollection()
         if dNeff_convention == 'init':
             # limits: the Delta_Neff_init prior of arXiv:2609.12065 (Table 1)
@@ -132,7 +143,7 @@ class LINXAbundances(Calculator):
 
     def __post_init__(self, cosmo=None, nuclear_net='key_PRIMAT_2023', params=None, dNeff_convention='final',
                       linx_kwargs=None, throw=True):
-        import linx.const as const
+        from linx import const
         from linx.background import BackgroundModel
         from linx.abundances import AbundanceModel
         from linx.nuclear import NuclearRates

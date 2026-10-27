@@ -536,9 +536,9 @@ class TestPyBird:
         assert base.shape == (len(theory.ells), len(k))
         _check_sensitivity(run, base, 'PyBirdTracerSpectrum2Poles', b1=2.0)
 
-        for eft_basis in ['westcoast', 'eastcoast']:
-            theory = PyBirdTracerSpectrum2Poles(k=k, eft_basis=eft_basis)
-            _check(_compile(theory)(), f'PyBirdTracerSpectrum2Poles ({eft_basis})')
+        for prior_basis in ['westcoast', 'eastcoast']:
+            theory = PyBirdTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            _check(_compile(theory)(), f'PyBirdTracerSpectrum2Poles ({prior_basis})')
 
     def test_tracer_correlation(self):
         """PyBirdTracerCorrelation2Poles: shape and b1 sensitivity."""
@@ -1169,8 +1169,8 @@ class TestCOMET:
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
                        if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
-        # sn1: folps' isotropic k^2 stochastic term (off by default), not carried over to comet
-        assert folps_names - comet_names == {'ct', 'X_FoG', 'sn1'}, sorted(folps_names - comet_names)
+        # sn1: folps' isotropic k^2 stochastic term (off by default), not carried over to comet; bA: folps' anisotropic linear bias (off by default)
+        assert folps_names - comet_names == {'ct', 'X_FoG', 'sn1', 'bA'}, sorted(folps_names - comet_names)
         assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).

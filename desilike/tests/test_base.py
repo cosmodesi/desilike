@@ -1915,6 +1915,38 @@ def test_graph_derived_expression_param():
     assert jnp.isfinite(grad['LRG_ell0.b1']) and float(grad['LRG_ell0.b1']) != 0.
 
 
+def test_graph_derived_expression_param_other_node():
+    """A derived expression depending on a parameter of another node follows its current value.
+
+    Regression test: depends were followed within a node only, so a node evaluated before the one
+    owning the depend read its stale value (baked in as a constant under jit), and was not rerun
+    when only the depend changed.
+    """
+    class Half(GaussianLikelihood):
+        def __init__(self, bias, data):
+            self.bias = bias
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.eye(1)
+
+        def __call__(self):
+            self.flattheory = jnp.array([self.bias])
+            return super().__call__()
+
+    bias1 = Parameter('h1.bias', value=0.)
+    bias0 = Parameter('h0.bias', value=0., derived='-value1', depends={'value1': bias1})
+    data0, data1 = 0.3, 0.1
+    # the node of h0 first, evaluated before the node owning h1.bias
+    pipe = build(SumLikelihood([Half(bias0, [data0]), Half(bias1, [data1])]))
+    expected = lambda value: -0.5 * ((-value - data0)**2 + (value - data1)**2)
+    for value in [0.5, -0.2, -0.2, 0.7]:
+        assert np.allclose(float(pipe({'h1.bias': value})), expected(value))
+    jitted = jax.jit(pipe)
+    for value in [0.5, -0.2, 0.7]:
+        assert np.allclose(float(jitted({'h1.bias': value})), expected(value))
+    values = jnp.array([0.5, -0.2, 0.7])
+    assert np.allclose(np.asarray(jax.vmap(pipe)({'h1.bias': values})), expected(np.asarray(values)))
+
+
 def test_eager_after_trace_no_stale_state():
     """Eager calls after jax.grad must not see stale trace-escaped state.
 

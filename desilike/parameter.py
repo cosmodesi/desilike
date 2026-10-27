@@ -1235,13 +1235,19 @@ class Parameter(Variable):
                     eps = (eps_below, eps_above)
                 fd = ParameterFiniteDifference(eps=eps, acc=meta.get('fd_acc', 2),
                                                transform=meta.get('fd_transform'), center=center)
+            derived = meta.get('derived', False)
+            # an expression with dependencies is compiled only once they are resolved (VariableCollection.__setstate__, second pass,
+            # update(depends=...)): compiling it here, before, fails on the dependencies' names
+            deferred = isinstance(derived, str) and bool(meta.get('depends', {}))
             self.__init__(
                 name=meta['name'], value=state.get('value'),
                 prior=meta.get('prior'), ref=meta.get('ref'),
                 latex=meta.get('latex'), fixed=meta.get('fixed', True),
-                derived=meta.get('derived', False),
+                derived=False if deferred else derived,
                 shape=tuple(meta.get('shape', [])),
                 fd=fd, depends={})
+            if deferred:
+                self._derived = derived  # left uncompiled (value as stored) if its dependencies are not in the collection
             # depends resolved later by VariableCollection.__setstate__
         else:
             # in-memory format: feed directly to __init__

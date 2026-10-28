@@ -27,12 +27,19 @@ tests = [
     "dynesty",
     "nautilus-sampler",
     "pocomc",
+    "tabulate",
     "zeus-mcmc",
     "h5py",
     "pyclass @ git+https://github.com/adematti/pyclass",
     "jax",
     "interpax",
-    "blackjax"]
+    "blackjax",
+    "arviz",
+    "matplotlib",
+    "getdist",
+    "iminuit",
+    "py-bobyqa",
+    "optax"]
 plotting = [
     "matplotlib",
     "tabulate",

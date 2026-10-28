@@ -26,7 +26,7 @@ In the following, we will profile a simple two-dimensional Gaussian. We first ha
 
   import numpy as np
 
-  from desilike import profilers
+  from desilike import profiling
   from desilike.likelihoods import BaseGaussianLikelihood
   from desilike.statistics.plotting import triangle_profile
 
@@ -34,7 +34,7 @@ In the following, we will profile a simple two-dimensional Gaussian. We first ha
 
       def calculate(self, **kwargs):
           self.flattheory = np.array([kwargs[name] for name in
-                                      self.varied_params.names()])
+          self.varied_params.names()])
           super().calculate()
 
   likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
@@ -42,27 +42,29 @@ In the following, we will profile a simple two-dimensional Gaussian. We first ha
       a=dict(prior=dict(dist='uniform', limits=[0, 1])),
       b=dict(prior=dict(dist='uniform', limits=[0, 1])))
 
-  profiler = profilers.Profiler(likelihood, posterior=True)
+  profiler = profiling.Profiler(likelihood, posterior=True)
   profiler.add_optimize_all()
   profiler.add_manual_grid(dict(a=np.linspace(0, 1, 5)))
   profiler.add_manual_grid(dict(b=np.linspace(0, 1, 5)))
   profiler.add_manual_grid(dict(a=np.linspace(0, 1, 5), b=np.linspace(0, 1, 4)))
   samples = profiler.run()
 
-  print("MAP Estimates")
+  print("Confidence Intervals")
   for param in likelihood.varied_params.names():
-      x_min, x_map, x_max = samples.interval(param, threshold=0.5)
-      print(f"{param}: {x_map:.3f} ({x_min:.3f} - {x_max:.3f})")
+      bounds = samples.interval(param, threshold=-0.5)
+      for x_min, x_max in bounds:
+          print(f"{param}: [{x_min:.3f}, {x_max:.3f}]")
 
   triangle_profile(samples, filepath='triangle.png')
+
 
 This will print the (correct) MAP estimates and produce the expected profile posterior plot.
 
 .. code-block::
 
-  MAP Estimates
-  a: 0.400 (0.300 - 0.500)
-  b: 0.600 (0.500 - 0.700)
+  Confidence Intervals
+  a: [0.300, 0.500]
+  b: [0.500, 0.700]
 
 .. image:: triangle_profile.png
   :width: 70 %

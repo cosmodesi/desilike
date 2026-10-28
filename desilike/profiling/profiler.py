@@ -24,7 +24,7 @@ class Profiler(BaseClass):
         ----------
         likelihood : BaseLikelihood
             Likelihood to profile.
-        profile_posterior : bool, optional
+        posterior : bool, optional
             If ``True``, profile the posterior. Otherwise, profile the
             likelihood. Default is ``True``.
         rng : numpy.random.Generator, int or None, optional
@@ -304,7 +304,7 @@ class Profiler(BaseClass):
 
             for i in range(len(theta_var)):
                 if np.isfinite(cost[i]):
-                    pass
+                    continue
                 theta_var[i] = []
                 for param in self.params:
                     if param not in self.fixed_params[idx[i]]:
@@ -346,7 +346,7 @@ class Profiler(BaseClass):
             Maximum number of iterations. Default is 10.
         tol : float, optional
             Optimization stops if maximum improvement accross all samples
-            drops below ``tol`` between iterations. Default is 1e-2.
+            drops below ``tol`` between iterations. Default is 1e-3.
         warm_start : bool, optional
             If True, starting positions are limited to the range of
             best-fit parameters thus far. This can only be done if the profiler

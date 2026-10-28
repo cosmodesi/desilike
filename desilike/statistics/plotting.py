@@ -373,7 +373,7 @@ def one_dimensional_profile(
     use = np.ones(len(samples), dtype=bool)
     for param_other in samples.params:
         if param_other != param:
-            use = use & samples[f'flag_optimized_{param_other}']
+            use = use & samples['optimized'][param_other]
 
     if interpolate:
         interp = samples.profile_interpolator(param, posterior=posterior)
@@ -442,9 +442,9 @@ def two_dimensional_profile(
     use = np.ones(len(samples), dtype=bool)
     for param in samples.params:
         if param in params:
-            use = use & ~samples[f'flag_optimized_{param}']
+            use = use & ~samples['optimized'][param]
         else:
-            use = use & samples[f'flag_optimized_{param}']
+            use = use & samples['flag_optimized'][param]
 
     if len(levels) > 0:
         interp = samples.profile_interpolator(params, posterior=posterior)

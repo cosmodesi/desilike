@@ -11,7 +11,7 @@ from desilike import Samples
 from desilike.pool import MPIPool, from_main
 from desilike.utils import BaseClass
 
-from .optimize import optimize_dual_annealing
+from .optimize import dual_annealing
 
 
 class Profiler(BaseClass):
@@ -94,7 +94,7 @@ class Profiler(BaseClass):
         # placeholder for optimized parameters since np.nan is not treated
         # as equal if present in arrays.
         x = np.column_stack([np.where(
-            self.samples[f'flag_optimized_{param}'], 1j,
+            self.samples['optimized'][param], 1j,
             self.samples[param]) for param in self.params])
         self.samples = self.samples[np.unique(x, axis=0, return_index=True)[1]]
 
@@ -103,7 +103,7 @@ class Profiler(BaseClass):
         for i in range(len(self.samples)):
             self.fixed_params.append({})
             for param in self.params:
-                if not self.samples[f'flag_optimized_{param}'][i]:
+                if not self.samples['optimized'][param][i]:
                     self.fixed_params[i][param] = self.samples[i][param]
 
     def add_single_sample(self, param_dict):
@@ -130,9 +130,9 @@ class Profiler(BaseClass):
         for param in self.params:
             if param not in param_dict:
                 samples[param] = [np.nan, ]
-                samples[f'flag_optimized_{param}'] = True
-            else:
-                samples[f'flag_optimized_{param}'] = False
+        samples['optimized'] = np.array(
+            [tuple([param not in param_dict for param in self.params]), ],
+            dtype=[(param, bool) for param in self.params])
 
         self._add_samples(samples)
 
@@ -173,11 +173,13 @@ class Profiler(BaseClass):
 
         samples = Samples(**samples)
         for param in self.params:
-            if param not in samples.params:
+            if param not in param_dict_grid:
                 samples[param] = np.nan
-                samples[f'flag_optimized_{param}'] = True
-            else:
-                samples[f'flag_optimized_{param}'] = False
+
+        samples['optimized'] = np.array(
+            [tuple([param not in param_dict_grid for param in self.params]) for
+             _ in range(len(samples))],
+            dtype=[(param, bool) for param in self.params])
 
         self._add_samples(samples)
 
@@ -355,7 +357,7 @@ class Profiler(BaseClass):
         optimize : callable or None, optional
             Optimize function from ``desilike.profilers.optimize``. If
             ``None``, default to
-            ``desilike.profilers.optimize.optimize_dual_annealing``. Default
+            ``desilike.profilers.optimize.dual_annealing``. Default
             is ``None``.
         optimize_kwargs : dict or None, optional
             Optional keyword arguments passed to the optimize function.
@@ -377,7 +379,7 @@ class Profiler(BaseClass):
             raise ValueError(msg)
 
         if optimize is None:
-            optimize = optimize_dual_annealing
+            optimize = dual_annealing
 
         if optimize_kwargs is None:
             optimize_kwargs = {}

@@ -15,7 +15,7 @@ try:
 except ModuleNotFoundError:
     JAX_INSTALLED = False
 try:
-    import optax
+    import optax as optax_lib
     OPTAX_INSTALLED = True
 except ModuleNotFoundError:
     OPTAX_INSTALLED = False
@@ -24,7 +24,7 @@ from scipy.optimize import dual_annealing as scipy_dual_annealing
 from scipy.optimize import minimize
 
 
-def optimize_bobyqa(f, x_0, rng, **kwargs):
+def bobyqa(f, x_0, rng, **kwargs):
     """Optimize using :meth:`pybobyqa.solve`.
 
     .. rubric:: References
@@ -69,7 +69,7 @@ def optimize_bobyqa(f, x_0, rng, **kwargs):
     return soln.x, soln.f, soln.flag == soln.EXIT_SUCCESS
 
 
-def optimize_dual_annealing(f, x_0, rng, **kwargs):
+def dual_annealing(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.dual_annealing`.
 
     Parameters
@@ -99,7 +99,7 @@ def optimize_dual_annealing(f, x_0, rng, **kwargs):
     return res.x, res.fun, res.success
 
 
-def optimize_minuit(f, x_0, rng):
+def minuit(f, x_0, rng):
     """Optimize using :meth:`iminuit.Minuit.migrad`.
 
     .. rubric:: References
@@ -149,7 +149,7 @@ def optimize_minuit(f, x_0, rng):
     return np.array([m.values[f'x{i}'] for i in range(n_dim)]), m.fval, m.valid
 
 
-def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
+def optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
     """Optimize using an :mod:`optax` gradient-based optimizer.
 
     .. rubric:: References
@@ -196,7 +196,7 @@ def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
             raise ImportError(msg)
 
     if optimizer is None:
-        optimizer = optax.adam(1e-3, **kwargs)
+        optimizer = optax_lib.adam(1e-3, **kwargs)
 
     params = jax.numpy.array(x_0, dtype=float)
     opt_state = optimizer.init(params)
@@ -205,7 +205,7 @@ def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
     for _ in range(n_steps):
         grads = grad_f(params)
         updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
+        params = optax_lib.apply_updates(params, updates)
         params = jax.numpy.clip(params, 0.0, 1.0)
 
     x_min = np.array(params)
@@ -214,7 +214,7 @@ def optimize_optax(f, x_0, rng, optimizer=None, n_steps=1000, **kwargs):
     return x_min, f_min, success
 
 
-def optimize_scipy(f, x_0, rng, **kwargs):
+def scipy_minimize(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.minimize`.
 
     - `scipy repo <https://github.com/scipy/scipy>`_

@@ -19,11 +19,11 @@ MEAN_POSTERIOR = COV_POSTERIOR @ (
     np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
 
 OPTIMIZE = dict(
-    bobyqa=optimize.optimize_bobyqa,
-    dual_annealing=optimize.optimize_dual_annealing,
-    minuit=optimize.optimize_minuit,
-    optax=optimize.optimize_optax,
-    scipy=optimize.optimize_scipy)
+    bobyqa=optimize.bobyqa,
+    dual_annealing=optimize.dual_annealing,
+    minuit=optimize.minuit,
+    optax=optimize.optax,
+    scipy=optimize.scipy_minimize)
 OPTIMIZE_KWARGS = dict(
     bobyqa=None,
     dual_annealing=dict(maxiter=10),
@@ -86,7 +86,7 @@ def test_accuracy(likelihood, posterior, key):
                           rtol=0, atol=1e-6)
 
     sd = dict(zip(['a', 'b'], SD_POSTERIOR if posterior else SD_LIKELIHOOD))
-    use = (~samples['flag_optimized_a'] & samples['flag_optimized_b'])
+    use = (~samples['optimized']['a'] & samples['optimized']['b'])
     assert np.sum(use) == 4
     assert np.allclose(
         -0.5 * ((samples['a'] - mean['a'])**2 / sd['a']**2)[use],

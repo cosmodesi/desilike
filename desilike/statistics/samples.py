@@ -13,7 +13,8 @@ from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
 
-SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior']
+SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior',
+                'optimized']
 
 
 def _sort_into_grid(x, y):
@@ -82,13 +83,8 @@ class Samples(BaseClass):
         return list(self.data.keys())
 
     @property
-    def flags(self):
-        return [key for key in self.keys if key[:5] == 'flag_']
-
-    @property
     def params(self):
-        return [key for key in self.keys if key not in SPECIAL_KEYS and
-                key not in self.flags]
+        return [key for key in self.keys if key not in SPECIAL_KEYS]
 
     def __setitem__(self, key, value):
         """Manipulate the samples.
@@ -575,10 +571,10 @@ class Samples(BaseClass):
             # where the parameter itself is optimized. In all other cases, the
             # grid will not be regular, so don't.
             if param in params and len(params) > 1:
-                use = use & ~self[f'flag_optimized_{param}']
+                use = use & ~self['optimized'][param]
             elif param not in params:
                 try:
-                    use = use & self[f'flag_optimized_{param}']
+                    use = use & self['optimized'][param]
                 except ValueError:
                     # Flag may not be set because the user added the parameter
                     # later. Ignore.

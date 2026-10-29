@@ -3622,7 +3622,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                  k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
                  mg_params_override=None, growth_source='ode', ingredients_provider=None,
                  fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10,
-                 use_jax_tables=False, with_now='peakaverage', params=None, **kwargs):
+                 use_jax_tables=False, params=None, **kwargs):
         # Nodes (Calculator deps, Parameters) and their update() live in __init__.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -3631,24 +3631,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
-        # The no-wiggle engine of the template (cosmoprimo's PowerSpectrumBAOFilter), which
-        # splits the linear P(k) into the wiggle / no-wiggle parts the IR resummation needs.
-        # 'peakaverage' stays the default -- it is what every other model in this file uses and
-        # what the FKPT tables were validated with -- but it is now an argument, because for
-        # HDKI + EFT_DE it is not always computable: the quasi-static Horndeski source makes the
-        # linear growth scale-dependent at k ~ 1 / sqrt(h3) ~ 1e-3 h/Mpc, and on backgrounds
-        # with w0 + wa close to 0 (dark energy matter-like at early times) the linear P(k) then
-        # DECREASES with k below ~3e-3 h/Mpc (d ln P / d ln k = -0.9 measured at k = 1e-3 for
-        # c_B = 1.0, c_M = 0.7, w0 = -0.68, wa = 0.62). 'peakaverage' (and 'wallish2018') return
-        # NaN on such a spectrum, and the whole no-wiggle table and the kernel constants follow:
-        # 14% of the training nodes of an emulator over the EFT-of-DE box came back non-finite
-        # for this reason alone. 'hinton2017' (a polynomial broadband fit) is finite
-        # there and is the closest to 'peakaverage' where both work (measured on a fiducial-like
-        # model, LRG1 multipoles: 0.08%, 0.24%, 0.50% on P0, P2, P4, against 0.26 / 0.81 / 1.65%
-        # for 'savgol' and 0.16 / 0.71 / 2.74% for 'ehpoly'). The pipeline passes it for EFT_DE
-        # (desi-clustering tools_MG.propose_fiducial_fkptjax_theory_options); the choice is part
-        # of the theory options, so training and sampling always agree on it.
-        self.template.update(with_now=with_now)
+        self.template.update(with_now='peakaverage')
 
         # Fixed at the GR limit (0.) by default, like the other MG parameters below;
         # fixed=False sampling is opt-in (only for model='HDKI', mg_variant='mu_OmDE').
@@ -3708,7 +3691,7 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
                       mg_params_override=None, growth_source='ode',
                       ingredients_provider=None,
                       fkpt_nquad_steps=300, fkpt_nq=10, fkpt_nr=10,
-                      use_jax_tables=False, with_now='peakaverage', **kwargs):
+                      use_jax_tables=False, **kwargs):
         # Non-node setup only.  fkptjax imports folps internally: assert the JAX backend now.
         _import_folps()
         self._model = str(model)

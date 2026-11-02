@@ -2724,7 +2724,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
       centred on 0, as for ``sn0`` and ``sn2``. Measured in the AbacusHF LRG z = 0.5 boxes (real space,
       :math:`\bar{n} P_\mathrm{err} = \bar{n} [P_{gg} - P_{gm}^2 / P_{mm}]`): a :math:`k^2` slope of -0.5 (all) to -0.8 (centrals)
       (Mpc/h)^2, i.e. :math:`s_{n,1} \sim -2.3` to -3.7 in these units (:math:`R_\mathrm{vir}^2 = 0.22` (Mpc/h)^2 for LRG), within the prior.
-    - Not available with the fkptjax pt (raises if ``sn1`` is used). The h-preconditioned emulator divides it by
+    - With the fkptjax pt (since 2026-10-23) the term is projected on its own and added to the multipoles. The h-preconditioned emulator divides it by
       :math:`(h / h_\\mathrm{fid})^5`, as folps' k^2 shot term, since it is built from the same dilated k and jacobian.
     Anisotropic linear bias ``bA`` (each tracer), **off by default** (fixed at 0, a fixed ``bA`` is ignored, whatever its value):
     the tree-level kernel becomes :math:`b_1 + f\mu^2 + b_A (\mu^2 - 1/3)`, the linear form of a selection-dependent anisotropic
@@ -4117,17 +4117,21 @@ class FKPTJAXPTSpectrum2Poles(Calculator):
         # FOLPSTracerSpectrum2Poles.__call__ always passes it) but only the None no-op is supported.
         if redshift_smearing is not None:
             raise NotImplementedError('redshift_smearing is not supported by the fkptjax pipeline (use the FOLPS pt)')
-        # fkptjax builds the multipoles itself, with no hook for an extra stochastic term
-        if sn1 is not None:
-            raise NotImplementedError('sn1 is not supported by the fkptjax pipeline (use the FOLPS pt)')
         from fkptjax.pipelines import poles_from_tables
 
-        return poles_from_tables(
+        poles = poles_from_tables(
             self._table_state, jac=self.jac, kap=self.kap, muap=self.muap,
             pars=jnp.asarray(pars), mu=self._to_poles.mu, wmu=self._to_poles.wmu, ells=self.ells,
             bias_scheme=bias_scheme, IR_resummation=True, damping=damping,
             to_poles=self._to_poles,
         )
+        if sn1 is not None:
+            # The isotropic k^2 stochastic term (2026-10-23). fkptjax builds the multipoles itself, so
+            # the term is projected on its own and added: the same AP-distorted k, the same volume
+            # Jacobian and the same Legendre quadrature as the FOLPS pt, where it is added to P(k, mu)
+            # before the projection. ``sn1`` arrives normalised by the tracer (sn1 R_vir^2 / (A_AP nbar)).
+            poles = poles + self._to_poles(self.jac * sn1 * self.kap**2)
+        return poles
 
     def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **kwargs):
         """Evaluate bispectrum multipoles for *pars* (FKPT bias vector, Sugiyama_Bell basis).

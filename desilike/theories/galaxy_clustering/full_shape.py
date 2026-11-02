@@ -7139,6 +7139,50 @@ class FKPTShapeEmulator(CalculatorEmulator):
         self._layout_cache = None
 
 
+class FKPTShapeGrowthEmulator(FKPTShapeEmulator):
+    r"""The shape emulator with the growth divided out of the loop columns as well.
+
+    :class:`FKPTShapeEmulator` divides every leaf by its power of :math:`A_s` and leaves the loop
+    columns to carry the growth, :math:`D^4(z)`, across the box.  Its residual is relative to each
+    output's MAXIMUM over the nodes, so over a box whose growth varies by a factor of a few the
+    least-squares fit spends its accuracy on the large-growth nodes and the same residual is a
+    several-times larger fraction of the value at GR-like points.  Measured on the no-slip
+    EFT-of-DE box with :math:`c_M \in [-1.5, 0.5]` (LRG1, 2026-10-22): the valleys reach
+    :math:`G_\mathrm{eff} \simeq 2 G` and the loop columns grow by 4 to 5, the fit residual stays at
+    6e-4 of the maximum, and the emulator is off by 0.56% (median max :math:`|dP/P|`, dchi2 43) at
+    the reference points against 0.14% (dchi2 0.6) on the :math:`c_M \in [-0.3, 0.3]` box with the
+    same residual.
+
+    Here every fitted output of amplitude degree :math:`d` is also divided by
+    :math:`\sigma_8^{2d}` (the amplitude-reduced :math:`\sigma_8` at the pt's redshift, the scalar
+    the shape emulator already fits once), so the loop columns carry only the kernel modifications
+    and the shape of the spectrum, O(10%) over the box.  The :math:`\sigma_8` fit error then enters
+    the loop terms at degree 4 -- what the parent class chose to avoid for the narrow box; it is
+    the smoothest output of the set and fitted to ~1e-4, i.e. ~4e-4 on the loop terms, an order
+    of magnitude below what the dynamic range cost.  Same checkpoints, same nodes: a fit-time
+    change only.
+    """
+
+    def _growth_normalised(self):
+        return [(name, degree) for name, (child, degree) in self._layout()['fitted'].items()
+                if degree and name != 'sigma8']
+
+    def transform(self, values, params):
+        out = super().transform(values, params)
+        sigma8 = np.asarray(out['sigma8'])   # sigma8 / A_s^{1/2}: the growth at the reference amplitude
+        with np.errstate(divide='ignore', invalid='ignore'):
+            for name, degree in self._growth_normalised():
+                out[name] = out[name] / sigma8**(2. * degree)
+        return out
+
+    def inverse_transform(self, values, params):
+        sigma8 = values['sigma8']
+        values = dict(values)
+        for name, degree in self._growth_normalised():
+            values[name] = values[name] * sigma8**(2. * degree)
+        return super().inverse_transform(values, params)
+
+
 class GeoFPTAXPTSpectrum2Poles(Calculator):
     r"""
     GeoFPTAX 1-loop real-space matter power spectrum.

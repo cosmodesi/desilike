@@ -258,8 +258,9 @@ def get_physical_stochastic_settings(tracer=None):
     physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults (``rvir``: the LRG value).
 
     ``sigv`` normalises the :math:`k^2 \mu^2` term ``sn2`` (and ``sn4``), ``rvir`` the isotropic :math:`k^2` term ``sn1`` of
-    :class:`FOLPSTracerSpectrum2Poles`; both use the same halo masses and redshifts (log M = 13, 13, 12, 12.7 and z = 0.2,
-    0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO). The isotropic :math:`k^2` dependence of the stochastic power comes from the halo scale
+    :class:`FOLPSTracerSpectrum2Poles` and :class:`PyBirdTracerSpectrum2Poles`. Both use the same masses and redshifts
+    (log M = 13, 13, 12, 12.7 and z = 0.2, 0.8, 1.1, 1.4 for BGS, LRG, ELG, QSO). The isotropic :math:`k^2` dependence
+    of the stochastic power comes from the halo scale
     (exclusion, higher-derivative and nonlinear bias, for centrals as well as satellites), not only from the satellite profile:
     hence the virial radius of the host, without ``fsat``.
     """
@@ -1573,8 +1574,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     Its sampled dbk2 and dbtd are zero-centred deviations from the coevolution relations
     bK2 = -2/7 (b1 - 1) and btd = 23/42 (b1 - 1), with Gaussian widths 20 and 1.
     These shifts use the current b1.
-    DESI stochastic terms are [sn0 + sn1 (k/knl)^2 + sn2 fsat sigv^2 k^2 mu^2] / nbar, with knl=0.3 h/Mpc.
-    sn1 is fixed at zero by default; when freed, its Gaussian prior has mean zero and standard deviation 2.
+    DESI stochastic terms are [sn0 + sn1 rvir^2 k^2 + sn2 fsat sigv^2 k^2 mu^2] / nbar.
+    sn1 is fixed at zero by default and contributes only when freed, as in FOLPS physical bases.
+    Its Gaussian prior has mean zero and standard deviation 5; the term is linear and can be marginalized analytically.
     Stochastic terms are normalized by nbar and km in _bias_coefficients.
     The PT basis is always eftoflss, independently of this tracer's prior_basis.
 
@@ -1603,6 +1605,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     fsat, sigv : float, default=None
         DESI stochastic normalization; defaults are 0.1 and 5.
         Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
+    rvir : float, default=None
+        Halo virial radius [Mpc/h] for DESI sn1; defaults to get_physical_stochastic_settings()['rvir'].
+        Cross spectra use one spectrum-level rvir, passed explicitly if needed.
     """
 
     @classmethod
@@ -1647,7 +1652,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             stochastic = [
                 Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
-                Parameter('sn1', value=0., prior=dict(dist='norm', loc=0., scale=2.), fixed=True,
+                Parameter('sn1', value=0., prior=dict(dist='norm', loc=0., scale=5.), fixed=True,
                           ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,1}'),
                 Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=5.), fixed=False,
                           ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
@@ -1736,7 +1741,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(cls._auto_params(prior_basis), tracers, stochastic=not_shared, cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rvir=None,
                  rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, cross_sharing_mode=cross_sharing_mode)
@@ -1756,7 +1761,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rvir=None,
                       rescaling='sigma8+AP', cross_sharing_mode='bias+ctr', **kwargs):
         # Non-node setup only.
         self._cross_sharing_mode = cross_sharing_mode
@@ -1768,6 +1773,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             settings = get_physical_stochastic_settings()
             self._fsat = float(fsat) if fsat is not None else settings['fsat']
             self._sigv = float(sigv) if sigv is not None else settings['sigv']
+            self._rvir = float(rvir) if rvir is not None else settings['rvir']
         if isinstance(self.b1, tuple):
             self.km = km if isinstance(km, tuple) else (float(km),) * 2
             self.kr = kr if isinstance(kr, tuple) else (float(kr),) * 2
@@ -1829,7 +1835,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         elif prior_basis == 'DESI':
             b1, b2_desi, dbk2, dbtd, alpha0, alpha2, alpha4, sn0, sn1, sn2 = self._rescale_params(
                 b1, get('b2'), get('dbk2'), get('dbtd'),
-                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'), get('sn1'), get('sn2'))
+                get('alpha0'), get('alpha2'), get('alpha4'), get('sn0'),
+                0. if self.sn1.fixed else get('sn1'), get('sn2'))
             # Shift the rescaled deviations using the rescaled Eulerian b1.
             bk2 = dbk2 - 2. / 7. * (b1 - 1.)
             btd = dbtd + 23. / 42. * (b1 - 1.)
@@ -1847,9 +1854,8 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             # Cancel the pair's km normalization and the EFT stochastic growth-rate factor.
             km2 = self.km[0] * self.km[1] if isinstance(self.km, tuple) else self.km**2
             ce0 = sn0
-            # Isotropic k^2 stochastic term; cancel km so its physical scale is fixed at knl.
-            knl = 0.3
-            ce1 = sn1 * km2 / knl**2
+            # Cancel km so the isotropic stochastic term is sn1 * rvir^2 * k^2 / nbar, as in FOLPS.
+            ce1 = sn1 * self._rvir**2 * km2
             ce2 = sn2 * self._fsat * self._sigv**2 * km2 / f
             return dict(b1=b1, b2=b2, b3=b3, b4=b4, cct=cct, cr1=cr1, cr2=cr2, ce0=ce0, ce1=ce1, ce2=ce2)
         elif prior_basis == 'westcoast':
@@ -2121,6 +2127,8 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     fsat, sigv : float, default=None
         DESI stochastic normalization; defaults are 0.1 and 5 Mpc/h, as in FOLPS physical.
         Cross spectra use one spectrum-level fsat and sigv, passed explicitly if needed.
+    rvir : float, default=None
+        Halo virial radius [Mpc/h] for DESI sn1; defaults to get_physical_stochastic_settings()['rvir'].
     """
 
     @classmethod
@@ -2142,7 +2150,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
                                            tracers, stochastic=PyBirdTracerSpectrum2Poles._stochastic_names(prior_basis))  # no cross
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
-                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None,
+                 nbar=1e-4, tracers=None, params=None, km=0.7, kr=0.25, fsat=None, sigv=None, rvir=None,
                  rescaling='sigma8+AP', **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
@@ -2162,7 +2170,8 @@ class PyBirdTracerCorrelation2Poles(Calculator):
             self.pt.update(template=template)
 
     def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='DESI',
-                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rescaling='sigma8+AP', **kwargs):
+                      nbar=1e-4, tracers=None, km=0.7, kr=0.25, fsat=None, sigv=None, rvir=None,
+                      rescaling='sigma8+AP', **kwargs):
         # Non-node setup only.
         self._nbar = float(nbar)
         self._rescaling = rescaling if self._prior_basis == 'DESI' else None
@@ -2172,6 +2181,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
             settings = get_physical_stochastic_settings()
             self._fsat = float(fsat) if fsat is not None else settings['fsat']
             self._sigv = float(sigv) if sigv is not None else settings['sigv']
+            self._rvir = float(rvir) if rvir is not None else settings['rvir']
         self.km = float(km)
         self.kr = float(kr)
 

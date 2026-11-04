@@ -165,6 +165,43 @@ class TestPNGTracerSpectrum2Poles:
         assert 'fnl_loc' in names  # shared, unnamespaced
         _check(_eval(theory, 'poles'), 'PNG cross')
 
+    def test_local_basis(self):
+        """Local line-of-sight basis (ell1, ell2): consistent with the plane-parallel multipoles, and A02 - A20 = 2 f (b_X - b_Y) P / 3 for a cross."""
+        from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
+        local_ells = [(0, 0), (0, 2), (2, 0), (2, 2)]
+        k = np.linspace(0.02, 0.3, 60)
+        for tracers in [None, ('LRG', 'QSO')]:
+            values = {'fnl_loc': 30.}
+            if tracers is None:
+                values.update(b1=2., sn0=0.2)
+            else:
+                values.update({'LRG.b1': 2., 'QSO.b1': 1.2, 'LRG.sigmas': 0., 'QSO.sigmas': 0., 'LRGxQSO.sn0': 0.2})
+            theory = PNGTracerSpectrum2Poles(k=k, ells=(0, 2, 4), tracers=tracers, template=_make_template())
+            pole0, pole2, pole4 = _eval(theory, 'poles', **values)
+            theory = PNGTracerSpectrum2Poles(k=k, ells=local_ells, tracers=tracers, template=_make_template())
+            local_poles = dict(zip(local_ells, _eval(theory, 'poles', **values)))
+            # the plane-parallel multipoles only see A00, A22 and A02 + A20
+            assert np.allclose(local_poles[0, 0] + local_poles[2, 2] / 5., pole0)
+            assert np.allclose(local_poles[0, 2] + local_poles[2, 0] + 2. / 7. * local_poles[2, 2], pole2)
+            assert np.allclose(18. / 35. * local_poles[2, 2], pole4)
+            antisymmetric = local_poles[0, 2] - local_poles[2, 0]
+            if tracers is None:
+                assert np.allclose(antisymmetric, 0.)
+            else:
+                assert np.all(antisymmetric > 0.), 'b_X > b_Y: A02 > A20'
+        # no PNG, no FoG: A_{l1 l2} = beta^X_{l1} beta^Y_{l2} P, beta_0 = b + f / 3, beta_2 = 2 f / 3,
+        # so (A02 - A20) / A22 = 3 (b_X - b_Y) / (2 f) and A02 / A22 = 3 (b_X + f / 3) / (2 f)
+        b1_first, b1_second = 2., 1.2
+        theory = PNGTracerSpectrum2Poles(k=k, ells=local_ells, tracers=('LRG', 'QSO'), template=_make_template())
+        values = {'fnl_loc': 0., 'LRGxQSO.sn0': 0., 'LRG.b1': b1_first, 'QSO.b1': b1_second, 'LRG.sigmas': 0., 'QSO.sigmas': 0.}
+        local_poles = dict(zip(local_ells, _eval(theory, 'poles', **values)))
+        growth_rate = 3. * (b1_first - b1_second) / 2. / ((local_poles[0, 2] - local_poles[2, 0]) / local_poles[2, 2])
+        assert np.allclose(growth_rate, growth_rate[0])
+        assert np.allclose(local_poles[0, 2] / local_poles[2, 2], 3. * (b1_first + growth_rate / 3.) / (2. * growth_rate))
+        assert np.allclose(local_poles[2, 0] / local_poles[2, 2], 3. * (b1_second + growth_rate / 3.) / (2. * growth_rate))
+        with pytest.raises(ValueError):
+            _eval(PNGTracerSpectrum2Poles(k=k, ells=[(0, 0), (4, 0)], template=_make_template()), 'poles')
+
     def test_param_variation(self):
         """Each varied parameter changes the result."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles

@@ -1225,9 +1225,16 @@ class MCMCSampler(BaseSampler):
             for kernel in self._kernels:
                 kernel.nsteps_hint = min(check_every, save_every, max_steps)
 
-        # Initialise all local runs.
+        # Initialise all local runs.  `read()` restores checkpointed samples on the group's main rank
+        # only, so the workers' `_round_samples` are None even on a resume: decided per rank, the
+        # workers would enter `initialize_samples` (and block in `pool.wait()`) while the main rank
+        # skipped it and went on to the `allgather` below -- a silent deadlock. Decide on the main
+        # rank and broadcast within the group.
         for local_idx in range(self._runs_per_group):
-            if self._round_samples[local_idx] is None:
+            needs_init = self._round_samples[local_idx] is None
+            if self.pool.size > 1:
+                needs_init = self.pool.comm.bcast(needs_init if self.pool.main else None, root=0)
+            if needs_init:
                 self.initialize_samples(max_init_attempts=max_init_attempts, local_idx=local_idx)
 
         if adaptation is not None:

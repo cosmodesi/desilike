@@ -4899,6 +4899,8 @@ class COMETPTSpectrum2Poles(Calculator):
         'P1L_b1b1', 'P1L_b1b2', 'P1L_b1g2', 'P1L_b1g21',
         'P1L_b2b2', 'P1L_b2g2', 'P1L_g2g2', 'P1L_b2', 'P1L_g2', 'P1L_g21',
         'Pnoise_NP0', 'Pnoise_NP20', 'Pnoise_NP22',
+        # DESIct only: the L6 part of alpha4's mu^6 counterterm, and the k^4 mu^4 shot noise.
+        'Pctr_c6', 'Pnoise_NP4',
     )
 
     @classmethod
@@ -4970,9 +4972,9 @@ class COMETPTSpectrum2Poles(Calculator):
         f = _comet_growth_rate(cosmo_base, self.z, xp=xp)
         self.qpar, self.qper, self.f = qpar, qper, f
 
-        # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
-        # templates (no octopole/P6 contribution), matching the original
-        # PX_ell(X_list=self._diagrams) call's scope: P6 was never in self._diagrams,
+        # table shape: (ndiagrams, nells, nk) -- the 19 PT diagrams + 3 noise templates, plus
+        # the DESIct c6 and k^4 mu^4 noise templates (no octopole/P6 contribution), matching
+        # the original PX_ell(X_list=self._diagrams) call's scope: P6 was never in self._diagrams,
         # so COMETTracerSpectrum2Poles's bias-recombination coeff array never included it.
         # Pass dummy zero bias params so PX_ell runs the full diagram decomposition
         # without any bias combination (each diagram is independent of bias coefficients).
@@ -5035,7 +5037,7 @@ def _comet_conventions(conventions):
     default), established against the COMET team's own LRG3 chain (see the comparison write-up in
     claude_comparison_folpsD_comet).  The COMET team's convention:
 
-    - stochastic terms in comet's own parametrisation: NP20 and NP22 independent columns;
+    - stochastic terms in comet's own parametrisation: NP20 and NP22 independent columns, no k^4 mu^4 term (sn4 fixed at 0);
     - their nuisance widths where they differ from desilike's: alpha4 fixed at 0.
 
     Both use comet's pair-noise term (b1 MB0 + NP0 f mu^2), without the document's factor 2 on SN_0 (which
@@ -5086,14 +5088,18 @@ def _comet_amplitude_fixed(md, s_ratio, cosmo_params, z, de_model, use_mpc, sigm
 # renamed to FOLPSD's names, so the two codes' physical_aap parameters are literally the same
 # names for the same physical quantities, with the same normalization (see the correspondence
 # table in the comparison notebooks).  comet's own names are kept for its native bases.
-# NP22 has no FOLPSD counterpart -- it is an extra pure-quadrupole k^2 stochastic freedom --
-# but it is renamed 'sn22' anyway, to sit in the same s_n family as sn0 / sn2 rather than read
-# as a leftover comet name.
-# Not renamed: NB0 (extra bispectrum constant) and cnloB have no FOLPSD counterpart; `avir`
+# DESIct's stochastic terms follow comet's SN basis, SN0 + SN20 k^2 + SN22 k^2 mu^2 + SN4 k^4 mu^4,
+# which is the prior document's SN0 + SN1 k^2 + SN2 k^2 mu^2 + SN4 k^4 mu^4: SN20 -> sn1, SN22 -> sn2.
+# The COMET team's convention keeps comet's columns instead, NP20 (k^2) and NP22 (k^2 L_2(mu)) -> sn2
+# and sn22 (NP22 has no FOLPSD counterpart, but sits in the same s_n family); NP0 -> sn0 is also the
+# bispectrum's pair noise.
+# The bispectrum's own renames (NB0 -> sn0b, the EFT cB1 / cB2 -> FOLPSD's c1 / c2) are in
+# COMETTracerSpectrum3Poles._PHYSICAL_NAME_OVERRIDES.  `avir`
 # keeps its name deliberately -- FOLPSD's X_FoG is *not* the same knob for the power spectrum
 # (it depends on damping_method / use_GTNS), and neither is a parameter of the prior document.
 _COMET_PHYSICAL_NAMES = {'b2d': 'b2', 'bk2': 'bs', 'btd': 'b3',
                          'a0': 'alpha0', 'a2': 'alpha2', 'a4': 'alpha4',
+                         'SN0': 'sn0', 'SN20': 'sn1', 'SN22': 'sn2', 'SN4': 'sn4',
                          'NP0': 'sn0', 'NP20': 'sn2', 'NP22': 'sn22', 'MB0': 'snb0'}
 
 
@@ -5200,22 +5206,27 @@ class COMETTracerSpectrum2Poles(Calculator):
                     # (sn2 is analytically marginalized, so its width enters the marginal likelihood).
                     Parameter('sn0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=2.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,0}'),
                     Parameter('sn2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,2}'),
+                ]
+                if comet_conventions:
                     # In the COMET team's convention sn2 and sn22 ARE comet's NP20 and NP22, each carrying
                     # the same fsat sigma_v^2 rescaling (see _get_canonical_params), so they are
                     # the same physical quantity in the same units and take the same prior.
-                    # In desilike's convention sn22 is instead an extra pure-quadrupole k^2 freedom on
-                    # top of the document's SN_2, normalized by sigma_v^4, and keeps its own.
-                    Parameter('sn22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5. if comet_conventions else 2.),
-                              ref=dict(dist='norm', loc=0.0, scale=5.), latex=R's_{n,22}'),
-                ]
+                    params += [Parameter('sn22', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=5.), latex=R's_{n,22}')]
+                else:
+                    # The prior document's SN_1 k^2, comet's SN20, normalized by R_vir^2 (same prior as FOLPSD's sn1, but free).
+                    params += [Parameter('sn1', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,1}')]
+                # The prior document's SN_4 k^4 mu^4, normalized by fsat sigma_v^4 (same prior as velocileptors' physical sn4).
+                params += [Parameter('sn4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,4}')]
             else:
                 params += [
                     Parameter('a0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_0'),
                     Parameter('a2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_2'),
                     Parameter('a4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_4'),
-                    Parameter('NP0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_0'),
-                    Parameter('NP20', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 0}'),
-                    Parameter('NP22', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 2}'),
+                    # comet's DESIct stochastic terms, SN0 + SN20 k^2 + SN22 k^2 mu^2 + SN4 k^4 mu^4, in units of 1/nbar.
+                    Parameter('SN0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'S_{N,0}'),
+                    Parameter('SN20', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'S_{N,20}'),
+                    Parameter('SN22', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'S_{N,22}'),
+                    Parameter('SN4', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'S_{N,4}'),
                 ]
         else:
             raise NotImplementedError(counterterm_basis)
@@ -5227,6 +5238,8 @@ class COMETTracerSpectrum2Poles(Calculator):
         if comet_conventions and 'physical' in prior_basis:
             for param in params.select(basename='alpha4'):
                 param.update(value=0., fixed=True, derived=False)   # their `set_and_fix_param('a4', 0.)`
+            for param in params.select(basename='sn4'):
+                param.update(value=0., fixed=True, derived=False)   # comet's own parametrisation has no k^4 mu^4 term
         return params
 
     @classmethod
@@ -5291,6 +5304,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        self._rvir = float(rvir) if rvir is not None else settings['rvir']
         if self._direct:
             self._model = model
             self.z = float(1.0 if z is None else z)
@@ -5312,11 +5326,12 @@ class COMETTracerSpectrum2Poles(Calculator):
         if self._direct:
             return self._call_direct()
         params = self._get_canonical_params()
-        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (params[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
+        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22, c6, NP4 = (params[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo',
+                                                                                                    'NP0', 'NP20', 'NP22', 'c6', 'NP4'))
         coeff = jnp.array([
             b1**2, b1, 1.0, c0, c2, c4, b1**2 * cnlo, b1 * cnlo, cnlo,
             b1**2, b1*b2, b1*g2, b1*g21, b2**2, b2*g2, g2**2, b2, g2, g21,
-            NP0, NP20, NP22,
+            NP0, NP20, NP22, c6, NP4,
         ])
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
         return self.poles
@@ -5349,7 +5364,8 @@ class COMETTracerSpectrum2Poles(Calculator):
                                         self._use_mpc, self._sigma_ref_fid)
         canonical = self._get_canonical_params(rescale_counterterms=False)
         pell_params = dict(cosmo_params.items())
-        for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
+        # c6 / NP4 are taken as is by our comet fork's Pell in any counterterm basis (zero outside DESIct).
+        for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22', 'c6', 'NP4'):
             pell_params[name] = _wrap(canonical[name])
         if avir is not None:
             pell_params['avir'] = avir
@@ -5421,6 +5437,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         else:
             raise ValueError(f'Unknown bias_basis: {bias_basis!r}')
 
+        c6, NP4 = 0.0, 0.0  # only DESIct has an L6 counterterm and a k^4 mu^4 noise term
         if counterterm_basis == 'Comet':
             c0, c2, c4, cnlo = g('c0'), g('c2'), g('c4'), g('cnlo')
             NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
@@ -5447,29 +5464,28 @@ class COMETTracerSpectrum2Poles(Calculator):
             NP0, NP20, NP22 = NP0 / self._nbar, NP20 / self._nbar, NP22 / self._nbar
         elif counterterm_basis == 'DESIct':
             a0, a2, a4 = g('a0'), g('a2'), g('a4')
-            NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
             if 'physical' in self._prior_basis:
                 a0, a2, a4 = a0 / (A**2 * A_AP), a2 / (A**2 * A_AP), a4 / (A**2 * A_AP)
-                NP0 = NP0 / A_AP / self._nbar
-                if self._comet_conventions:
-                    # comet's own parametrisation, which is what the COMET team fits: NP20 and
-                    # NP22 stay independent columns rather than being reconstructed from the
-                    # document's SN_2, and both carry the same fsat sigma_v^2 rescaling (and so
-                    # the same prior). The document's SN_2 k^2 mu^2 is not imposed; it is one
-                    # point of the (NP20, NP22) plane, so this is a strictly wider model.
-                    NP20 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2
-                    NP22 = NP22 / A_AP / self._nbar * self._fsat * self._sigv**2
-                else:
-                    # Prior-document convention (TG_2pt3pt_priors): the stochastic sector is
-                    # SN_0 + SN_2 k^2 mu^2 (+ SN_4 k^4 mu^4, which comet cannot represent -- it has
-                    # no k^4 column). comet's columns are 1, k^2 and k^2 L_2(mu), so SN_2's
-                    # k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)] feeds *both* k^2 columns: NP20 is SN_2,
-                    # matching FOLPSD's sn2 (and its fsat sigma_v^2 prior normalization).
-                    # sn22 is then an extra pure-quadrupole freedom with no document counterpart,
-                    # added on top; it is 0 by default.
-                    sn2 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2
-                    NP22 = 2. / 3. * sn2 + NP22 / A_AP / self._nbar * self._fsat * self._sigv**4
-                    NP20 = sn2 / 3.
+            if 'physical' in self._prior_basis and self._comet_conventions:
+                # comet's own parametrisation, which is what the COMET team fits: NP20 (k^2) and
+                # NP22 (k^2 L_2(mu)) are independent columns rather than the document's SN_1 and
+                # SN_2, and both carry the same fsat sigma_v^2 rescaling (and so the same prior).
+                # No k^4 mu^4 term: sn4 is fixed at 0 in this convention.
+                NP0 = g('NP0') / A_AP / self._nbar
+                NP20 = g('NP20') / A_AP / self._nbar * self._fsat * self._sigv**2
+                NP22 = g('NP22') / A_AP / self._nbar * self._fsat * self._sigv**2
+                NP4 = g('SN4') / A_AP / self._nbar * self._fsat * self._sigv**4
+            else:
+                # comet's DESIct stochastic terms, SN0 + SN20 k^2 + SN22 k^2 mu^2 + SN4 k^4 mu^4, in units of 1/nbar.
+                SN0, SN20, SN22, SN4 = (g(name) / self._nbar for name in ('SN0', 'SN20', 'SN22', 'SN4'))
+                if 'physical' in self._prior_basis:
+                    # Prior-document convention (TG_2pt3pt_priors): SN_0 + SN_1 k^2 + SN_2 k^2 mu^2 + SN_4 k^4 mu^4 are
+                    # sn0, sn1, sn2, sn4, normalized as FOLPSD's: SN_1 by the host's virial radius R_vir^2, SN_2 and
+                    # SN_4 by the satellites' fsat sigma_v^2 and fsat sigma_v^4.
+                    SN0, SN20, SN22, SN4 = (SN0 / A_AP, SN20 / A_AP * self._rvir**2,
+                                            SN22 / A_AP * self._fsat * self._sigv**2, SN4 / A_AP * self._fsat * self._sigv**4)
+                # comet's columns (as its DESIct conversion): 1, k^2, k^2 L_2(mu), k^4 mu^4, with mu^2 = L_0 / 3 + 2 L_2 / 3.
+                NP0, NP20, NP22, NP4 = SN0, SN20 + SN22 / 3., 2. / 3. * SN22, SN4
 
             c0 = -0.5 * (a0 * (b1**2 + b1 * f / 3.0)
                             + a2 * (b1 * f / 3.0 + f**2 / 5.0)
@@ -5479,6 +5495,8 @@ class COMETTracerSpectrum2Poles(Calculator):
                             + a4 * (4.0 * b1 * f / 7.0 + 10.0 * f**2 / 21.0))
             c4 = -0.5 * (8.0 * a2 * f**2 / 35.0
                             + a4 * (8.0 * b1 * f / 35.0 + 24.0 * f**2 / 77.0))
+            # L6 part of alpha4's f^2 mu^6 term: mu^6 = L0/7 + 10 L2/21 + 24 L4/77 + 16 L6/231 (as comet's DESIct).
+            c6 = -0.5 * 16.0 / 231.0 * a4 * f**2
             cnlo = 0.0  # DESIct has no cnlo counterterm.
         else:
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
@@ -5491,17 +5509,18 @@ class COMETTracerSpectrum2Poles(Calculator):
                 # Skipped when rescale_counterterms=False (pt=False/_call_direct()): eval_pell_from_raw_params()'s
                 # get_bias_coeff(..., h=h_rescale) already applies this same h-rescaling internally -- applying it
                 # here too would double-count it.
-                c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
+                c0, c2, c4, c6 = c0 / h**2, c2 / h**2, c4 / h**2, c6 / h**2
                 cnlo = cnlo / h**4
                 # Same story for the stochastic terms, which the PX_ell() splines emit as
-                # k_Mpc^0 and k_Mpc^2 columns converted to (Mpc/h)^3, i.e. carrying h^3 and h^5.
+                # k_Mpc^0, k_Mpc^2 and k_Mpc^4 columns converted to (Mpc/h)^3, i.e. carrying h^3, h^5 and h^7.
                 NP0 = NP0 / h**3
                 NP20, NP22 = NP20 / h**5, NP22 / h**5
+                NP4 = NP4 / h**7
             # rescale_counterterms=False (pt=False/_call_direct()): PTEmu.Pell() adds its
             # stochastic term (P2d_stoch) *outside* the spline, i.e. already in (Mpc/h)^3 units,
             # so NP0/NP20/NP22 must be passed unscaled -- unlike the counterterms, whose h^2/h^4
             # comes from the Pctr_* spline columns.
-        canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22)
+        canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22, c6=c6, NP4=NP4)
         return canonical_params
 
     def tree_flatten(self):
@@ -5514,13 +5533,48 @@ class COMETTracerSpectrum2Poles(Calculator):
         return obj
 
 
+def _comet_bispectrum_setup(md):
+    """Select comet's EFT bispectrum counterterms: the IvaPhiNis ones, Z1 -> Z1 - cB1 k^2 mu^2 - cB2 k^2 mu^4
+    (comet's default is EggLeeSco's single cnloB).  VDG_infty has no bispectrum counterterm."""
+    if 'EFT' in md.model:
+        md.change_cnloB_type('IvaPhiNis')
+
+
+def _comet_bispectrum_diagrams(md):
+    """The diagrams of ``BX_ell_Sugi`` for *md*'s model and counterterms, and the coefficient of each.
+
+    Read off comet's ``BispectrumNum`` tables, so they follow its model and counterterm choice.  The
+    coefficient of a diagram is a tuple of terms, each a tuple of comet's coefficient factors ('b1',
+    'cB1', 'NP0', '1/nbar', ...) to be multiplied.  ``Bnoise_NP0b1*`` has the same kernel as its
+    ``Bnoise_MB0b1*`` partner, so it is folded into it: one column, coefficient (MB0 + NP0) b1 ...
+    For VDG_infty this is the 14 diagrams of the former hard-coded list, in the same order.
+    """
+    bispectrum = md.BispNum
+    names = list(bispectrum.tree_diagrams + bispectrum.stoch_diagrams)
+    terms = {name: [bispectrum._diagram_factors_of(name)] for name in names}
+    for name in list(names):
+        partner = name.replace('NP0b1', 'MB0b1')
+        if partner != name and partner in terms:
+            terms[partner] += terms.pop(name)
+            names.remove(name)
+    return tuple(names), tuple(tuple(terms[name]) for name in names)
+
+
+def _comet_bispectrum_coeffs(diagram_terms, values):
+    """Coefficients of the diagrams (see :func:`_comet_bispectrum_diagrams`), from the factor *values*."""
+    coeffs = []
+    for terms in diagram_terms:
+        coeff = 0.
+        for factors in terms:
+            product = 1.
+            for factor in factors:
+                product = product * values[factor]
+            coeff = coeff + product
+        coeffs.append(jnp.asarray(coeff))
+    return jnp.stack(coeffs)
+
+
 class COMETPTSpectrum3Poles(Calculator):
-    _diagrams = (
-        'B0L_b1b1b1', 'B0L_b1b1', 'B0L_b1',
-        'B0L_b1b1b2', 'B0L_b1b2', 'B0L_b2',
-        'B0L_b1b1g2', 'B0L_b1g2', 'B0L_g2',
-        'B0L_id', 'Bnoise_MB0b1b1', 'Bnoise_MB0b1', 'Bnoise_NP0', 'Bnoise_NB0',
-    )
 
     @classmethod
     def propose_params(cls, tracers=None, model='VDG_infty'):
@@ -5529,9 +5583,6 @@ class COMETPTSpectrum3Poles(Calculator):
             avir = Parameter('avir', value=0.0, prior=dict(limits=[0.0, 20.0]),
                              ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=R'a^B_{\mathrm{vir}}')
             params += [avir]
-        cnloB = Parameter('cnloB', value=0.0, fixed=True, prior=None,
-                            ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c^B_{\mathrm{nlo}}')
-        params += [cnloB]
         return propose_params_multitracer(params, tracers)
 
     @classmethod
@@ -5578,6 +5629,9 @@ class COMETPTSpectrum3Poles(Calculator):
             raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+        _comet_bispectrum_setup(self._md)
+        # The table's diagrams and their coefficients, read by COMETTracerSpectrum3Poles.
+        self._diagrams, self._diagram_terms = _comet_bispectrum_diagrams(self._md)
         _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
         # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
         # from comet's own emulated linear P(k) so that S carries the full transfer-function
@@ -5593,9 +5647,6 @@ class COMETPTSpectrum3Poles(Calculator):
         params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
-        # cnloB is currently always 0 for this estimator (see comet.bell's module
-        # docstring): EFT counterterms are only activated for 'EFT'/'VDG_infty_ctr' models,
-        # which this estimator doesn't support, so self.cnloB has no effect here yet.
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
@@ -5605,8 +5656,9 @@ class COMETPTSpectrum3Poles(Calculator):
 
         if avir is not None:
             params['avirB'] = _wrap(avir)
+        # Dummy bias and counterterm values: the diagrams are bias-stripped, so they do not depend on them.
         params |= {k: _wrap(v) for k, v in
-                   dict(b1=1.0, b2=0.0, g2=0.0, NP0=0.0, NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0, cnloB=0.0).items()}
+                   dict(b1=1.0, b2=0.0, g2=0.0, NP0=0.0, NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0).items()}
         diagrams = list(self._diagrams)
         parts = md.BX_ell_Sugi(self.k, params, ell=list(self.ells), X_list=diagrams,
                                 de_model=self._de_model, q_tr_lo=(qper, qpar),
@@ -5653,10 +5705,12 @@ class COMETTracerSpectrum3Poles(Calculator):
     # propose_params).  Passed as only= to the 2Poles _get_canonical_params call so that
     # g() silently returns 0 for all other 2Poles-specific params (counterterms, g21, etc.)
     # that are intentionally absent from the 3Poles instance.
-    _CANONICAL_PARAMS_2P_ONLY = frozenset({'b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0'})
+    _CANONICAL_PARAMS_2P_ONLY = frozenset({'b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0', 'SN0'})
     # Physical bases: the pair noise N^P_0 is the power spectrum's sn0 (one parameter in a joint P + B fit), and the constant
-    # N^B_0 is sn0b, the free A_shot (as FOLPSTracerSpectrum3Poles).
-    _PHYSICAL_NAME_OVERRIDES = {'NB0': 'sn0b'}
+    # N^B_0 is sn0b, the free A_shot (as FOLPSTracerSpectrum3Poles); the EFT counterterms cB1 / cB2 are FOLPSD's c1 / c2.
+    _PHYSICAL_NAME_OVERRIDES = {'NB0': 'sn0b', 'cB1': 'c1', 'cB2': 'c2'}
+    # FOLPSD's normalization of its physical c1 / c2: c / k_NL^2, k_NL in h/Mpc.
+    _KNL = 0.3
 
     @classmethod
     def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty',
@@ -5665,7 +5719,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         # Both naming conventions: comet's native names and, in the physical bases, FOLPSD's
         # ('b2' doubles as comet's own b2 and the renamed b2d).  b3/btd is not needed at tree level.
         relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'bs',
-                    'NP0', 'sn0', 'avir']
+                    'NP0', 'SN0', 'sn0', 'avir']
         params = COMETTracerSpectrum2Poles.propose_params(tracers=tracers, prior_basis=prior_basis, model=model, conventions=conventions).select(basename=relevant)
         extra = []
         if 'physical' in prior_basis:
@@ -5680,6 +5734,19 @@ class COMETTracerSpectrum3Poles(Calculator):
                 Parameter('NB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^B_{0}'),
                 Parameter('MB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'M^B_{0}'),
             ]
+        if 'EFT' in model:
+            # comet's IvaPhiNis counterterms, Z1 -> Z1 - cB1 k^2 mu^2 - cB2 k^2 mu^4 (see _comet_bispectrum_setup).
+            if 'physical' in prior_basis:
+                # FOLPSD's c1 / c2, with its priors and normalization (c2 fixed, as there).
+                extra += [
+                    Parameter('c1', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'c_1'),
+                    Parameter('c2', value=0.0, fixed=True, prior=dict(dist='norm', loc=0.0, scale=20.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'c_2'),
+                ]
+            else:
+                extra += [
+                    Parameter('cB1', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'c^B_1'),
+                    Parameter('cB2', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.), latex=R'c^B_2'),
+                ]
         extra = propose_params_multitracer(extra, tracers)
         return params + extra
 
@@ -5702,7 +5769,8 @@ class COMETTracerSpectrum3Poles(Calculator):
                                        conventions=conventions)
         if params is not None:
             vc = vc + VariableCollection(params)
-        # avir and cnloB are owned by the PT (or, when pt=False below, by this calculator itself).
+        # avir is owned by the PT (or, when pt=False below, by this calculator itself); the EFT counterterms are
+        # always this calculator's, since the PT's diagrams are bias-stripped.
         avir_vc = vc.select(basename='avir')
         assign_params(self, vc - avir_vc, tracers)
         self._prior_basis = prior_basis
@@ -5712,18 +5780,12 @@ class COMETTracerSpectrum3Poles(Calculator):
             # No separate PT calculator dependency: own the cosmology dep directly
             # and evaluate comet's Bell_Sugi() (monolithic, bias-combined) in
             # __call__, instead of sharing BX_ell_Sugi()'s decomposed table + a
-            # coeff/einsum recombination -- see _call_direct(). avir/cnloB are then
-            # owned by *this* calculator (there is no PT to route them to); cnloB
-            # isn't in propose_params()'s output (it lives on COMETPTSpectrum3Poles
-            # only), so add it here to match.
+            # coeff/einsum recombination -- see _call_direct(). avir is then
+            # owned by *this* calculator (there is no PT to route it to).
             if len(avir_vc):
                 assign_params(self, avir_vc, tracers)
             # out-of-training-range violation, read by the Posterior (hard or soft wall)
             self.training_range = _training_constraint('comet', tracers, 'spectrum3')
-            cnloB_vc = propose_params_multitracer([
-                Parameter('cnloB', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c^B_{\mathrm{nlo}}'),
-            ], tracers)
-            assign_params(self, cnloB_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; _trace_graph discovers it from __dict__
             self.pt = None
             if backend == 'numpy':
@@ -5750,8 +5812,9 @@ class COMETTracerSpectrum3Poles(Calculator):
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        self._rvir = float(rvir) if rvir is not None else settings['rvir']
+        self._model = model
         if self._direct:
-            self._model = model
             self.z = float(1.0 if z is None else z)
             self.k = np.atleast_2d(np.asarray(np.column_stack([np.linspace(0.01, 0.1, 11)] * 2) if k is None else k, dtype='f8'))
             self.ells = tuple(tuple(int(e) for e in ell) for ell in (((0, 0, 0), (2, 0, 2)) if ells is None else ells))
@@ -5760,6 +5823,7 @@ class COMETTracerSpectrum3Poles(Calculator):
                 raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
+            _comet_bispectrum_setup(self._md)
             _comet_warn_prior_ranges(self.cosmo, self._md.params_ranges)
             # Reference sigma8 for the physical-basis rescaling S = sigma8(z)/sigma8_ref(z), taken
             # from comet's own emulated linear P(k) so that S carries the full transfer-function
@@ -5770,16 +5834,15 @@ class COMETTracerSpectrum3Poles(Calculator):
         else:
             self.k = self.pt.k
             self.ells = self.pt.ells
+            # Coefficients of the PT table's diagrams (static), see _comet_bispectrum_diagrams.
+            self._diagram_terms = self.pt._diagram_terms
 
     def __call__(self):
         if self._direct:
             return self._call_direct()
         params = self._get_canonical_params()
-        b1, b2, g2, NP0, NB0, MB0 = (params[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
-        coeff = jnp.array([
-            b1**3, b1**2, b1, b1**2 * b2, b1*b2, b2, b1**2 * g2, b1*g2, g2, 1.0,
-            MB0 * b1**2, (MB0+NP0) * b1, NP0, NB0,
-        ])
+        # NP0, NB0 and MB0 are already divided by nbar (resp. nbar^2).
+        coeff = _comet_bispectrum_coeffs(self._diagram_terms, params | {'1/nbar': 1.0})
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
         return self.poles
 
@@ -5792,7 +5855,6 @@ class COMETTracerSpectrum3Poles(Calculator):
         _wrap = jnp.asarray if _use_jax else np.asarray
         cosmo_params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         avir = self.avir.value if 'VDG' in self._model else None
-        # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
         md = self._md
         cosmo_base = _comet_params_to_cosmology(cosmo_params, self.z, self._de_model, backend=self._backend)
         qpar, qper = _comet_ap_params(cosmo_base, self._cosmo_fid, self.z, use_mpc=self._use_mpc, xp=xp)
@@ -5811,7 +5873,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         canonical = self._get_canonical_params()
         bell_params = dict(cosmo_params.items())
         bell_params['z'] = float(self.z)
-        for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'):
+        for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0', 'cB1', 'cB2'):
             bell_params[name] = _wrap(canonical[name])
         if avir is not None:
             bell_params['avirB'] = _wrap(avir)
@@ -5835,10 +5897,9 @@ class COMETTracerSpectrum3Poles(Calculator):
         return self.poles
 
     def _get_canonical_params(self, rescale_counterterms=True, only=None):
-        pt = self.pt if self.pt is not None else self  # pt=False: read qper/qpar/cnloB off self
+        pt = self.pt if self.pt is not None else self  # pt=False: read qper/qpar/A off self
         params = COMETTracerSpectrum2Poles._get_canonical_params(  # type: ignore
             self, rescale_counterterms=rescale_counterterms, only=self._CANONICAL_PARAMS_2P_ONLY)
-        cnloB = pt.cnloB.value
 
         _only = None if only is None else frozenset(only)
 
@@ -5853,7 +5914,10 @@ class COMETTracerSpectrum3Poles(Calculator):
                     f'pass only= with the names of params expected to be present')
             return param.value
 
-        NP0 = g('NP0')  # no h**3 normalization needed here (unlike 2Poles _get_canonical_params)
+        # The pair noise is the power spectrum's constant shot noise: SN0 in the native DESIct basis (comet's DESIct sets
+        # NP0 = SN0), NP0 otherwise (sn0 in the physical bases).  No h**3 normalization needed here (unlike 2Poles).
+        native_desict = 'physical' not in self._prior_basis and self._prior_basis.split('+')[1] == 'DESIct'
+        NP0 = g('SN0' if native_desict else 'NP0')
         NB0 = g('NB0')
         MB0 = g('MB0')
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
@@ -5871,13 +5935,20 @@ class COMETTracerSpectrum3Poles(Calculator):
             # the 1/nbar quantities NP0 and MB0. comet's own `_rescale_params` does the same
             # (`NB0 /= Aap**2`).
             NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP**2, MB0 / A_AP
+        # EFT counterterms (IvaPhiNis), in (Mpc/h)^2: comet evaluates them on the k it is given, so no h-rescaling.
+        cB1, cB2 = 0.0, 0.0
+        if 'EFT' in self._model:
+            cB1, cB2 = g('cB1'), g('cB2')
+            if 'physical' in self._prior_basis:
+                # FOLPSD's c1 / c2, with its normalization (FOLPSTracerSpectrum3Poles): c / k_NL^2 / (A^2 A_AP).
+                cB1, cB2 = (value / self._KNL**2 / (pt.A**2 * A_AP) for value in (cB1, cB2))
         # nbar normalization is needed for the BX_ell_Sugi()-decomposed path (its diagrams
         # are nbar-bare), but skipped for the direct/pt=False path (rescale_counterterms=False):
         # eval_bell_sugi_from_raw_params()'s bell_sugi()/project_sugi() apply 1/nbar/1/nbar**2
         # internally given the *raw* nbar, so applying it here too would double-count it.
         if rescale_counterterms:
             NP0, NB0, MB0 = NP0 / self._nbar, NB0 / self._nbar**2, MB0 / self._nbar
-        return params | dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
+        return params | dict(NP0=NP0, NB0=NB0, MB0=MB0, cB1=cB1, cB2=cB2)
 
     def tree_flatten(self):
         return [self.poles], None

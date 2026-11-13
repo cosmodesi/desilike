@@ -1028,9 +1028,9 @@ class TestCOMET:
         # ct_overrides covers all free counterterm + stochastic params.
         # bGam3 (AssBauGre), b3t (AmiGleKok), btd (DESI non-physical) are fixed=True → omitted.
         # cnlo is fixed=True for VDG_infty → omitted. The physical bases expose FOLPSD's names
-        # (b1/b2/bs/b3, alpha0/alpha2/alpha4, sn0/sn2/sn22), not comet's own.
+        # (b1/b2/bs/b3, alpha0/alpha2/alpha4, sn0/sn1/sn2/sn4), not comet's own.
         comet_ct = dict(c0=1.0, c2=1.0, c4=1.0, NP0=0.1, NP20=0.1, NP22=0.1)
-        physical_ct = dict(alpha0=1.0, alpha2=1.0, alpha4=1.0, sn0=0.1, sn2=0.1, sn22=0.1)
+        physical_ct = dict(alpha0=1.0, alpha2=1.0, alpha4=1.0, sn0=0.1, sn1=0.1, sn2=0.1, sn4=0.1)
         for prior_basis, bias_overrides, ct_overrides in [
             ('AssBauGre+Comet', dict(b1=2.0, b2=0.5, bG2=0.5), comet_ct),
             ('AmiGleKok+Comet', dict(b1t=2.0, b2t=0.5, b4t=0.3), comet_ct),
@@ -1046,13 +1046,11 @@ class TestCOMET:
 
         # Other counterterm bases (each with EggScoSmi bias): check all free ct + stochastic params.
         # cnlo/cnlos are fixed=True for VDG_infty → omitted.
-        # DESIct non-physical NP20/NP22 omitted: they are not divided by nbar in _get_canonical_params
-        # (unlike Comet/ClassPT/PBJ), so NP20=0.1 only produces a ~1e-5 absolute change — below
-        # np.allclose's threshold for poles of order 1e4. NP0=0.1 passes because it is h^-3 normalized.
+        # DESIct's stochastic terms are comet's SN basis, in units of 1/nbar like the other bases.
         for ct_basis, ct_overrides in [
             ('ClassPT', dict(b1=2.0, c0s=1.0, c2s=1.0, c4s=1.0, NP0=0.1, NP20s=0.1, NP22s=0.1)),
             ('PBJ',     dict(b1=2.0, c0t=1.0, c2t=1.0, c4t=1.0, NP0=0.1, eps0=0.1, eps2=0.1)),
-            ('DESIct',  dict(b1=2.0, a0=1.0, a2=1.0, a4=1.0, NP0=0.1)),
+            ('DESIct',  dict(b1=2.0, a0=1.0, a2=1.0, a4=1.0, SN0=0.1, SN20=0.1, SN22=0.1, SN4=0.1)),
         ]:
             theory_ct = COMETTracerSpectrum2Poles(k=k, prior_basis=f'EggScoSmi+{ct_basis}')
             run_ct = _compile(theory_ct)
@@ -1134,8 +1132,9 @@ class TestCOMET:
         """In the ``physical``/``physical_aap`` bases the stochastic sector follows the
         TG_2pt3pt_priors document rather than comet's native columns.
 
-        P(k): ``NP20`` is the document's SN_2, multiplying k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)],
-        so it feeds both of comet's k^2 columns and means the same thing as FOLPSD's ``sn2``.
+        P(k): ``sn2`` is the document's SN_2 (comet's SN22), multiplying k^2 mu^2 = k^2 [1/3 + 2/3 L_2(mu)],
+        so it feeds both of comet's k^2 columns and means the same thing as FOLPSD's ``sn2``; ``sn1`` is the
+        document's SN_1 (comet's SN20), the isotropic k^2 term, the same as FOLPSD's ``sn1``.
         B: the pair noise carries a single f mu^2 ``NP0``, as comet's own, without the document's factor 2
         (which fails the Poisson limit), and it is the power spectrum's ``sn0``, as FOLPSD's P_shot; the constant
         N^B_0 is FOLPSD's ``sn0b``, the free A_shot / nbar^2.
@@ -1160,6 +1159,14 @@ class TestCOMET:
         folps_response = np.asarray(run_folps(b1=b1, sn2=1.)) - np.asarray(run_folps(b1=b1))
         np.testing.assert_allclose(response, folps_response, rtol=1e-6, atol=1e-8,
                                    err_msg='COMET sn2 != FOLPSD sn2 in physical_aap')
+        # sn1, the isotropic SN_1 k^2, is FOLPSD's sn1, both normalized by R_vir^2 / nbar (FOLPSD fixes it by default, and ignores a
+        # fixed value, so it is freed there).
+        response = np.asarray(run(b1=b1, sn1=1.)) - np.asarray(run(b1=b1))
+        run_folps = _compile(FOLPSTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap', params={'sn1': {'fixed': False}}))
+        folps_response = np.asarray(run_folps(b1=b1, sn1=1.)) - np.asarray(run_folps(b1=b1))
+        assert np.max(np.abs(folps_response)) > 0., 'FOLPSD: the freed sn1 has no effect'
+        np.testing.assert_allclose(response, folps_response, rtol=1e-6, atol=1e-8,
+                                   err_msg='COMET sn1 != FOLPSD sn1 in physical_aap')
 
         # The physical bases expose FOLPSD's names, so the two theories share them.
         from desilike.base import get_params
@@ -1169,9 +1176,10 @@ class TestCOMET:
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
                        if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
-        # sn1: folps' isotropic k^2 stochastic term (off by default), not carried over to comet; bA: folps' anisotropic linear bias (off by default)
-        assert folps_names - comet_names == {'ct', 'X_FoG', 'sn1', 'bA'}, sorted(folps_names - comet_names)
-        assert comet_names - folps_names == {'sn22', 'avir'}, sorted(comet_names - folps_names)
+        # sn1 (the document's isotropic k^2 noise) is in both; bA: folps' anisotropic linear bias (off by default)
+        assert folps_names - comet_names == {'ct', 'X_FoG', 'bA'}, sorted(folps_names - comet_names)
+        # sn4: the document's k^4 mu^4 noise, which FOLPSD does not carry
+        assert comet_names - folps_names == {'sn4', 'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
         run_native = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='EggScoSmi+Comet'))
@@ -1215,6 +1223,81 @@ class TestCOMET:
             basenames = {param.basename for param in get_params(theory)}
             assert {'sn0', 'sn0b', 'snb0'} <= basenames and 'NB0' not in basenames, type(theory).__name__
         assert {'NP0', 'NB0'} <= {param.basename for param in get_params(COMETTracerSpectrum3Poles(k=k3, pt=False, prior_basis='EggScoSmi+Comet'))}
+
+    def test_desict_sn_basis(self):
+        """DESIct: alpha4's full f^2 mu^6 term (c0, c2, c4 and the L6 counterterm c6), and comet's SN stochastic basis.
+
+        The native basis is comet's own DESIct (a PTEmu built with counterterm_basis='DESIct', given a4 and
+        SN0 + SN20 k^2 + SN22 k^2 mu^2 + SN4 k^4 mu^4, in units of 1/nbar).  In the physical bases these are the prior
+        document's SN_0, SN_1, SN_2, SN_4 (sn0, sn1, sn2, sn4), normalized as FOLPSD's: 1 / nbar, R_vir^2 / nbar,
+        fsat sigma_v^2 / nbar, fsat sigma_v^4 / nbar; the COMET team's convention keeps comet's NP20 / NP22 columns
+        (sn2, sn22) and fixes sn4 at 0.  The shared-PT path agrees with pt=False at the ~1e-3 spline level."""
+        from comet.PTEmu import PTEmu
+        from desilike.base import get_params
+        from desilike.parameter import Constraint
+        from desilike.theories.galaxy_clustering import COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        k = np.linspace(0.02, 0.3, 20)
+        nbar, b1 = 3e-4, 2.
+
+        def basenames(theory):
+            return {param.basename: param.fixed for param in get_params(theory) if not isinstance(param, Constraint)}
+
+        # Native DESIct, against comet's own DESIct given the same nbar (both in units of 1/nbar).  At the default
+        # (fiducial) cosmology q_par = q_per = 1.
+        theory = COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='DESI+DESIct')
+        run_native = _compile(theory)
+        emulator = PTEmu(model='VDG_infty', use_Mpc=False, bias_basis='DESI', counterterm_basis='DESIct')
+        emulator.define_nbar(nbar)
+        # Plain floats: comet's numpy path (a mix of JAX and numpy inputs is not supported by Pell).
+        comet_params = {name: float(value) for name, value in theory._fid_comet.items()} | dict(b1=b1, avir=0.)
+
+        def comet_pell(**params):
+            poles = emulator.Pell(k, comet_params | params, [0, 2, 4], de_model=theory._de_model, q_tr_lo=(1., 1.),
+                                  ell_for_recon=[0, 2, 4, 6])
+            return np.stack([np.squeeze(poles[f'ell{ell}']) for ell in (0, 2, 4)])
+
+        for name in ['a4', 'SN0', 'SN20', 'SN22', 'SN4']:
+            response = run_native(b1=b1, **{name: 1.}) - run_native(b1=b1)
+            comet_response = comet_pell(**{name: 1.}) - comet_pell()
+            assert np.max(np.abs(response)) > 0., f'native DESIct: {name} has no effect'
+            np.testing.assert_allclose(response, comet_response, rtol=1e-4, atol=1e-6 * np.max(np.abs(comet_response)),
+                                       err_msg=f"native DESIct: {name} response differs from comet's own DESIct")
+        assert {'SN0', 'SN20', 'SN22', 'SN4'} <= set(basenames(theory)) and not {'NP0', 'NP20', 'NP22', 'NP4'} & set(basenames(theory))
+
+        # Physical basis: the document's stochastic terms, exact on pt=False (the noise is added outside the spline) ...
+        settings = get_physical_stochastic_settings()
+        fsat, sigv, rvir = settings['fsat'], settings['sigv'], settings['rvir']
+        runs = {pt: _compile(COMETTracerSpectrum2Poles(k=k, pt=pt, nbar=nbar, prior_basis='physical_aap')) for pt in [None, False]}
+        expected = {'sn0': ([1., 0., 0.], np.ones_like(k) / nbar),
+                    'sn1': ([1., 0., 0.], rvir**2 * k**2 / nbar),
+                    'sn2': ([1. / 3., 2. / 3., 0.], fsat * sigv**2 * k**2 / nbar),
+                    'sn4': ([1. / 5., 4. / 7., 8. / 35.], fsat * sigv**4 * k**4 / nbar)}
+        for name, (weights, amplitude) in expected.items():
+            response = runs[False](b1=b1, **{name: 1.}) - runs[False](b1=b1)
+            for ell_idx, weight in enumerate(weights):
+                np.testing.assert_allclose(response[ell_idx], weight * amplitude, rtol=1e-6, atol=1e-8 * np.max(amplitude),
+                                           err_msg=f'COMET physical_aap: {name} is not the document term (ell index {ell_idx})')
+        # ... and the shared-PT table agrees with it, as with the counterterm alpha4 (whose c6 is in both).
+        for name in ['sn1', 'sn2', 'sn4', 'alpha4']:
+            responses = [run(b1=b1, **{name: 1.}) - run(b1=b1) for run in runs.values()]
+            np.testing.assert_allclose(responses[0], responses[1], rtol=1e-3, atol=1e-3 * np.max(np.abs(responses[1])),
+                                       err_msg=f'COMETTracerSpectrum2Poles: shared-PT {name} response disagrees with pt=False')
+
+        # Free by default in the desi convention, except sn4 (fixed, as FOLPSD has no such term); the COMET team's keeps sn2 / sn22
+        # and fixes sn4; none in the bispectrum.
+        physical = basenames(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
+        assert all(physical[name] is False for name in ['sn0', 'sn1', 'sn2']) and physical['sn4'] is True and 'sn22' not in physical, physical
+        comet_team = basenames(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap', conventions='comet'))
+        assert comet_team['sn22'] is False and comet_team['sn4'] is True and 'sn1' not in comet_team, comet_team
+        k3 = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)
+        assert not {'sn1', 'sn4'} & set(basenames(COMETTracerSpectrum3Poles(k=k3, pt=False, prior_basis='physical_aap')))
+
+        # Native DESIct bispectrum: its pair noise is the power spectrum's SN0 (as comet's DESIct, NP0 = SN0).
+        bispectrum = COMETTracerSpectrum3Poles(k=k3, pt=False, nbar=nbar, prior_basis='DESI+DESIct')
+        assert 'SN0' in basenames(bispectrum) and 'NP0' not in basenames(bispectrum), basenames(bispectrum)
+        run_bispectrum = _compile(bispectrum)
+        assert np.max(np.abs(run_bispectrum(b1=b1, SN0=1.) - run_bispectrum(b1=b1))) > 0., 'native DESIct bispectrum: SN0 has no effect'
 
     def test_tracer_bispectrum(self):
         """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""
@@ -1261,6 +1344,49 @@ class TestCOMET:
         base_direct = np.asarray(run(b1=2.0))
         np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
                                    err_msg='COMETTracerSpectrum3Poles: pt=False disagrees with shared PT')
+
+    def test_tracer_bispectrum_eft(self):
+        """COMETTracerSpectrum3Poles(model='EFT'): comet's IvaPhiNis counterterms, Z1 -> Z1 - cB1 k^2 mu^2 - cB2 k^2 mu^4.
+
+        The shared-PT table is recombined from comet's own diagram coefficients (quadratic in the counterterms), so it
+        must reproduce comet's Bell_Sugi (pt=False) for any values.  In the physical bases the counterterms are FOLPSD's
+        c1 / c2 (c2 fixed), normalized as c / k_NL^2 / (A^2 A_AP)."""
+        from desilike.base import get_params
+        from desilike.parameter import Constraint
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum3Poles
+        k = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)
+        b1 = 2.
+
+        def params_fixed(theory):
+            return {param.basename: param.fixed for param in get_params(theory) if not isinstance(param, Constraint)}
+
+        runs = {pt: _compile(COMETTracerSpectrum3Poles(k=k, model='EFT', pt=pt)) for pt in [None, False]}
+        for overrides in [dict(), dict(cB1=5.), dict(cB2=-3.), dict(cB1=5., cB2=-3., b2=0.5, g2=-0.3, NP0=0.2, MB0=0.1, NB0=0.1)]:
+            poles = [run(b1=b1, **overrides) for run in runs.values()]
+            _check(poles[0], f'COMETTracerSpectrum3Poles EFT ({overrides})')
+            np.testing.assert_allclose(poles[0], poles[1], rtol=1e-8, atol=1e-12 * np.max(np.abs(poles[1])),
+                                       err_msg=f'COMETTracerSpectrum3Poles EFT: shared PT disagrees with pt=False ({overrides})')
+        base = runs[False](b1=b1)
+        for name in ['cB1', 'cB2']:
+            assert np.max(np.abs(runs[False](b1=b1, **{name: 5.}) - base)) > 1e-6 * np.max(np.abs(base)), f'EFT: {name} has no effect'
+
+        # The counterterms exist only for EFT, free in the native bases; cnloB is gone.
+        native = params_fixed(COMETTracerSpectrum3Poles(k=k, model='EFT', pt=False))
+        assert native['cB1'] is False and native['cB2'] is False and 'cnloB' not in native, native
+        vdg = params_fixed(COMETTracerSpectrum3Poles(k=k, pt=False))
+        assert not {'cB1', 'cB2', 'c1', 'c2', 'cnloB'} & set(vdg), sorted(vdg)
+        physical_params = params_fixed(COMETTracerSpectrum3Poles(k=k, model='EFT', pt=False, prior_basis='physical_aap'))
+        assert physical_params['c1'] is False and physical_params['c2'] is True and 'cB1' not in physical_params, physical_params
+
+        # Physical normalization: at the fiducial cosmology A = A_AP = 1, so c1 = k_NL^2 is cB1 = 1.  The physical bs is
+        # centred on co-evolution at the sampled b1, so bs = 0 is g2 = -2/7 (b1 - 1), and b2 = 0 is comet's b2 = 4/3 g2.
+        physical = _compile(COMETTracerSpectrum3Poles(k=k, model='EFT', pt=False, prior_basis='physical_aap'))
+        g2 = -2. / 7. * (b1 - 1.)
+        native_bias = dict(b1=b1, b2=4. / 3. * g2, g2=g2)
+        native_response = runs[False](**native_bias, cB1=1.) - runs[False](**native_bias)
+        physical_response = physical(b1=b1, c1=COMETTracerSpectrum3Poles._KNL**2) - physical(b1=b1)
+        np.testing.assert_allclose(physical_response, native_response, rtol=1e-5, atol=1e-5 * np.max(np.abs(native_response)),
+                                   err_msg='COMET EFT physical_aap: c1 is not cB1 k_NL^2')
 
     def test_numpy_backend(self):
         """backend='numpy' produces finite results and agrees with backend='jax' to within ~5%.

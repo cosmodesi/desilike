@@ -286,7 +286,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='ph
     from scipy.linalg import block_diag
     likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
     if marginalize:
-        for param in get_params(likelihood).select(basename=['a0', 'a2', 'a4', 'NP0', 'NP20', 'NP22']):
+        for param in get_params(likelihood).select(basename=['a0', 'a2', 'a4', 'SN0', 'SN20', 'SN22', 'SN4']):
             param.update(derived='best')
     return Posterior(likelihood)
 

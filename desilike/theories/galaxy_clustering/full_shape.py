@@ -5127,21 +5127,21 @@ class COMETTracerSpectrum2Poles(Calculator):
             bias_basis, counterterm_basis = prior_basis.split('+')
         if bias_basis == 'EggScoSmi':
             params += [
-                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0)), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=R'b_1'),
                 Parameter('b2', value=0.0, prior=dict(dist='uniform', limits=(-50.0, 50.0)), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                 Parameter('g2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'\gamma_2'),
                 Parameter('g21', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R"\gamma_{21}", fixed=True)
             ]
         elif bias_basis == 'AssBauGre':
             params += [
-                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0)), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=R'b_1'),
                 Parameter('b2', value=0.0, prior=dict(dist='uniform', limits=(-50.0, 50.0)), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                 Parameter('bG2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{\mathcal{G}_2}'),
                 Parameter('bGam3', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\Gamma_3}', fixed=True)
             ]
         elif bias_basis == 'AmiGleKok':
             params += [
-                Parameter('b1t', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'\tilde{b}_1'),
+                Parameter('b1t', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0)), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=R'\tilde{b}_1'),
                 Parameter('b2t', value=0.0, prior=dict(dist='uniform', limits=(-50.0, 50.0)), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'\tilde{b}_2'),
                 Parameter('b3t', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'\tilde{b}_3', fixed=True),
                 Parameter('b4t', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'\tilde{b}_4'),
@@ -5149,14 +5149,14 @@ class COMETTracerSpectrum2Poles(Calculator):
         elif bias_basis == 'DESI':
             if 'physical' in prior_basis:
                 params += [
-                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0)), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=R'b_1'),
                     Parameter('b2', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                     Parameter('bs', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
                     Parameter('b3', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
                 ]
             else:
                 params += [
-                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0)), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=R'b_1'),
                     Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
                     Parameter('bk2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
                     Parameter('btd', value=0.0, fixed=True, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}'),
@@ -5216,7 +5216,8 @@ class COMETTracerSpectrum2Poles(Calculator):
                     # The prior document's SN_1 k^2, comet's SN20, normalized by R_vir^2 (same prior as FOLPSD's sn1, but free).
                     params += [Parameter('sn1', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,1}')]
                 # The prior document's SN_4 k^4 mu^4, normalized by fsat sigma_v^4 (same prior as velocileptors' physical sn4).
-                params += [Parameter('sn4', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,4}')]
+                # Fixed at zero by default, since FOLPSTracerSpectrum2Poles has no such term: free it to fit it.
+                params += [Parameter('sn4', value=0.0, fixed=True, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,4}')]
             else:
                 params += [
                     Parameter('a0', value=0.0, prior=dict(dist='norm', loc=0.0, scale=50.0), ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'a_0'),
@@ -5598,7 +5599,7 @@ class COMETPTSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 20, 5), mu12_transform='k3', backend='jax',
                  redshift_smearing=None, s_ratio='sigma8'):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
@@ -5619,14 +5620,12 @@ class COMETPTSpectrum3Poles(Calculator):
             self._is_external = True
         self.redshift_smearing = _comet_redshift_smearing(redshift_smearing, tracers=tracers, backend=backend)
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 20, 5), mu12_transform='k3',
                       redshift_smearing=None, s_ratio='sigma8', **kwargs):
         _comet_register_cosmo_requirements(self.cosmo)
         self._use_mpc = False
         self._model = model
         self._s_ratio = s_ratio   # checked by _comet_s_ratio_radius, below
-        if mu12_transform != 'k3':
-            raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
             self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
         _comet_bispectrum_setup(self._md)
@@ -5763,7 +5762,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         ranges, and return *params*; see :func:`_comet_truncate_priors`."""
         return _comet_truncate_priors(params, model=model)
 
-    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax',
+    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 20, 5), mu12_transform='k3', backend='jax',
                  redshift_smearing=None, conventions=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model,
                                        conventions=conventions)
@@ -5802,7 +5801,7 @@ class COMETTracerSpectrum3Poles(Calculator):
             pt_kwargs = {name: value for name, value in dict(z=z, cosmo=cosmo, redshift_smearing=self.redshift_smearing).items() if value is not None}
             self.pt.update(**pt_kwargs, k=k, ells=ells, tracers=tracers, fiducial=fiducial, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3',
+    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, rvir=None, nbar=1e-4, params=None, quad_deg=(7, 20, 5), mu12_transform='k3',
                       redshift_smearing=None, conventions=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
@@ -5819,8 +5818,6 @@ class COMETTracerSpectrum3Poles(Calculator):
             self.k = np.atleast_2d(np.asarray(np.column_stack([np.linspace(0.01, 0.1, 11)] * 2) if k is None else k, dtype='f8'))
             self.ells = tuple(tuple(int(e) for e in ell) for ell in (((0, 0, 0), (2, 0, 2)) if ells is None else ells))
             self._use_mpc = False
-            if mu12_transform != 'k3':
-                raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
                 self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
             _comet_bispectrum_setup(self._md)

@@ -1284,9 +1284,10 @@ class TestCOMET:
             np.testing.assert_allclose(responses[0], responses[1], rtol=1e-3, atol=1e-3 * np.max(np.abs(responses[1])),
                                        err_msg=f'COMETTracerSpectrum2Poles: shared-PT {name} response disagrees with pt=False')
 
-        # Free by default in the desi convention; the COMET team's keeps sn2 / sn22 and fixes sn4; none in the bispectrum.
+        # Free by default in the desi convention, except sn4 (fixed, as FOLPSD has no such term); the COMET team's keeps sn2 / sn22
+        # and fixes sn4; none in the bispectrum.
         physical = basenames(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
-        assert all(physical[name] is False for name in ['sn0', 'sn1', 'sn2', 'sn4']) and 'sn22' not in physical, physical
+        assert all(physical[name] is False for name in ['sn0', 'sn1', 'sn2']) and physical['sn4'] is True and 'sn22' not in physical, physical
         comet_team = basenames(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap', conventions='comet'))
         assert comet_team['sn22'] is False and comet_team['sn4'] is True and 'sn1' not in comet_team, comet_team
         k3 = np.column_stack([np.linspace(0.02, 0.12, 8)] * 2)

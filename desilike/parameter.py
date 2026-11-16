@@ -1059,9 +1059,10 @@ class Parameter(Variable):
         else:
             self.ref = ParameterPrior(**ref)
 
-        # fixed: True when no prior/ref explicitly provided
+        # fixed: True when no prior/ref explicitly provided, except for a solved parameter (derived='best' / 'marg'),
+        # which needs no prior. A fixed derived='best' / 'marg' parameter is not solved (see `solved`): it stays at its value.
         if fixed is None:
-            fixed = prior is None and ref is None
+            fixed = prior is None and ref is None and derived not in self._solved_values
         self.fixed = bool(fixed)
 
         # derived expression and depends mapping
@@ -1160,7 +1161,8 @@ class Parameter(Variable):
 
     @property
     def solved(self):
-        return self._derived in self._solved_values
+        """Whether the parameter is solved for (derived='best' / 'marg'); a fixed one stays at its value."""
+        return self._derived in self._solved_values and not self.fixed
 
     @property
     def input(self):

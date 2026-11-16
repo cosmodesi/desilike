@@ -948,6 +948,30 @@ def test_analytic_marginalization():
     assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
+def test_fixed_solved_param_stays_fixed():
+    """A fixed parameter tagged derived='marg' / 'best' is not solved: it stays at its fixed value.
+
+    Regression test: tagging nuisance parameters for analytic marginalization by name (e.g. 'sn4',
+    fixed by default in comet's physical bases) silently freed the fixed ones.
+    """
+    sigma_d, sigma_alpha = 0.1, 2.0
+    params = {'A': 1.1}
+
+    def logpost(**kwargs):
+        A = Parameter('A', value=1.0)
+        alpha = Parameter('alpha', prior=dict(dist='norm', loc=0., scale=sigma_alpha), **kwargs)
+        posterior = Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior())
+        return float(build(posterior)(params)), posterior
+
+    fixed, _ = logpost(value=0.5, fixed=True)
+    free, _ = logpost(value=0.5, derived='marg')
+    assert abs(free - fixed) > 1., 'the test needs the fixed and the marginalized alpha to differ'
+    for derived in ['marg', 'best']:
+        got, posterior = logpost(value=0.5, fixed=True, derived=derived)
+        assert abs(got - fixed) < 1e-8, f'fixed alpha with derived={derived!r} was solved: {got} vs {fixed}'
+        assert not posterior._solved_params, derived
+
+
 def test_copy_does_not_share_parameters():
     """A Parameter updated on a copy leaves the original, and later copies, alone.
 

@@ -1162,7 +1162,7 @@ class TestCOMET:
         # sn1, the isotropic SN_1 k^2, is FOLPSD's sn1, both normalized by R_vir^2 / nbar (FOLPSD fixes it by default, and ignores a
         # fixed value, so it is freed there).
         response = np.asarray(run(b1=b1, sn1=1.)) - np.asarray(run(b1=b1))
-        run_folps = _compile(FOLPSTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap', params={'sn1': {'fixed': False}}))
+        run_folps = _compile(FOLPSTracerSpectrum2Poles(k=k, nbar=nbar, prior_basis='physical_aap', params={'sn1': {'value': 0., 'fixed': False}}))
         folps_response = np.asarray(run_folps(b1=b1, sn1=1.)) - np.asarray(run_folps(b1=b1))
         assert np.max(np.abs(folps_response)) > 0., 'FOLPSD: the freed sn1 has no effect'
         np.testing.assert_allclose(response, folps_response, rtol=1e-6, atol=1e-8,

@@ -5303,7 +5303,7 @@ class COMETTracerSpectrum2Poles(Calculator):
                     # The prior document's SN_1 k^2, comet's SN20, normalized by R_vir^2 (same prior as FOLPSD's sn1, but free).
                     params += [Parameter('sn1', value=0.0, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,1}')]
                 # The prior document's SN_4 k^4 mu^4, normalized by fsat sigma_v^4 (same prior as velocileptors' physical sn4).
-                # Fixed at zero by default, since FOLPSTracerSpectrum2Poles has no such term: free it to fit it.
+                # Fixed at zero by default, as FOLPSTracerSpectrum2Poles' sn4 (same prior and normalization): free it to fit it.
                 params += [Parameter('sn4', value=0.0, fixed=True, prior=dict(dist='norm', loc=0.0, scale=5.), ref=dict(dist='norm', loc=0.0, scale=1.), latex=R's_{n,4}')]
             else:
                 params += [

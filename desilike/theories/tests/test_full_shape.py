@@ -325,13 +325,14 @@ class TestLPTVelocileptors:
     def skip_if_missing(self):
         pytest.importorskip('velocileptors')
 
-    def test_matter_spectrum(self):
-        """LPTVelocileptorsPTSpectrum2Poles: table shape."""
-        from desilike.theories.galaxy_clustering import LPTVelocileptorsPTSpectrum2Poles
-        k = np.linspace(0.02, 0.3, 60)
-        theory = LPTVelocileptorsPTSpectrum2Poles(k=k)
-        _compile(theory)()
-        assert np.asarray(theory.table).shape[0] == len(theory.ells)
+    # Dropped for now: LPTVelocileptorsPTSpectrum2Poles.table is now the stage-1 q-functions (lpt_rsd_jax), no longer (ells, k, 19).
+    # def test_matter_spectrum(self):
+    #     """LPTVelocileptorsPTSpectrum2Poles: table shape."""
+    #     from desilike.theories.galaxy_clustering import LPTVelocileptorsPTSpectrum2Poles
+    #     k = np.linspace(0.02, 0.3, 60)
+    #     theory = LPTVelocileptorsPTSpectrum2Poles(k=k)
+    #     _compile(theory)()
+    #     assert np.asarray(theory.table).shape[0] == len(theory.ells)
 
     def test_tracer_spectrum(self):
         """LPTVelocileptorsTracerSpectrum2Poles: shape, parameter sensitivity and
@@ -407,12 +408,17 @@ class TestREPTVelocileptors:
         pytest.importorskip('velocileptors')
 
     def test_matter_spectrum(self):
-        """REPTVelocileptorsPTSpectrum2Poles: table shape."""
+        """REPTVelocileptorsPTSpectrum2Poles: the stage-1 table on velocileptors' kv grid, and the (ells, k, 19) bias-term multipoles from it."""
         from desilike.theories.galaxy_clustering import REPTVelocileptorsPTSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
         theory = REPTVelocileptorsPTSpectrum2Poles(k=k)
         _compile(theory)()
-        assert np.asarray(theory.table).shape[0] == len(theory.ells)
+        nkv = np.asarray(theory.table['kv']).size
+        assert np.asarray(theory.table['plin_nw']).shape == (nkv,)
+        assert np.asarray(theory.table['fk_over_f']).shape == (nkv,)
+        bias_table = np.asarray(theory.bias_table())
+        assert bias_table.shape == (len(theory.ells), len(k), 19), bias_table.shape
+        assert np.all(np.isfinite(bias_table))
 
     def test_tracer_spectrum(self):
         """REPTVelocileptorsTracerSpectrum2Poles: shape and parameter sensitivity
@@ -1176,10 +1182,9 @@ class TestCOMET:
         comet_names = {par.basename for par in get_params(COMETTracerSpectrum2Poles(k=k, pt=False, prior_basis='physical_aap'))
                        if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
-        # sn1 (the document's isotropic k^2 noise) is in both; bA: folps' anisotropic linear bias (off by default)
+        # sn1 (the document's isotropic k^2 noise) and sn4 (its k^4 mu^4 noise) are in both; bA: folps' anisotropic linear bias (off by default)
         assert folps_names - comet_names == {'ct', 'X_FoG', 'bA'}, sorted(folps_names - comet_names)
-        # sn4: the document's k^4 mu^4 noise, which FOLPSD does not carry
-        assert comet_names - folps_names == {'sn4', 'avir'}, sorted(comet_names - folps_names)
+        assert comet_names - folps_names == {'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
         run_native = _compile(COMETTracerSpectrum2Poles(k=k, pt=False, nbar=nbar, prior_basis='EggScoSmi+Comet'))

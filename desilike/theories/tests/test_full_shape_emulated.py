@@ -105,7 +105,9 @@ def _check(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
     # Each pipeline gets the parameters it actually has. A parameter the emulator's space left
     # out is frozen at its trained value, so the emulated pipeline exposes fewer than the exact
     # one -- and it refuses a name it does not have rather than silently ignoring it.
-    emu_names = set(pipe_emu.params.names())
+    # the emulator's training-box Constraint is the emulated pipeline's own (derived) output, not a parameter it gained
+    from desilike.parameter import Constraint
+    emu_names = set(param.name for param in pipe_emu.params if not isinstance(param, Constraint))
     assert emu_names <= set(center), f'emulated pipeline gained parameters: {sorted(emu_names - set(center))}'
     emu_center = {name: value for name, value in center.items() if name in emu_names}
     exact_center_value = np.asarray(pipe_exact(center))

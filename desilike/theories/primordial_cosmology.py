@@ -786,6 +786,15 @@ class CosmoprimoCosmology(PrimordialCosmology):
                                                 description=f'cosmoprimo emulator: {constraint.name}')
                     for constraint in emulator.constraints()}
 
+    def _input_overrides(self):
+        """Cosmoprimo inputs computed by a dependency rather than sampled, as ``{name: value}``.
+
+        Merged over the parameters at every call; empty here. A subclass that depends on another
+        calculator overrides it -- e.g. :class:`~desilike.theories.bbn.BBNConsistentCosmology`
+        takes ``YHe`` and ``N_eff`` from a BBN calculation.
+        """
+        return {}
+
     def __post_init__(self, *args, engine='class', params=None, fiducial='DESI', precision=None, **kwargs):
         # Accuracy overrides on top of the settings derived from the harmonic requirements
         # (_LENSING_CALC_PARAMS / _LENS_POTENTIAL_CL_EXTRA_PARAMS): a dict with optional
@@ -832,6 +841,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
         params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
                   for param in self.params}
+        # inputs taken from another calculator rather than sampled (see `_input_overrides`)
+        params.update({name: np.asarray(value).reshape(-1)[0].item() if self._is_external else value
+                       for name, value in self._input_overrides().items()})
         self._param_values = params
         # Lensed Cl / lens-potential Cl are opt-in on external engines (camb, class): without
         # requesting 'lensing' at build time, get_harmonic().lensed_cl()/.lens_potential_cl()

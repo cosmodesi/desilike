@@ -140,10 +140,12 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
                       ref=dict(limits=[8., 10.]), latex=r'\Sigma_{\parallel}'),
             Parameter('sigmaper', value=6., fixed=True, prior=dict(limits=[0.1, 10.]),
                       ref=dict(limits=[5., 7.]), latex=r'\Sigma_{\perp}'),
-        ], tracers)
+        ], tracers, cross=True)
 
     def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        # A cross spectrum (tracers=(X, Y)): every parameter is per tracer, (X, Y); the model is the product of the two fields' factors
+        # (bias + RSD, FoG, BAO damping), which reduces to the auto spectrum for X = Y.
         vc = type(self).propose_params(tracers=tracers)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -187,7 +189,22 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         k = self.k[:, None]   # (n_k, 1)  — broadcast with mu
         mu = self._mu          # (n_mu,)
 
-        f = self.dbeta * template.f
+        # (X, Y) values of each parameter: the two tracers' for a cross spectrum, the same twice for an auto spectrum
+        pair = lambda param: param if isinstance(param, tuple) else (param, param)
+        b1 = pair(self.b1)
+        f = tuple(dbeta * template.f for dbeta in pair(self.dbeta))
+        sigmas, sigmapar, sigmaper = pair(self.sigmas), pair(self.sigmapar), pair(self.sigmaper)
+        # BAO damping of each field: exp(-k^2 Sigma^2 / 4), so that an auto spectrum has exp(-k^2 Sigma^2 / 2)
+        sigmapar2 = 0.5 * (sigmapar[0] ** 2 + sigmapar[1] ** 2)
+        sigmaper2 = 0.5 * (sigmaper[0] ** 2 + sigmaper[1] ** 2)
+
+        def kaiser(mu, sk):
+            # product of the two fields' (b1 + f mu^2 (1 - S(k)))
+            return (b1[0] + f[0] * mu ** 2 * (1. - sk)) * (b1[1] + f[1] * mu ** 2 * (1. - sk))
+
+        def fog(k, mu):
+            # product of the two fields' Lorentzian kernels: an auto spectrum gets the kernel squared
+            return 1. / ((1. + 0.5 * (sigmas[0] * k * mu) ** 2) * (1. + 0.5 * (sigmas[1] * k * mu) ** 2))
 
         # AP-distorted coordinates; shapes (n_k, n_mu).
         _jac, kap, muap = template.ap_k_mu(k, mu)
@@ -197,13 +214,12 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         if self.model == 'standard':
             # Chen 2024: damping in AP-distorted space; smooth bias in undistorted space.
             pkwap = pkap - pknowap
-            sigma_nl2ap = kap ** 2 * (self.sigmapar ** 2 * muap ** 2 + self.sigmaper ** 2 * (1. - muap ** 2))
+            sigma_nl2ap = kap ** 2 * (sigmapar2 * muap ** 2 + sigmaper2 * (1. - muap ** 2))
             sk = 0.
             if self.mode == 'reciso':
                 sk = jnp.exp(-0.5 * (k * self.smoothing_radius) ** 2)
-            Cap = (self.b1 + f * muap ** 2 * (1. - sk)) ** 2 * jnp.exp(-0.5 * sigma_nl2ap)
-            fog = 1. / (1. + 0.5 * (self.sigmas * k * mu) ** 2) ** 2
-            B = (self.b1 + f * mu ** 2 * (1. - sk)) ** 2 * fog
+            Cap = kaiser(muap, sk) * jnp.exp(-0.5 * sigma_nl2ap)
+            B = kaiser(mu, sk) * fog(k, mu)
             pknow = _interp_loglog(k, template.k, template.pknow_dd)
             pkmu = B * pknow + Cap * pkwap
 
@@ -213,22 +229,21 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
                 kd, mud = k, mu
             else:
                 kd, mud = kap, muap
-            sigma_nl2 = kd ** 2 * (self.sigmapar ** 2 * mud ** 2 + self.sigmaper ** 2 * (1. - mud ** 2))
+            sigma_nl2 = kd ** 2 * (sigmapar2 * mud ** 2 + sigmaper2 * (1. - mud ** 2))
             damped_wiggles = (pkap - pknowap) / pknowap * jnp.exp(-0.5 * sigma_nl2)
             if 'move-all' in self.model:
                 ks, mus = kap, muap
             else:
                 ks, mus = k, mu
             pknow = _interp_loglog(ks, template.k, template.pknow_dd)
-            fog = 1. / (1. + 0.5 * (self.sigmas * ks * mus) ** 2) ** 2
             sk = 0.
             if self.mode == 'reciso':
                 sk = jnp.exp(-0.5 * (ks * self.smoothing_radius) ** 2)
-            pksmooth = (self.b1 + f * mus ** 2 * (1. - sk)) ** 2 * pknow
+            pksmooth = kaiser(mus, sk) * pknow
             if 'fog-damping' in self.model:  # Beutler 2017
-                pkmu = pksmooth * fog * (1. + damped_wiggles)
+                pkmu = pksmooth * fog(ks, mus) * (1. + damped_wiggles)
             else:
-                pkmu = pksmooth * (fog + damped_wiggles)
+                pkmu = pksmooth * (fog(ks, mus) + damped_wiggles)
 
         self.poles = self._to_poles(pkmu)
         return self.poles
@@ -577,7 +592,9 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
         if broadband not in _BB_POWER_MODES + _BB_KERNEL_MODES:
             raise ValueError(f'Unknown broadband mode {broadband!r}.')
         pt_vc = cls._default_pt_cls.propose_params(tracers=tracers) if cls._default_pt_cls is not None else VariableCollection()
-        bb_vc = propose_params_multitracer(_bb_spectrum_auto_params(ells, broadband), tracers)
+        # a cross spectrum has its own broadband (namespace 'XxY', as stochastic terms); the pt class decides whether a cross is supported
+        bb_auto_params = _bb_spectrum_auto_params(ells, broadband)
+        bb_vc = propose_params_multitracer(bb_auto_params, tracers, stochastic=[param.basename for param in bb_auto_params], cross=True)
         return pt_vc + bb_vc
 
     def __init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None, **kwargs):

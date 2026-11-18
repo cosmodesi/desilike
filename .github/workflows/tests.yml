@@ -73,6 +73,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install 'ruff>=0.16,<0.17' pytest pytest-cov pytest-mpi pytest-timeout
         if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt-get update
           sudo apt install libopenmpi-dev
         else
           brew install openmpi

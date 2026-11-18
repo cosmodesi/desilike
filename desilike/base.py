@@ -1708,6 +1708,30 @@ def _build_graph_call_fn(pipeline):
     return call_fn
 
 
+def _with_depends(params):
+    """Return params plus, transitively, the parameters their derived expressions depend on.
+
+    A derived expression reads its depends' .value when evaluated in a node; a depend owned by
+    another node only would otherwise be set (from the graph input) after this node ran, or never
+    at trace time: the expression would read a stale value, baked in as a constant under jit, and
+    a change of that depend alone would not trigger this node's recomputation.
+    """
+    toret, seen = [], set()
+
+    def add(param):
+        if id(param) in seen:
+            return
+        seen.add(id(param))
+        for dep in (getattr(param, 'depends', None) or {}).values():
+            if isinstance(dep, Variable):
+                add(dep)
+        toret.append(param)
+
+    for param in params:
+        add(param)
+    return toret
+
+
 def _topo_sort_params(params):
     """Return params in topological order w.r.t. their .depends DAG.
 
@@ -1765,7 +1789,7 @@ class CompiledGraph:
         self._node_calc_deps = {}
         for node in self.nodes:
             deps = ctx.node_deps.get(id(node), [])
-            self._node_var_deps[id(node)] = _topo_sort_params([d for d in deps if isinstance(d, Variable)])
+            self._node_var_deps[id(node)] = _topo_sort_params(_with_depends([d for d in deps if isinstance(d, Variable)]))
             self._node_calc_deps[id(node)] = [d for d in deps if isinstance(d, Calculator)]
 
         # Collect unique Variable objects preserving DAG order, deduplicated by identity.

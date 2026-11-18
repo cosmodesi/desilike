@@ -89,7 +89,10 @@ class PNGTracerSpectrum2Poles(Calculator):
     k : array, default=None
         Output wavenumbers [h/Mpc]. Defaults to ``np.linspace(0.01, 0.2, 101)``.
     ells : tuple of int, default=(0, 2)
-        Multipole orders.
+        Multipole orders. Alternatively, pairs :math:`(\ell_1, \ell_2)` in ``((0, 0), (0, 2), (2, 0), (2, 2))`` for the local
+        line-of-sight basis :math:`A_{\ell_1 \ell_2}` (:math:`\ell_1` for the first tracer), which for a cross-spectrum includes
+        :math:`A_{02} - A_{20} = 2 f (b^\mathrm{eff}_X - b^\mathrm{eff}_Y) P_{dd} / 3`, not fixed by the plane-parallel multipoles;
+        this is the theory basis of the window matrix ``jaxpower.compute_mesh2_spectrum_window(..., ellsin=(ells, 'local'))``.
     z : float, default=1.
         Effective redshift.
     method : str, default='prim'
@@ -182,7 +185,14 @@ class PNGTracerSpectrum2Poles(Calculator):
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
-        self.ells = tuple(ells)
+        # theory ells of the window: multipoles, or pairs (ell1, ell2) of the local line-of-sight basis
+        self._wells = tuple(tuple(ell) if isinstance(ell, (tuple, list)) else ell for ell in ells)
+        self.ells = self._wells
+        if any(isinstance(ell, tuple) for ell in self._wells):
+            local_ells = [(0, 0), (0, 2), (2, 0), (2, 2)]
+            if not set(self._wells) <= set(local_ells):
+                raise ValueError(f'local theory line of sight: ells must be in {local_ells}, found {self._wells}')
+            self.ells = (0, 2, 4)
         self._mode = str(mode)
         self._method = str(method)
         self._z = float(self.template.z)
@@ -234,6 +244,8 @@ class PNGTracerSpectrum2Poles(Calculator):
             fog_X = 1. / (1. + sigmas_X**2 * kap**2 * muap**2 / 2.)
             fog_Y = 1. / (1. + sigmas_Y**2 * kap**2 * muap**2 / 2.)
             pkmu = fog_X * fog_Y * (b_eff_X + f * muap**2) * (b_eff_Y + f * muap**2) * pk_dd
+            # A02 - A20, for the local line-of-sight basis
+            antisymmetric_pkmu = 2. / 3. * fog_X * fog_Y * f * (b_eff_X - b_eff_Y) * pk_dd
         else:
             if self._mode == 'b-p':
                 bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
@@ -244,9 +256,20 @@ class PNGTracerSpectrum2Poles(Calculator):
             b_eff = self.b1 + bfnl_loc * alpha
             fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.)**2
             pkmu = fog * (b_eff + f * muap**2)**2 * pk_dd
+            antisymmetric_pkmu = None
 
         sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
         self.poles = self._to_poles(pkmu) + sn
+        if self._wells != self.ells:
+            # local line-of-sight basis, P(k, x1, x2) = sum_{ell1 ell2} A_{ell1 ell2}(k) L_ell1(k.x1) L_ell2(k.x2), ell1 for the first tracer:
+            # P0, P2, P4 fix A00 = P0 - 7 P4 / 18, A02 + A20 = P2 - 5 P4 / 9, A22 = 35 P4 / 18;
+            # A02 - A20 is the mu-average (monopole projection) of antisymmetric_pkmu, zero for an auto-spectrum
+            pole0, pole2, pole4 = self.poles
+            symmetric = pole2 / 2. - 5. / 18. * pole4
+            antisymmetric = 0. if antisymmetric_pkmu is None else self._to_poles(antisymmetric_pkmu)[0]
+            local_poles = {(0, 0): pole0 - 7. / 18. * pole4, (0, 2): symmetric + antisymmetric / 2.,
+                           (2, 0): symmetric - antisymmetric / 2., (2, 2): 35. / 18. * pole4}
+            self.poles = jnp.stack([local_poles[ell] for ell in self._wells])
         return self.poles
 
     def tree_flatten(self):

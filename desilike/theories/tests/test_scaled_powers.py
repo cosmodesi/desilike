@@ -73,9 +73,11 @@ def test_the_bispectrum_arm_preconditions_in_h_too():
 
     assert FOLPSD3PolesEmulator.precondition == ('h',)
 
-    # the two anchors the preconditioning reads have to travel as children of the pt, or
-    # `transform` reads a KeyError at the first node
+    # the node's h and sigma_mpc the preconditioning divides out are added by the emulator's own `compute` (from the run-time
+    # scalar provider), not carried as children of the pt
+    from desilike.theories.galaxy_clustering.full_shape import _ScaledEmulator
     probe = object.__new__(FOLPSD3PolesEmulator)
     probe.set_children_leafnames()
     for name in ('h_anchor', 'sigma_mpc_anchor'):
-        assert name in probe.children_leafnames, probe.children_leafnames
+        assert name not in probe.children_leafnames, probe.children_leafnames
+    assert FOLPSD3PolesEmulator.compute is _ScaledEmulator.compute

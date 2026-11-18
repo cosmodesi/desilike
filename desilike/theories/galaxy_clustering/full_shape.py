@@ -2358,6 +2358,28 @@ class FOLPSPTSpectrum2Poles(Calculator):
         wiggles sit at fixed physical ``k`` while the grid is fixed in h/Mpc.  256 removes it --
         worst loop column, deg-3 residual in ``h`` over [0.500, 0.900]: 3.3e-02 at 128,
         3.9e-03 at 256, 4.0e-03 at 512.
+    selection : bool, default=False
+        Full one-loop line-of-sight selection model (anisotropic bias beyond its linear,
+        tree-level form; FolpsD branch ``feature/selection-1loop-eds``, ``folps.selection_model``).
+        Off by default: nothing changes. When ``True``:
+
+        - requires ``kernels='EdS'`` (the selection kernels are derived for EdS growth with a
+          constant ``f0``), ``A_full=True`` and ``remove_DeltaP=False``;
+        - the selection loop tables are built per cosmology from the same loop-table call
+          (``folps.build_selection_tables``) and carried in the state as ``selection_tables``;
+        - the spectrum is evaluated with folps' ``model='EFT'``: **no FoG damping** (``X_FoG``
+          must stay fixed at 0) and the GTNS term is kept, also when every selection
+          coordinate is zero. This baseline therefore differs from the default FOLPSD one
+          (which drops GTNS for ``damping_method='tree+...'``) even without selection;
+        - the tracer's ``bA`` is mapped to the linear selection coordinate exactly
+          (``folps.tree_bA_to_linear_djs``: :math:`b_1 \to b_1 - b_A/3`,
+          :math:`s_\eta = -b_A / f_0`) and the 8 nonlinear coordinates are the tracer
+          parameters ``sel_*`` (see :class:`FOLPSTracerSpectrum2Poles`);
+        - no emulator (the selection tables are not in :class:`FOLPSDEmulator`'s state):
+          evaluate the theory exactly.
+    selection_cache_dir : str, default=None
+        Directory where folps caches the (cosmology-independent) selection matrices on disk;
+        ``None`` keeps them in memory only (they are rebuilt once per process).
     """
     # what the pytree state means, for emulator caches keyed on it (desi-clustering tools.py): the h-preconditioning anchors left
     # the children on 2026-11-16 (now `_ScaledEmulator.compute` outputs)
@@ -2380,7 +2402,7 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104.,
                       A_full=True, remove_DeltaP=False, damping_method='tree+loop',
-                      use_GTNS=None, nfftlog=256, nk=480, **kwargs):
+                      use_GTNS=None, nfftlog=256, nk=480, selection=False, selection_cache_dir=None, **kwargs):
         # Non-node setup only.
         self._nk = None if nk is None else int(nk)
         self._kernels = str(kernels)
@@ -2388,7 +2410,17 @@ class FOLPSPTSpectrum2Poles(Calculator):
         self._A_full = bool(A_full)
         self._remove_DeltaP = bool(remove_DeltaP)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self._selection = bool(selection)
+        self._selection_cache_dir = selection_cache_dir
         folpsv2 = _import_folps()
+        if self._selection:
+            if not hasattr(folpsv2, 'build_selection_tables'):
+                raise ImportError('selection=True needs the FolpsD one-loop selection model (branch feature/selection-1loop-eds); '
+                                  f'the installed folps ({folpsv2.__file__}) does not provide build_selection_tables')
+            if self._kernels != 'EdS':
+                raise ValueError(f"selection=True requires kernels='EdS' (the selection kernels assume EdS growth), got kernels={self._kernels!r}")
+            if not self._A_full or self._remove_DeltaP:
+                raise ValueError('selection=True requires A_full=True and remove_DeltaP=False (complete one-loop baseline)')
         self._matrices = folpsv2.MatrixCalculator(nfftlog=int(nfftlog), A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
 
     def __call__(self):
@@ -2423,6 +2455,8 @@ class FOLPSPTSpectrum2Poles(Calculator):
         # per-element arrays (0-d for scalars) rather than a single rectangular array.
         self.table = tuple(jnp.asarray(t) for t in table)
         self.table_now = tuple(jnp.asarray(t) for t in table_now)
+        # one-loop selection templates, from the same calculator call as table / table_now (folps checks the pairing)
+        self.selection_tables = folpsv2.build_selection_tables(folps_nlps, cache_dir=self._selection_cache_dir) if self._selection else None
         self.f = self.template.f
         self.f0 = self.template.f0
         self.qpar = self.template.qpar
@@ -2439,10 +2473,15 @@ class FOLPSPTSpectrum2Poles(Calculator):
         children = ([self.kap, self.muap, self.jac] + table + table_now
                     + [self.f, self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8,
                        self.sigma8_fid])
+        selection = getattr(self, '_selection', False)
+        if selection:  # folps registers SelectionLoopTables as a pytree; appended last so the default layout is unchanged
+            children.append(self.selection_tables)
         aux = {'k': self.k, 'ells': self.ells,
                'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
                'A_full': self._A_full, 'remove_DeltaP': self._remove_DeltaP,
                'n_table': len(table), 'n_table_now': len(table_now)}
+        if selection:  # key only present in selection mode: default aux (emulator cache keys) unchanged
+            aux['selection'] = True
         return children, aux
 
     @classmethod
@@ -2463,6 +2502,8 @@ class FOLPSPTSpectrum2Poles(Calculator):
         obj.sigma8 = next(it)
         obj.fsigma8 = next(it)
         obj.sigma8_fid = next(it)
+        obj._selection = aux.get('selection', False)
+        obj.selection_tables = next(it) if obj._selection else None
         obj._A_full = aux['A_full']
         obj._remove_DeltaP = aux['remove_DeltaP']
         obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
@@ -2484,12 +2525,40 @@ class FOLPSPTSpectrum2Poles(Calculator):
         :func:`desilike.emulators.Emulator` picks the result up on its own; pass
         ``cls=CalculatorEmulator`` to force the generic expansion.
         """
+        if getattr(self, '_selection', False):
+            raise NotImplementedError('selection=True is not emulated (FOLPSDEmulator does not carry the selection tables): '
+                                      'evaluate the theory exactly')
         return FOLPSDEmulator
+
+    def _selection_options(self, pars, pars_b, bA, selection):
+        r"""Selection-mode arguments of folps' ``get_rsd_pkmu``: ``(pars, pars_b, options)``.
+
+        ``bA`` (folps basis, one value per tracer) is mapped exactly onto the linear coordinate,
+        :math:`b_1 \to b_1 - b_A/3` and :math:`s_\eta = -b_A/f_0` (``folps.tree_bA_to_linear_djs``),
+        with the constant :math:`f_0` of the EdS tables. ``selection`` is ``None`` or one tuple of the
+        8 nonlinear coordinates per tracer, in ``folps.SelectionBias`` field order after ``s_eta``.
+        """
+        folpsv2 = _import_folps()
+        ntracers = 1 if pars_b is None else 2
+        bA = (0., 0.) if bA is None else tuple(bA)
+        selection = (None, None) if selection is None else tuple(selection)
+        tracer_pars, tracer_selections = [], []
+        for itracer, tracer_par in enumerate([pars, pars_b][:ntracers]):
+            b1, s_eta = folpsv2.tree_bA_to_linear_djs(tracer_par[0], bA[itracer], self.f0)
+            tracer_par = list(tracer_par)
+            tracer_par[0] = b1
+            tracer_pars.append(tracer_par)
+            nonlinear = selection[itracer] if selection[itracer] is not None else (0.,) * 8
+            tracer_selections.append(folpsv2.SelectionBias(s_eta, *nonlinear))
+        options = dict(selection=tracer_selections[0], selection_tables=self.selection_tables)
+        if ntracers == 2:
+            options['selection_b'] = tracer_selections[1]
+        return tracer_pars[0], (tracer_pars[1] if ntracers == 2 else None), options
 
     def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping, damping_method=None, use_GTNS=None,
                                            redshift_smearing=None, sn1=None, sn4=None, *, pars_b=None, cross_nuisance=None,
-                                           cross_damping_mode='single', bA=None):
-        """Evaluate power-spectrum multipoles for *pars*.
+                                           cross_damping_mode='single', bA=None, selection=None):
+        r"""Evaluate power-spectrum multipoles for *pars*.
 
         Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when
         emulated) — no access to ``self.template``.
@@ -2519,22 +2588,33 @@ class FOLPSPTSpectrum2Poles(Calculator):
 
         ``sn4`` is the amplitude of the :math:`k^4 \mu^4` stochastic term (already normalised), ``None`` for none; added as ``sn1``,
         at the AP-distorted :math:`k, \mu`.
+
+        ``selection`` (selection mode only, see ``selection`` in the class docstring): one tuple per tracer of the 8 nonlinear
+        selection coordinates (already normalised), ``None`` for all zero. In selection mode ``bA`` is the linear coordinate.
         """
         # For emulator
         folpsv2 = _import_folps()
         import folps.folps as _folps_module
         _folps_module.A_full_status = self._A_full
         _folps_module.use_TNS_model_status = self._remove_DeltaP
-        folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
+        in_selection = getattr(self, '_selection', False)
+        if selection is not None and not in_selection:
+            raise ValueError("nonlinear selection coordinates need the pt in selection mode (selection=True, kernels='EdS')")
+        # selection mode: folps' EFT model (no FoG damping, GTNS kept), also when every coordinate is zero
+        folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='EFT' if in_selection else 'FOLPSD')
         pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
         cross_options = {}
         if pars_b is not None:
             pars_b = folps_rsdmps.set_bias_scheme(pars=pars_b, bias_scheme=bias_scheme)
-            # cross_nuisance is already in Folps' spectrum-level convention; only convert the two bias vectors.
-            cross_options = dict(pars_b=pars_b, cross_nuisance=cross_nuisance,
-                                 cross_damping_mode=cross_damping_mode)
-        if bA is not None:
+        if in_selection:
+            pars, pars_b, cross_options = self._selection_options(pars, pars_b, bA, selection)
+            damping, damping_method = None, None  # ignored by the EFT model
+        elif bA is not None:
             cross_options['bA'] = bA
+        if pars_b is not None:
+            # cross_nuisance is already in Folps' spectrum-level convention; only convert the two bias vectors.
+            cross_options.update(pars_b=pars_b, cross_nuisance=cross_nuisance,
+                                 cross_damping_mode=cross_damping_mode)
         pkmu = self.jac * folps_rsdmps.get_rsd_pkmu(self.kap, self.muap, pars, tuple(self.table), tuple(self.table_now), IR_resummation=True, damping=damping, damping_method=damping_method, use_GTNS=use_GTNS, **cross_options)
         if sn1 is not None:
             pkmu = pkmu + self.jac * sn1 * self.kap**2
@@ -2751,6 +2831,12 @@ class FOLPSPTSpectrum3Poles(FOLPSPTSpectrum2Poles):
 
 
 _FOLPS_PRIOR_BASES = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
+# Nonlinear one-loop selection coordinates (FolpsD selection model), in folps.SelectionBias field order after the linear
+# s_eta (which bA sets): 4 quadratic, then 4 cubic. Parameter name, latex.
+_FOLPS_SELECTION_PARAMS = (('sel_delta_eta', r's_{\delta\eta}'), ('sel_eta2', r's_{\eta^2}'), ('sel_KK_par', r's_{(KK)_\parallel}'),
+                           ('sel_Pi2_par', r's_{\Pi^{[2]}_\parallel}'), ('sel_delta_Pi2_par', r's_{\delta\Pi^{[2]}_\parallel}'),
+                           ('sel_eta_Pi2_par', r's_{\eta\Pi^{[2]}_\parallel}'), ('sel_KPi2_par', r's_{(K\Pi^{[2]})_\parallel}'),
+                           ('sel_Pi3_par', r's_{\Pi^{[3]}_\parallel}'))
 
 
 class FOLPSTracerSpectrum2Poles(Calculator):
@@ -2811,6 +2897,15 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     bias (e.g. a selection on intrinsic alignments). It enters the IR-resummed tree-level term only, not the loops. It is normalised as
     ``b1`` in each basis (physical bases: divided by :math:`A A_\mathrm{AP}^{1/2}`, A the amplitude rescaling); a cross spectrum
     uses each tracer's own ``bA``. Prior :math:`\mathcal{N}(0, 2)` (physical bases).
+
+    One-loop selection model (pt with ``selection=True, kernels='EdS'``, see :class:`FOLPSPTSpectrum2Poles`): ``bA`` becomes the
+    linear line-of-sight selection coordinate, propagated through the loops, and the 8 nonlinear coordinates of
+    ``folps.SelectionBias`` are the parameters ``sel_delta_eta``, ``sel_eta2``, ``sel_KK_par``, ``sel_Pi2_par`` (quadratic) and
+    ``sel_delta_Pi2_par``, ``sel_eta_Pi2_par``, ``sel_KPi2_par``, ``sel_Pi3_par`` (cubic), **off by default** (fixed at 0; used only
+    when free or tied by an expression, as ``bA``). They are normalised as the bias of the same order in each basis (physical bases:
+    divided by :math:`A^n A_\mathrm{AP}^{1/2}`, n = 2 quadratic, 3 cubic). Their prior :math:`\mathcal{N}(0, 10)` is a placeholder,
+    not a recommendation: set it explicitly. They must be sampled (not linear in the model). Freeing them without the selection
+    mode raises. In selection mode ``X_FoG`` must stay fixed at 0 (folps' EFT model has no FoG damping).
 
     mu : int, default=6
         Number of :math:`\mu` bins for multipole integration.
@@ -2911,7 +3006,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn4', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}'),
                 # anisotropic linear bias (selection effects), off (fixed at 0) by default
                 Parameter('bA', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=0.1), latex='b_A'),
-            ]
+            ] + [Parameter(name, value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=10.), ref=dict(dist='norm', loc=0., scale=0.1), latex=latex)
+                 for name, latex in _FOLPS_SELECTION_PARAMS]
         else:
             auto_params = [
                 Parameter('b1', value=1., prior=dict(limits=[0., 10.]), ref=dict(limits=[1.4, 1.6]), latex='b_1'),
@@ -2928,7 +3024,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
                 Parameter('sn1', value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,1}'),
                 Parameter('sn4', value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,4}'),
                 Parameter('bA', value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='b_A'),
-            ]
+            ] + [Parameter(name, value=0., fixed=True, prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex=latex)
+                 for name, latex in _FOLPS_SELECTION_PARAMS]
         not_shared = ('sn0', 'sn2', 'sn1', 'sn4')
         if 'damping' not in cross_sharing_mode:
             not_shared += ('X_FoG',)
@@ -3148,17 +3245,34 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         # a parameter tied to another by an expression (derived str, e.g. b_A(h0) = -b_A(h1)) is active although not varied
         inactive = lambda param: param.fixed and not isinstance(param.derived, str)
         kw_bA = {}
-        if not all(inactive(param) for param in params_bA):
-            # (bA_a, bA_b), normalised as b1 in the prior basis
-            A = self.pt.sigma8 / self.pt.sigma8_fid
+        A = self.pt.sigma8 / self.pt.sigma8_fid
+
+        def norm_order(n):
+            # normalisation of an order-n bias in the prior basis (n = 1: as b1)
             if self._prior_basis in ('physical', 'physical_aap'):
                 A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if self._prior_basis == 'physical_aap' else 1.
-                norm = A * A_AP**0.5
-            elif self._prior_basis == 'standard':
-                norm = 1.
-            else:  # 'tcm_chudaykin_aap'
-                norm = A
+                return A**n * A_AP**0.5
+            if self._prior_basis == 'standard':
+                return 1.
+            return A**n  # 'tcm_chudaykin_aap'
+
+        if not all(inactive(param) for param in params_bA):
+            # (bA_a, bA_b), normalised as b1 in the prior basis
+            norm = norm_order(1)
             kw_bA['bA'] = tuple(param.value / norm for param in (params_bA * 2 if len(params_bA) == 1 else params_bA))
+        # one-loop selection: the 8 nonlinear coordinates, per tracer; off (all fixed) -> not passed
+        params_sel = [getattr(self, name) for name, _ in _FOLPS_SELECTION_PARAMS]
+        params_sel = [param if isinstance(param, tuple) else (param,) for param in params_sel]
+        if not all(inactive(param) for params in params_sel for param in params):
+            if not getattr(self.pt, '_selection', False):
+                raise ValueError("the selection parameters sel_* need the pt in selection mode: pass selection=True, kernels='EdS'")
+            ntracers = 2 if isinstance(self.b1, tuple) else 1
+            kw_bA['selection'] = tuple(tuple(params[min(itracer, len(params) - 1)].value / norm_order(2 if iparam < 4 else 3)
+                                             for iparam, params in enumerate(params_sel)) for itracer in range(ntracers))
+        if getattr(self.pt, '_selection', False):
+            params_X = self.X_FoG if isinstance(self.X_FoG, tuple) else (self.X_FoG,)
+            if not all(inactive(param) for param in params_X):
+                raise ValueError("selection mode (folps' EFT model) has no FoG damping: X_FoG must stay fixed (it is ignored)")
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping, damping_method=self._damping_method, use_GTNS=self._use_GTNS,
                                                                 redshift_smearing=redshift_smearing, **kw_sn1, **kw_bA, **cross_options)
         return self.poles

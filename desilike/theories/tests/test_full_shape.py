@@ -1183,7 +1183,9 @@ class TestCOMET:
                        if not isinstance(par, Constraint)} - cosmo_names
         folps_names = {par.basename for par in get_params(FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap'))} - cosmo_names
         # sn1 (the document's isotropic k^2 noise) and sn4 (its k^4 mu^4 noise) are in both; bA: folps' anisotropic linear bias (off by default)
-        assert folps_names - comet_names == {'ct', 'X_FoG', 'bA'}, sorted(folps_names - comet_names)
+        # sel_*: folps' one-loop selection coordinates (off by default)
+        selection_names = {'sel_delta_eta', 'sel_eta2', 'sel_KK_par', 'sel_Pi2_par', 'sel_delta_Pi2_par', 'sel_eta_Pi2_par', 'sel_KPi2_par', 'sel_Pi3_par'}
+        assert folps_names - comet_names == {'ct', 'X_FoG', 'bA'} | selection_names, sorted(folps_names - comet_names)
         assert comet_names - folps_names == {'avir'}, sorted(comet_names - folps_names)
 
         # Native bases keep comet's own names, and its isotropic-k^2 NP20 (no quadrupole).
@@ -1813,6 +1815,65 @@ def test_compile_input():
 
 
 
+
+
+_SELECTION_NAMES = ('sel_delta_eta', 'sel_eta2', 'sel_KK_par', 'sel_Pi2_par', 'sel_delta_Pi2_par', 'sel_eta_Pi2_par', 'sel_KPi2_par', 'sel_Pi3_par')
+
+
+def test_folps_selection():
+    """FOLPS one-loop line-of-sight selection (FolpsD feature/selection-1loop-eds): opt-in mode of the pt, bA as the linear
+    coordinate, 8 nonlinear coordinates sel_*, baseline untouched when off."""
+    folps = pytest.importorskip('folps')
+    if not hasattr(folps, 'build_selection_tables'):
+        pytest.skip('installed folps has no one-loop selection model (FolpsD branch feature/selection-1loop-eds)')
+    from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles, FOLPSPTSpectrum2Poles
+    k = np.linspace(0.02, 0.2, 37)
+    b1 = 2.
+
+    def free(*names):
+        return {name: {'value': 0., 'fixed': False} for name in names}
+
+    # Selection mode, every coordinate free (at 0): finite; jit agrees with eager.
+    run_selection = _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS', selection=True, params=free('bA', *_SELECTION_NAMES)))
+    base_selection = run_selection(b1=b1)
+    _check(base_selection, 'FOLPS selection mode')
+    np.testing.assert_allclose(run_selection(_jit=True, b1=b1), base_selection, rtol=1e-8)
+    # Its zero-selection baseline is folps' EFT model on EdS kernels: FOLPSD on EdS kernels with GTNS kept and no FoG damping
+    # (X_FoG = 0), exactly. It differs from the default FOLPSD / fk baseline mostly by GTNS (dropped there), printed for reference.
+    base_gtns = _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS', use_GTNS=True))(b1=b1)
+    np.testing.assert_allclose(base_selection, base_gtns, rtol=1e-10, atol=1e-8 * np.abs(base_gtns).max())
+    base_default = _compile(FOLPSTracerSpectrum2Poles(k=k))(b1=b1)
+    base_eds = _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS'))(b1=b1)
+    for label, other in [('FOLPSD-fk (default)', base_default), ('FOLPSD-EdS', base_eds)]:
+        print(f'selection-mode baseline vs {label}: max |P_ell ratio - 1| (P0, P2) =',
+              [float(np.abs(base_selection[ill] / other[ill] - 1.).max()) for ill in range(2)])
+
+    # bA is the linear coordinate: at the lowest k its response matches the tree-level bA (FOLPSD, EdS) to the loop correction.
+    bA = 0.1
+    response_selection = run_selection(b1=b1, bA=bA) - base_selection
+    run_tree = _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS', params=free('bA')))
+    response_tree = run_tree(b1=b1, bA=bA) - run_tree(b1=b1)
+    ratio = response_selection[:2, 0] / response_tree[:2, 0]
+    print('bA response, one-loop / tree at k = 0.02 (P0, P2):', ratio, '; P2 at k = 0.2:', response_selection[1, -1] / response_tree[1, -1])
+    # the loop already corrects the monopole response by ~6% at k = 0.02 (standalone FolpsD: 0.93 P0, 0.98 P2), the quadrupole by ~1%
+    assert np.all(np.abs(ratio - 1.) < [0.1, 0.03]), ratio
+
+    # Every nonlinear coordinate moves the spectrum.
+    for name in _SELECTION_NAMES:
+        response = run_selection(b1=b1, bA=bA, **{name: 1.}) - run_selection(b1=b1, bA=bA)
+        assert np.abs(response).max() > 1e-6 * np.abs(base_selection).max(), name
+
+    # Errors: nonlinear coordinates without selection mode; selection mode with fk kernels or a free X_FoG; emulation.
+    with pytest.raises(ValueError, match='selection mode'):
+        _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS', params=free('sel_eta2')))(b1=b1)
+    with pytest.raises(ValueError, match='EdS'):
+        _compile(FOLPSTracerSpectrum2Poles(k=k, selection=True))(b1=b1)
+    with pytest.raises(ValueError, match='X_FoG'):
+        _compile(FOLPSTracerSpectrum2Poles(k=k, kernels='EdS', selection=True, params=free('X_FoG')))(b1=b1)
+    pt = FOLPSPTSpectrum2Poles(k=k, kernels='EdS', selection=True)
+    _compile(pt)()
+    with pytest.raises(NotImplementedError):
+        pt.get_emulator_cls()
 
 if __name__ == '__main__':
 
